@@ -52,11 +52,13 @@ Logs for Anaconda and the GitHub CLI are in `~/Library/Logs/zeus-install`.
 2. Type `cd ~/Code/zeus` and press Enter.
 3. Type `claude` and press Enter.
    Log in to Claude in the browser the first time.
-4. In Claude, type these two commands:
+4. The Zeus Editor needs Node.js 22 or later.
+5. In Claude, type these three commands:
 
 ```text
 /plugin install celonis-yaml-builder@yaml-builder
 /plugin install celonis-ocpm@celonis-ocpm
+/plugin install zeus-editor@zeus-editor
 ```
 
-5. Close Claude (Ctrl + C two times), type `claude` again, and then type `/zeus`.
+6. Close Claude (Ctrl + C two times), type `claude` again, and then type `/zeus`.
