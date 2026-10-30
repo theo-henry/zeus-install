@@ -404,6 +404,7 @@ print_summary() {
   info "4. In Claude, type:"
   info "     /plugin install celonis-yaml-builder@yaml-builder"
   info "     /plugin install celonis-ocpm@celonis-ocpm"
+  info "     /plugin install celonis-pql@celonis-pql"
   info "5. Close Claude (Ctrl + C two times), type claude again, then type /zeus."
   printf '\n'
 }
