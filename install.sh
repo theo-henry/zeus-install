@@ -167,7 +167,7 @@ find_conda() {
 
 # Step 1 - Xcode Command Line Tools (git).
 install_xcode_tools() {
-  step "1/9 Git (Xcode Command Line Tools)"
+  step "1/10 Git (Xcode Command Line Tools)"
   local dev_dir
   if dev_dir="$(xcode-select -p 2>/dev/null)" && [ -x "$dev_dir/usr/bin/git" ]; then
     info "Already installed."
@@ -192,7 +192,7 @@ install_xcode_tools() {
 
 # Step 2 - Anaconda (Python and conda).
 install_anaconda() {
-  step "2/9 Python (Anaconda)"
+  step "2/10 Python (Anaconda)"
   if find_conda >/dev/null; then
     info "conda is already installed."
     record "skipped" "Python (Anaconda)"
@@ -242,7 +242,7 @@ install_anaconda() {
 
 # Step 3 - GitHub CLI from conda-forge, in its own environment.
 install_gh() {
-  step "3/9 GitHub CLI"
+  step "3/10 GitHub CLI"
   if command -v gh >/dev/null 2>&1; then
     info "Already installed."
     record "skipped" "GitHub CLI"
@@ -265,7 +265,7 @@ install_gh() {
 
 # Step 4 - Log in to GitHub.
 login_github() {
-  step "4/9 GitHub login"
+  step "4/10 GitHub login"
   if gh auth status -h github.com >/dev/null 2>&1; then
     info "Already logged in."
     record "skipped" "GitHub login"
@@ -282,7 +282,7 @@ login_github() {
 
 # Step 5 - Check access to the private zeus repo.
 check_access() {
-  step "5/9 Access to the zeus repo"
+  step "5/10 Access to the zeus repo"
   local user
   user="$(gh api user --jq .login 2>/dev/null)" || user="(unknown)"
   if ! gh api "repos/$ZEUS_REPO" --silent >/dev/null 2>&1; then
@@ -295,7 +295,7 @@ check_access() {
 
 # Step 6 - Node.js in the home folder.
 install_node() {
-  step "6/9 Node.js"
+  step "6/10 Node.js"
   local current=""
   if command -v node >/dev/null 2>&1; then
     current="$(node -p 'process.versions.node' 2>/dev/null || true)"
@@ -325,7 +325,7 @@ install_node() {
 
 # Step 7 - Claude Code.
 install_claude() {
-  step "7/9 Claude Code"
+  step "7/10 Claude Code"
   if command -v claude >/dev/null 2>&1 || [ -x "$LOCAL_BIN/claude" ]; then
     info "Already installed."
     record "skipped" "Claude Code"
@@ -344,7 +344,7 @@ install_claude() {
 
 # Step 8 - Celonis content-cli.
 install_content_cli() {
-  step "8/9 Celonis content-cli"
+  step "8/10 Celonis content-cli"
   if command -v content-cli >/dev/null 2>&1; then
     info "Already installed."
     record "skipped" "Celonis content-cli"
@@ -367,7 +367,7 @@ install_content_cli() {
 
 # Step 9 - Clone the zeus repo.
 clone_zeus() {
-  step "9/9 Zeus repo"
+  step "9/10 Zeus repo"
   if [ -d "$ZEUS_DIR/.git" ]; then
     local remote
     remote="$(git -C "$ZEUS_DIR" remote get-url origin 2>/dev/null || true)"
@@ -389,6 +389,44 @@ clone_zeus() {
   record "done" "Zeus repo (~/Code/zeus)"
 }
 
+# The shim for step 10. The quoted heredoc keeps every $ as it is.
+write_zeus_shim() {
+  cat <<'SHIM'
+#!/bin/sh
+# Starts Zeus through the newest installed zeus-editor plugin. Written by the Zeus installer.
+newest=""
+for candidate in "$HOME"/.claude/plugins/cache/*/zeus-editor/*/dist/zeus.mjs; do
+  [ -f "$candidate" ] || continue
+  if [ -z "$newest" ] || [ "$candidate" -nt "$newest" ]; then
+    newest="$candidate"
+  fi
+done
+if [ -z "$newest" ]; then
+  echo "The Zeus Editor plugin is not installed. In Claude, type: /plugin install zeus-editor@zeus-editor" >&2
+  exit 1
+fi
+exec node "$newest" "$@"
+SHIM
+}
+
+# Step 10 - The zeus command.
+install_zeus_command() {
+  step "10/10 The zeus command"
+  local shim="$LOCAL_BIN/zeus" expected
+  expected="$(write_zeus_shim)"
+  if [ -x "$shim" ] && [ "$(cat "$shim")" = "$expected" ]; then
+    info "Already installed."
+    record "skipped" "The zeus command"
+    return
+  fi
+  mkdir -p "$LOCAL_BIN"
+  write_zeus_shim >"$shim"
+  chmod +x "$shim"
+  add_path_line
+  info "Installed ~/.local/bin/zeus."
+  record "done" "The zeus command"
+}
+
 print_summary() {
   printf '\n'
   bold "Zeus install is complete."
@@ -405,7 +443,8 @@ print_summary() {
   info "     /plugin install celonis-yaml-builder@yaml-builder"
   info "     /plugin install celonis-ocpm@celonis-ocpm"
   info "     /plugin install celonis-pql@celonis-pql"
-  info "5. Close Claude (Ctrl + C two times), type claude again, then type /zeus."
+  info "     /plugin install zeus-editor@zeus-editor"
+  info "5. Close Claude (Ctrl + C two times), open a new Terminal window, then type: zeus"
   printf '\n'
 }
 
@@ -440,6 +479,7 @@ main() {
   install_claude
   install_content_cli
   clone_zeus
+  install_zeus_command
   print_summary
 }
 
