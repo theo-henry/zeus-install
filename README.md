@@ -40,6 +40,7 @@ The installer skips each step that is already done.
 | 7 | Claude Code | `claude` is already installed. |
 | 8 | Celonis content-cli | `content-cli` is already installed. |
 | 9 | Copy of the zeus repo to `~/Code/zeus` | The folder already contains the zeus repo. |
+| 10 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
 
 The installer does not use `sudo`.
 Your Mac password can be necessary only for the Apple pop-up in step 1.
@@ -62,4 +63,7 @@ Logs for Anaconda and the GitHub CLI are in `~/Library/Logs/zeus-install`.
 /plugin install zeus-editor@zeus-editor
 ```
 
-6. Close Claude (Ctrl + C two times), type `claude` again, and then type `/zeus`.
+6. Close Claude (Ctrl + C two times) and open a new Terminal window.
+7. Type `zeus` and press Enter.
+   The `zeus` command starts Claude Code with the Zeus Editor and opens the chat page.
+   When the Zeus Editor plugin is not installed, the command tells you how to install it.
