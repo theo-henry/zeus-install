@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.mainMenu = makeMainMenu()
         statusMenu.app = self
         statusMenu.update()
+        listenForTestActions()
 
         SessionManager.shared.adoptLeftovers()
         let adopted = SessionManager.shared.sessions
@@ -124,6 +125,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: Test actions
+
+    /// Debug only, active only when ZEUS_APP_TRACE is set: another process can press the app's buttons
+    /// with a distributed notification "io.github.theo-henry.zeus.test" whose object is the action name.
+    private func listenForTestActions() {
+        guard ProcessInfo.processInfo.environment["ZEUS_APP_TRACE"] != nil else { return }
+        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("io.github.theo-henry.zeus.test"),
+                                                            object: nil, queue: .main) { [weak self] note in
+            guard let self, let action = note.object as? String else { return }
+            Trace.log("test action: \(action)")
+            let model = self.setupWindow?.model
+            switch action {
+            case "setup-install": model?.install()
+            case "setup-start":
+                model?.applyOptions()
+                Preferences.setupDone = true
+                model?.onFinished?()
+            case "setup-menubar-on": model?.showMenuBar = true
+            case "setup-show": self.showSetup(nil)
+            case "new-chat": self.newChat(nil)
+            case "close-chat": self.chatWindows.last?.window?.performClose(nil)
+            case "toggle-menubar": self.toggleMenuBar(nil)
+            case "quit": NSApp.terminate(nil)
+            default: break
+            }
+        }
     }
 
     // MARK: Menu actions

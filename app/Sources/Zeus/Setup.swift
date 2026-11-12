@@ -244,7 +244,9 @@ struct SetupView: View {
                         icon(step.state).frame(width: 18, height: 18)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(step.name).fontWeight(step.state == .running ? .semibold : .regular)
-                            let note = step.detail.isEmpty ? step.note : step.detail
+                            // Instructions matter only for a step that still has to run.
+                            let done = [.ok, .done, .skipped].contains(step.state)
+                            let note = !step.detail.isEmpty ? step.detail : done ? "" : step.note
                             if !note.isEmpty {
                                 Text(note).font(.caption)
                                     .foregroundStyle(step.state == .failed ? Color.red : Color.secondary)
@@ -257,7 +259,8 @@ struct SetupView: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12)))
     }
 
     @ViewBuilder
@@ -342,14 +345,16 @@ struct SetupView: View {
             Text("Installer output").font(.caption).foregroundStyle(.secondary)
             ScrollViewReader { proxy in
                 ScrollView {
-                    Text(model.logText.isEmpty ? " " : model.logText)
+                    Text(model.logText.isEmpty ? "The installer output appears here when the install runs." : model.logText)
+                        .foregroundStyle(model.logText.isEmpty ? Color.secondary : Color.primary)
                         .font(.system(size: 11.5, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
                     Color.clear.frame(height: 1).id("end")
                 }
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.12)))
                 .onChange(of: model.logText) { _ in proxy.scrollTo("end", anchor: .bottom) }
             }
             if model.phase == .installing {
@@ -367,8 +372,8 @@ struct SetupView: View {
 
     private var footer: some View {
         HStack {
-            Toggle("Keep Zeus in the Dock", isOn: $model.keepInDock).disabled(model.phase == .finished)
-            Toggle("Show Zeus in the menu bar", isOn: $model.showMenuBar).disabled(model.phase == .finished)
+            Toggle("Keep Zeus in the Dock", isOn: $model.keepInDock)
+            Toggle("Show Zeus in the menu bar", isOn: $model.showMenuBar)
             Spacer()
             switch model.phase {
             case .checking:
@@ -387,7 +392,10 @@ struct SetupView: View {
             case .installing:
                 Button("Stop") { model.stop() }
             case .finished:
-                Button("Start Zeus") { model.onFinished?() }.keyboardShortcut(.defaultAction)
+                Button("Start Zeus") {
+                    model.applyOptions()
+                    model.onFinished?()
+                }.keyboardShortcut(.defaultAction)
             case .failed:
                 Button("Copy the output") {
                     NSPasteboard.general.clearContents()

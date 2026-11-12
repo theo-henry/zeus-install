@@ -18,9 +18,12 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     init(session: ZeusSession) {
         self.session = session
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Zeus"
+        // The chat page draws its own header; the title bar only keeps the window buttons.
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 640, height: 480)
         window.tabbingMode = .preferred
         window.isReleasedWhenClosed = false
@@ -36,6 +39,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
             EditorWindowController.open(request: request, configuration: configuration)
         }
         handler.onScriptMessage = { [weak self] message in self?.handle(message) }
+        handler.onPageLoaded = { [weak window] webView in WebViewHandler.matchTitleBar(of: window, to: webView) }
         titleObservation = webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
             guard let self, self.shownURL != nil else { return }
             let title = webView.title ?? ""

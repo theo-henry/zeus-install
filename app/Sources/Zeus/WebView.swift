@@ -11,6 +11,8 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
     var onScriptMessage: ((String) -> Void)?
     /// A pop-up window that has loaded nothing yet closes when its first page is not a Zeus page.
     var isPopup = false
+    /// Called when a page has loaded.
+    var onPageLoaded: ((WKWebView) -> Void)?
 
     static func isLocal(_ url: URL?) -> Bool {
         guard let url else { return false }
@@ -89,6 +91,22 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Trace.log("page loaded: \(webView.url?.absoluteString.components(separatedBy: "#").first ?? "-") title=\(webView.title ?? "")")
+        onPageLoaded?(webView)
+    }
+
+    /// Gives the title bar the background colour of the page, so that the window looks like one surface.
+    static func matchTitleBar(of window: NSWindow?, to webView: WKWebView) {
+        let script = "getComputedStyle(document.body).backgroundColor"
+        webView.evaluateJavaScript(script) { result, _ in
+            guard let window, let text = result as? String else { return }
+            let numbers = text.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted)
+                .compactMap(Double.init)
+            guard numbers.count >= 3, numbers.count < 4 || numbers[3] > 0 else { return }
+            let color = NSColor(srgbRed: numbers[0] / 255, green: numbers[1] / 255, blue: numbers[2] / 255, alpha: 1)
+            window.backgroundColor = color
+            let brightness = 0.299 * numbers[0] + 0.587 * numbers[1] + 0.114 * numbers[2]
+            window.appearance = NSAppearance(named: brightness < 128 ? .darkAqua : .aqua)
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

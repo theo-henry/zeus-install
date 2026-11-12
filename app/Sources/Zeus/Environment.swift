@@ -3,7 +3,8 @@ import Foundation
 enum Paths {
     static let home = FileManager.default.homeDirectoryForCurrentUser.path
     static let zeusDir = home + "/Code/zeus"
-    static let zeusCommand = home + "/.local/bin/zeus"
+    /// ZEUS_APP_ZEUS_COMMAND replaces the zeus command (for tests).
+    static let zeusCommand = ProcessInfo.processInfo.environment["ZEUS_APP_ZEUS_COMMAND"] ?? home + "/.local/bin/zeus"
     static let logDir = home + "/Library/Logs/zeus-install"
 
     static var editorStateDir: String {
