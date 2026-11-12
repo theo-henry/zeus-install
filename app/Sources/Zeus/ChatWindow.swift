@@ -16,6 +16,8 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     private var terminal: TerminalPanel!
     private let closeBanner = NSStackView()
     private let closeLabel = NSTextField(labelWithString: "")
+    private let closeSpinner = NSProgressIndicator()
+    private var closeReason: String?
     private var closePending = false
     private var closeApproved = false
     private var closeGeneration = 0
@@ -48,12 +50,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         webView.setValue(false, forKey: "drawsBackground")
         terminal = TerminalPanel(session: session)
         terminal.webView.isHidden = true
-        closeBanner.orientation = .horizontal
-        closeBanner.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
-        closeLabel.lineBreakMode = .byTruncatingTail
-        closeBanner.addArrangedSubview(closeLabel)
-        closeBanner.addArrangedSubview(NSButton(title: "Cancel close", target: self, action: #selector(cancelClose)))
-        closeBanner.isHidden = true
+        makeCloseBanner()
         let content = NSStackView(views: [closeBanner, webView, terminal.webView])
         content.orientation = .vertical
         content.spacing = 0
@@ -219,7 +216,10 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         guard !closePending else { return }
         closePending = true
         closeGeneration += 1
+        closeReason = nil
+        closeLabel.stringValue = "Checking the chat before the tab closes…"
         closeBanner.isHidden = false
+        closeSpinner.startAnimation(nil)
         checkClose(generation: closeGeneration)
     }
 
@@ -227,6 +227,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         closeGeneration += 1
         closePending = false
         closeBanner.isHidden = true
+        closeSpinner.stopAnimation(nil)
         let callback = onSafeClose
         onSafeClose = nil
         callback?(false)
@@ -236,21 +237,72 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     private func checkClose(generation: Int) {
         guard closePending, generation == closeGeneration else { return }
         guard session.isAlive, shownURL != nil else { finishClose(); return }
-        closeLabel.stringValue = "Waiting for the chat before closing..."
         webView.callAsyncJavaScript("return await window.zeusApp?.closeState()", arguments: [:],
                                    in: nil, in: .page) { [weak self] result in
             guard let self, self.closePending, generation == self.closeGeneration else { return }
+            var reason = "unavailable"
             if case let .success(value) = result, let state = value as? [String: Any] {
                 if state["safe_to_close"] as? Bool == true { self.finishClose(); return }
-                self.closeLabel.stringValue = (state["reason"] as? String) ?? "Waiting for Zeus to finish..."
-            } else {
-                self.closeLabel.stringValue = "Close check unavailable. Keep this tab open or cancel the close."
+                reason = state["reason"] as? String ?? reason
             }
-            Trace.log("close deferred: \(self.session.pid) \(self.closeLabel.stringValue)")
+            if reason != self.closeReason {
+                self.closeReason = reason
+                self.closeLabel.stringValue = Self.closeMessage(for: reason)
+                Trace.log("close deferred: \(self.session.pid) \(reason)")
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.checkClose(generation: generation)
             }
         }
+    }
+
+    /// The reasons of window.zeusApp.closeState() (zeus-editor docs/chat.md), in words.
+    static func closeMessage(for reason: String) -> String {
+        switch reason {
+        case "composer-draft": return "The message box has unsent text or files. Send or clear them, and the tab closes."
+        case "pending-message": return "A message is still on its way to Zeus. The tab closes when it arrives."
+        case "busy": return "Zeus is working. The tab closes when Zeus finishes."
+        case "starting": return "Zeus is starting. The tab closes when it is ready."
+        case "terminal-draft": return "The terminal has unsent text. Clear it (Cmd+J), and the tab closes."
+        default: return "Zeus cannot check this chat now, so the tab stays open."
+        }
+    }
+
+    private func makeCloseBanner() {
+        closeBanner.orientation = .horizontal
+        closeBanner.alignment = .centerY
+        closeBanner.spacing = 10
+        closeBanner.edgeInsets = NSEdgeInsets(top: 9, left: 16, bottom: 9, right: 16)
+        closeBanner.wantsLayer = true
+        closeBanner.layer?.backgroundColor = Brand.nsSurface.cgColor
+        closeSpinner.style = .spinning
+        closeSpinner.controlSize = .small
+        closeSpinner.appearance = NSAppearance(named: .darkAqua)
+        closeLabel.font = NSFont(name: "ObjectSans-Regular", size: 13) ?? .systemFont(ofSize: 13)
+        closeLabel.textColor = Brand.nsForeground
+        closeLabel.lineBreakMode = .byTruncatingTail
+        closeLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let cancel = NSButton(title: "", target: self, action: #selector(cancelClose))
+        cancel.isBordered = false
+        cancel.attributedTitle = NSAttributedString(string: "Cancel close", attributes: [
+            .foregroundColor: Brand.nsLink, .font: NSFont(name: "PPObjectSans-Semibold", size: 13) ?? .boldSystemFont(ofSize: 13),
+        ])
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        for view in [closeSpinner, closeLabel, spacer, cancel] { closeBanner.addArrangedSubview(view) }
+        let line = NSBox()
+        line.boxType = .custom
+        line.borderWidth = 0
+        line.fillColor = Brand.nsLine
+        line.translatesAutoresizingMaskIntoConstraints = false
+        closeBanner.addSubview(line)
+        NSLayoutConstraint.activate([
+            line.heightAnchor.constraint(equalToConstant: 1),
+            line.leadingAnchor.constraint(equalTo: closeBanner.leadingAnchor),
+            line.trailingAnchor.constraint(equalTo: closeBanner.trailingAnchor),
+            line.bottomAnchor.constraint(equalTo: closeBanner.bottomAnchor),
+        ])
+        closeBanner.isHidden = true
     }
 
     private func finishClose() {

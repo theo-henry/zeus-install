@@ -17,6 +17,10 @@ enum Brand {
     static let surface = Color(red: 9/255, green: 32/255, blue: 57/255)
     static let foreground = Color(red: 241/255, green: 246/255, blue: 249/255)
     static let accent = Color(red: 55/255, green: 114/255, blue: 1)
+    static let nsSurface = NSColor(srgbRed: 13/255, green: 42/255, blue: 78/255, alpha: 1)
+    static let nsForeground = NSColor(srgbRed: 241/255, green: 246/255, blue: 249/255, alpha: 1)
+    static let nsLine = NSColor(srgbRed: 26/255, green: 58/255, blue: 100/255, alpha: 1)
+    static let nsLink = NSColor(srgbRed: 91/255, green: 140/255, blue: 1, alpha: 1)
     static var logo: String {
         guard let url = Bundle.main.url(forResource: "zeus-logo", withExtension: "svg"),
               let svg = try? String(contentsOf: url) else { return "" }

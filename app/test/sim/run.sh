@@ -152,7 +152,7 @@ if [ -n "$SHOTS" ]; then
   sleep 0.3
   shot 6-startup
   video_id="$("$BIN/windows" "$APP_PID" | head -1 | awk '{print $1}')"
-  [ -z "$video_id" ] || screencapture -x -v -V 4 -l "$video_id" "$SHOTS/startup.mov"
+  [ -z "$video_id" ] || { rm -f "$SHOTS/startup.mov"; screencapture -x -v -V 4 -l "$video_id" "$SHOTS/startup.mov"; }
 fi
 check "Start Zeus starts a hidden zeus session" 'wait_for "state: running(" 30'
 check "the chat page loads in the app window" 'wait_for "page loaded: http://127.0.0.1" 20'
@@ -162,7 +162,7 @@ shot 6-chat
 "$BIN/act" test-draft
 sleep 0.5
 "$BIN/act" close-chat
-check "draft text defers tab close" 'wait_for "close deferred: .*Unsent text" 10'
+check "draft text defers tab close" 'wait_for "close deferred: .* composer-draft" 10'
 check "draft session is still running" '[ ! -f "$STATE/zeus-stopped" ]'
 shot 7-draft-close
 "$BIN/act" test-cancel-close
@@ -191,7 +191,7 @@ sleep 0.3
 "$BIN/act" test-send
 sleep 0.3
 "$BIN/act" close-chat
-check "busy work defers tab close" 'wait_for "close deferred: .*Zeus is working" 10'
+check "busy work defers tab close" 'wait_for "close deferred: .* busy" 10'
 shot 9-busy-close
 check "the chat turn completes before its PTY stops" 'wait_for "state: ended" 20 && sleep 4 && grep -q "reply Test chat turn" "$STATE/sessions"'
 check "closing one tab preserves the other PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 2 ]'

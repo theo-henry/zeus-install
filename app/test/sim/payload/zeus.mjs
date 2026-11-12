@@ -13,8 +13,8 @@ main{width:600px}textarea{display:block;width:100%;background:#071d38;color:#f1f
 </style></head><body><main><h1>Zeus chat</h1><p>PTY session ${process.pid}</p><p id="reply">How can I help?</p><textarea id="prompt" aria-label="Message"></textarea><button id="send">Send</button></main><script>
 let pending=false;
 window.zeusApp={closeState:async()=>{
- if(document.getElementById('prompt').value.trim())return {safe_to_close:false,reason:'Unsent text'};
- if(pending)return {safe_to_close:false,reason:'Zeus is working'};
+ if(document.getElementById('prompt').value.trim())return {safe_to_close:false,reason:'composer-draft'};
+ if(pending)return {safe_to_close:false,reason:'busy'};
  return await (await fetch('/close-state')).json();
 }};
 document.getElementById('send').onclick=async()=>{
@@ -25,7 +25,7 @@ document.getElementById('send').onclick=async()=>{
 };
 </script></body></html>`;
 const server = http.createServer((req, res) => {
- if(req.url === '/close-state') {res.end(JSON.stringify({safe_to_close:!busy,reason:busy?'Zeus is working':'idle'}));return;}
+ if(req.url === '/close-state') {res.end(JSON.stringify({safe_to_close:!busy,reason:busy?'busy':'idle'}));return;}
  if(req.url === '/turn') {
   busy=true;record('busy');let text='';req.on('data',chunk=>text+=chunk);req.on('end',()=>setTimeout(()=>{busy=false;record('reply',text);res.end('Reply: '+text);},3000));return;
  }
