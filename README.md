@@ -13,7 +13,46 @@ You can get the zeus repo and the Zeus Editor plugin only with a GitHub account 
 2. Send your GitHub username to Theo for access to the private Zeus repos:
    `zeus`, `zeus-editor`, `YAML-builder`, `celonis-ocpm`, and `celonis-pql`.
 
-## Install
+## Install the Zeus app (recommended)
+
+1. Press Cmd + Space, type "Terminal", and press Enter.
+2. Copy this line, paste it into Terminal, and press Enter:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/theo-henry/zeus-install/main/install-app.sh | bash
+```
+
+3. The Zeus app opens. Its setup window shows each tool that Zeus needs, with a tick for each tool that is already installed.
+   Click **Install**. The window shows the installer output, the GitHub one-time code, and the questions to answer.
+4. When the setup is complete, click **Start Zeus**.
+
+After that, click Zeus in the Dock. You do not need Terminal.
+The Zeus app runs the `zeus` command in a hidden terminal and shows the Zeus chat and the Zeus Editor in its own window.
+Closing a chat window, or quitting the app, stops that Zeus session, so no Claude Code session stays open in the background.
+
+Use the install line in Terminal, not a browser download of `Zeus.zip`.
+The app has no Apple Developer ID signature.
+A browser marks its downloads, and macOS then blocks the app until you click
+**System Settings > Privacy & Security > Open Anyway**.
+A download with `curl` has no such mark, so the app opens without that step.
+
+### The Zeus app
+
+| Feature | Where |
+| --- | --- |
+| New chat (as a tab of the open chat window) | File > New Chat (Cmd + N) |
+| Setup window again, for example after a failed step | Zeus > Zeus Setup… |
+| Menu bar icon with the running sessions, and Open and Stop for each | Zeus > Show in Menu Bar |
+| Keep Zeus in the Dock | Zeus > Keep in Dock, or the option in the setup window |
+
+Links to other websites open in your default browser. Zeus Editor pages stay in the app.
+
+The app runs its own copy of `install.sh` in app mode (`ZEUS_INSTALL_APP=1`).
+In app mode, the installer prints `@@zeus` status lines for the checklist, `--check` only reports which steps are done,
+and two more steps run: the Zeus skill plugins (step 12) and the Claude login (step 13).
+To build the app, see [app/README.md](app/README.md).
+
+## Install in Terminal only
 
 1. Press Cmd + Space, type "Terminal", and press Enter.
 2. Copy this line, paste it into Terminal, and press Enter:
@@ -43,6 +82,7 @@ The installer skips each step that is already done.
 | 9 | Copy of the zeus repo to `~/Code/zeus` | The folder already contains the zeus repo. |
 | 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. |
 | 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
+| 12 | The Zeus app in `/Applications` (`~/Applications` without administrator rights) | The app is open. A failed download does not stop the installer. |
 
 The installer does not use `sudo`.
 Your Mac password can be necessary only for the Apple pop-up in step 1.
@@ -50,6 +90,9 @@ The installer asks you to accept the Anaconda license before it installs Anacond
 Logs for Anaconda and the GitHub CLI are in `~/Library/Logs/zeus-install`.
 
 ## After the install
+
+When step 12 installed the Zeus app, it opens. Follow its setup window; it does the steps below for you.
+Without the app:
 
 1. Close Terminal and open a new Terminal window.
 2. Type `cd ~/Code/zeus` and press Enter.
