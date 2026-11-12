@@ -45,17 +45,6 @@ enum StatusPage {
     };
     """
 
-    static func starting(log: String) -> String {
-        """
-        <!doctype html><html><head><meta charset="utf-8"><style>\(style)</style><script>\(script)</script></head>
-        <body><main>
-          <h1><span class="spinner"></span>Starting Zeus…</h1>
-          <p>Zeus checks for updates, then starts Claude Code. This can take a minute after an update.</p>
-          <details><summary>Details</summary><pre id="log">\(escape(log))</pre></details>
-        </main></body></html>
-        """
-    }
-
     static func failed(message: String, log: String) -> String {
         """
         <!doctype html><html><head><meta charset="utf-8"><style>\(style)</style><script>\(script)</script></head>

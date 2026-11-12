@@ -60,6 +60,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Sends a test action to this test's copy of the app only.
+act() { "$BIN/act" "@$APP_PID $1"; }
+
 shot() {
   [ -n "$SHOTS" ] || return 0
   sleep 0.8
@@ -100,7 +103,7 @@ start_app() {
 }
 
 stop_app() {
-  "$BIN/act" quit
+  act quit
   local waited=0
   while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
   kill -0 "$APP_PID" 2>/dev/null && { fail "the app quits"; kill "$APP_PID"; } || pass "the app quits"
@@ -115,17 +118,17 @@ todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
 check "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
 shot 1-check
 
-"$BIN/act" setup-install
+act setup-install
 check "step 1: the Xcode tools install (simulated system window)" 'wait_for "setup event: done 1 " 40'
 check "step 2: the installer asks for the Anaconda license" 'wait_for "setup event: ask 2 " 20'
 shot 2-anaconda-license
-"$BIN/act" setup-answer-yes
+act setup-answer-yes
 check "step 2: Anaconda installs after Accept" 'wait_for "setup event: done 2 " 30'
 check "step 3: the GitHub CLI installs" 'wait_for "setup event: done 3 " 30'
 check "step 4: the GitHub login starts" 'wait_for "setup event: running 4 " 10'
 sleep 2
 shot 3-github-code
-"$BIN/act" setup-enter
+act setup-enter
 check "step 4: the GitHub login completes after Open GitHub" 'wait_for "setup event: done 4 " 20'
 check "step 5: access to the Zeus repos" 'wait_for "setup event: done 5 " 20'
 check "step 6: Node.js installs" 'wait_for "setup event: done 6 " 30'
@@ -143,12 +146,12 @@ check "the setup finishes" 'wait_for "setup ended: check=false code=0" 20'
 shot 5-finished
 check "the installer wrote only into the simulated home folder" '[ -x "$SANDBOX/.local/bin/zeus" ] && [ -d "$SANDBOX/Code/zeus/.git" ]'
 
-"$BIN/act" setup-start
+act setup-start
 check "Start Zeus starts a hidden zeus session" 'wait_for "state: running(" 30'
 check "the chat page loads in the app window" 'wait_for "page loaded: http://127.0.0.1" 20'
 check "zeus runs in ~/Code/zeus with --no-open" 'grep -q "\"--no-open\"" "$STATE/zeus-started" && grep -q "/Code/zeus\"" "$STATE/zeus-started"'
 shot 6-chat
-"$BIN/act" close-chat
+act close-chat
 check "closing the chat window ends the session" 'wait_for "state: ended" 20'
 check "zeus got SIGTERM" '[ "$(cat "$STATE/zeus-stopped" 2>/dev/null)" = SIGTERM ]'
 stop_app
@@ -157,9 +160,9 @@ echo
 echo "Scenario 2: the account has no access to one private repo"
 start_app noaccess ZEUS_SIM_NO_ACCESS=theo-henry/celonis-pql
 check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
-"$BIN/act" setup-install
-wait_for "setup event: ask 2 " 40 >/dev/null && "$BIN/act" setup-answer-yes
-wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && "$BIN/act" setup-enter
+act setup-install
+wait_for "setup event: ask 2 " 40 >/dev/null && act setup-answer-yes
+wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && act setup-enter
 check "step 5 fails and names the missing access" 'wait_for "setup event: failed 5 " 40'
 check "the setup stops with an error" 'wait_for "setup ended: check=false code=1" 20'
 shot 7-no-access
