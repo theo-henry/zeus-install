@@ -138,7 +138,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("io.github.theo-henry.zeus.test"),
                                                             object: nil, queue: .main) { [weak self] note in
             guard let self, let action = note.object as? String else { return }
-            Trace.log("test action: \(action)")
+            Trace.log("test action: \(action.prefix(60))")
+            if action.hasPrefix("js:") {   // Runs a script in the newest chat page.
+                let view = self.chatWindows.last?.window?.contentView?.subviews.compactMap { $0 as? WKWebView }.first
+                view?.evaluateJavaScript(String(action.dropFirst(3))) { result, error in
+                    Trace.log("js result: \(result.map { "\($0)" } ?? error?.localizedDescription ?? "nil")")
+                }
+                return
+            }
             let model = self.setupWindow?.model
             switch action {
             case "setup-install": model?.install()
@@ -176,8 +183,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSWorkspace.shared.open(URL(fileURLWithPath: Paths.logDir))
     }
 
+    /// The chat page (or editor page) of the front window. A chat window holds it below its loading screen.
     private var keyWebView: WKWebView? {
-        NSApp.keyWindow?.contentView as? WKWebView
+        guard let content = NSApp.keyWindow?.contentView else { return nil }
+        return (content as? WKWebView) ?? content.subviews.compactMap { $0 as? WKWebView }.first
     }
 
     @objc private func reloadPage(_ sender: Any?) {

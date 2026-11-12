@@ -27,6 +27,8 @@ mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 lipo -create "${binaries[@]}" -output "$BUNDLE/Contents/MacOS/Zeus"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist >"$BUNDLE/Contents/Info.plist"
 cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
+# The Zeus globe of the loading screen: the same file as zeus-editor/src/chat/client/globe.js, without "export".
+cp Resources/globe.js "$BUNDLE/Contents/Resources/globe.js"
 # The app runs this copy of the installer, so the app and its installer always match.
 cp "$REPO_DIR/install.sh" "$BUNDLE/Contents/Resources/install.sh"
 printf 'APPL????' >"$BUNDLE/Contents/PkgInfo"
