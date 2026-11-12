@@ -4,9 +4,14 @@ import WebKit
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var chatWindows: [ChatWindowController] = []
     private var setupWindow: SetupWindowController?
-    private var quitting = false
-    /// macOS logs out, restarts, or shuts down: the app then quits without waiting for the user.
-    private var macOSQuit = false
+    /// A user quit checks the tabs and asks about the unsafe ones before it stops the sessions.
+    private var checkingQuit = false
+    /// The quit is approved: the next terminate stops every session.
+    private var quitApproved = false
+    /// The approved quit is stopping the sessions; the app quits when they have ended.
+    private var stoppingForQuit = false
+    /// The window that shows the quit question as a sheet.
+    private var quitQuestionWindow: NSWindow?
     private let statusMenu = StatusMenu()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -18,8 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil,
                                                           queue: .main) { [weak self] _ in
             Trace.log("macOS powers off")
-            self?.macOSQuit = true
-            if NSApp.modalWindow != nil { NSApp.abortModal() }
+            guard let self, self.checkingQuit else { return }
+            self.approveQuit()
         }
 
         // First setup: the app puts itself in /Applications and continues from there.
@@ -62,30 +67,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     /// Quitting the app ends every session, so that no Claude Code session keeps running unseen.
-    /// Tabs that are not safe to close get one question for all of them; a quit that macOS starts
-    /// (log out, restart, shut down) asks nothing. Without the user's answer, the quit ends within 12 s.
+    /// A user quit checks the tabs first and asks one question for all tabs that are not safe to close;
+    /// it waits for that answer outside the quit, so that a macOS log out, restart, or shut down still
+    /// reaches the app. A quit that macOS starts asks nothing and ends within 12 s.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         setupWindow?.model.stop()
         guard SessionManager.shared.sessions.contains(where: \.isAlive) else { return .terminateNow }
-        guard !quitting else { return .terminateLater }
-        quitting = true
-        if macOSQuit || Self.quitStartedByMacOS {
-            Trace.log("quit started by macOS")
+        Trace.log("quit requested: approved=\(quitApproved) checking=\(checkingQuit)")
+        if Self.quitStartedByMacOS {
+            Trace.log("quit by macOS")
+            quitApproved = true
+        }
+        if stoppingForQuit { return .terminateLater }
+        if quitApproved {
+            stoppingForQuit = true
             stopAllAndQuit()
             return .terminateLater
         }
-        let windows = chatWindows
-        guard !windows.isEmpty else { stopAllAndQuit(); return .terminateLater }
-        var unsafe: [(ChatWindowController, String)] = []
-        var remaining = windows.count
-        for window in windows {
-            window.closeState { [weak self] reason in
-                if let reason { unsafe.append((window, reason)) }
-                remaining -= 1
-                if remaining == 0 { DispatchQueue.main.async { self?.confirmQuit(unsafe) } }
-            }
+        if !checkingQuit {
+            checkingQuit = true
+            checkTabsBeforeQuit()
         }
-        return .terminateLater
+        return .terminateCancel
     }
 
     private static var quitStartedByMacOS: Bool {
@@ -95,8 +98,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return event.paramDescriptor(forKeyword: AEKeyword(kAEQuitReason)) != nil
     }
 
+    private func checkTabsBeforeQuit() {
+        let windows = chatWindows
+        guard !windows.isEmpty else { approveQuit(); return }
+        var unsafe: [(ChatWindowController, String)] = []
+        var remaining = windows.count
+        for window in windows {
+            window.closeState { [weak self] reason in
+                if let reason { unsafe.append((window, reason)) }
+                remaining -= 1
+                if remaining == 0 { DispatchQueue.main.async { self?.confirmQuit(unsafe) } }
+            }
+        }
+    }
+
     private func confirmQuit(_ unsafe: [(ChatWindowController, String)]) {
-        guard !unsafe.isEmpty, !macOSQuit else { stopAllAndQuit(); return }
+        guard checkingQuit else { return }
+        guard let window = unsafe.first?.0.window else { approveQuit(); return }
         Trace.log("quit deferred: \(unsafe.map(\.1).joined(separator: " "))")
         let alert = NSAlert()
         alert.messageText = unsafe.count == 1 ? "A Zeus tab is not safe to close" : "\(unsafe.count) Zeus tabs are not safe to close"
@@ -104,14 +122,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .joined(separator: "\n") + "\n\nIf you quit, Zeus stops in every tab."
         alert.addButton(withTitle: "Quit Anyway")
         alert.addButton(withTitle: "Cancel")
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertSecondButtonReturn, !macOSQuit {
-            quitting = false
-            Trace.log("quit cancelled")
-            NSApp.reply(toApplicationShouldTerminate: false)
-            return
+        quitQuestionWindow = window
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, self.checkingQuit else { return }
+            self.quitQuestionWindow = nil
+            if response == .alertSecondButtonReturn {
+                self.checkingQuit = false
+                Trace.log("quit cancelled")
+                return
+            }
+            self.approveQuit()
         }
-        stopAllAndQuit()
+    }
+
+    private func approveQuit() {
+        checkingQuit = false
+        quitApproved = true
+        // AppKit does not quit while a sheet is open.
+        endQuitQuestion()
+        // Not from inside a main-queue block: quitting waits for callbacks on the main queue.
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+    }
+
+    private func endQuitQuestion() {
+        guard let window = quitQuestionWindow, let sheet = window.attachedSheet else { return }
+        quitQuestionWindow = nil
+        window.endSheet(sheet, returnCode: .abort)
     }
 
     /// The close check takes at most `closeCheckLimit`, so the quit ends within 12 s.
@@ -239,9 +277,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case "toggle-menubar": self.toggleMenuBar(nil)
             // Not from inside this main-queue block: quitting waits for callbacks on the main queue.
             case "quit": NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
-            case "test-logout-quit":
+            case "test-power-off":
                 NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willPowerOffNotification, object: NSWorkspace.shared)
-                NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
             default: break
             }
         }

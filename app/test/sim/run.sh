@@ -43,7 +43,17 @@ for w in list where (w[kCGWindowOwnerPID as String] as? Int) == pid && (w[kCGWin
     print(w[kCGWindowNumber as String] ?? 0, w[kCGWindowName as String] ?? "")
 }
 SWIFT
+# The quit Apple event that loginwindow sends to each app when macOS logs out.
+cat >"$WORK/logout.swift" <<'SWIFT'
+import Foundation
+let target = NSAppleEventDescriptor(processIdentifier: pid_t(CommandLine.arguments[1])!)
+let event = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEQuitApplication),
+    targetDescriptor: target, returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+event.setParam(NSAppleEventDescriptor(enumCode: OSType(kAEReallyLogOut)), forKeyword: AEKeyword(kAEQuitReason))
+do { _ = try event.sendEvent(options: [.noReply], timeout: 5) } catch { print("logout event not sent: \(error)") }
+SWIFT
 swiftc -O -o "$BIN/act" "$WORK/act.swift" 2>/dev/null
+swiftc -O -o "$BIN/logout" "$WORK/logout.swift" 2>/dev/null
 swiftc -O -o "$BIN/windows" "$WORK/windows.swift" 2>/dev/null
 
 echo "Building the development app"
@@ -268,7 +278,7 @@ stop_app
 check "quit stops every remaining PTY" '[ "$(stops)" = 7 ]'
 
 echo
-echo "Scenario 2: macOS logs out while one tab has a draft and one tab is busy"
+echo "Scenario 2: a cancelled logout, then a quit and a logout while one tab has a draft and one tab is busy"
 defaults write "$BUNDLE_ID" setupDone -bool true
 launch_app logout
 check "the app opens a chat at once after the setup" 'wait_for "page loaded: http://127.0.0.1" 30'
@@ -279,17 +289,40 @@ check "a second tab opens" 'wait_count "state: running(" 2 20 && sleep 2'
 sleep 0.3
 "$BIN/act" test-send
 sleep 0.5
+# A logout that another app cancels: macOS warns of the power off, but no quit follows.
+"$BIN/act" test-power-off
+check "a power-off warning alone stops nothing" 'wait_for "macOS powers off" 10 && sleep 1 && [ "$(stops)" = 7 ]'
+"$BIN/act" quit
+check "a later quit still asks about the unsafe tabs" 'wait_for "quit deferred: " 10 && grep "quit deferred: " "$TRACE" | grep -q composer-draft && grep "quit deferred: " "$TRACE" | grep -q busy'
+shot 12-quit-question
+# A real logout: macOS first warns of the power off, then sends the quit event.
 logout_start=$(date +%s)
-"$BIN/act" test-logout-quit
+"$BIN/act" test-power-off
+"$BIN/logout" "$APP_PID"
 waited=0
 while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 30 ]; do sleep 0.5; waited=$((waited + 1)); done
 logout_time=$(($(date +%s) - logout_start))
 kill -0 "$APP_PID" 2>/dev/null && kill "$APP_PID"
 APP_PID=""
 if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-logout.log"; fi
-check "a logout quit ends within 12 s (took $logout_time s)" '[ "$logout_time" -le 12 ]'
-check "a logout quit asks nothing" 'grep -q "quit started by macOS" "$TRACE" && ! grep -q "quit deferred" "$TRACE"'
-check "a logout quit stops every PTY" '[ "$(stops)" = 9 ]'
+check "a logout during the quit question ends the quit within 12 s (took $logout_time s)" '[ "$logout_time" -le 12 ]'
+check "the logout stops every PTY" '[ "$(stops)" = 9 ]'
+
+# A logout quit event with no question open: the app asks nothing.
+launch_app logout-event
+check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30'
+"$BIN/act" test-draft
+sleep 0.5
+logout_start=$(date +%s)
+"$BIN/logout" "$APP_PID"
+waited=0
+while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 30 ]; do sleep 0.5; waited=$((waited + 1)); done
+logout_time=$(($(date +%s) - logout_start))
+kill -0 "$APP_PID" 2>/dev/null && kill "$APP_PID"
+APP_PID=""
+check "the quit event of a logout ends the app within 12 s (took $logout_time s)" '[ "$logout_time" -le 12 ]'
+check "the quit event of a logout asks nothing" 'grep -q "quit by macOS" "$TRACE" && ! grep -q "quit deferred" "$TRACE"'
+check "the quit event of a logout stops the PTY" '[ "$(stops)" = 10 ]'
 
 echo
 echo "Scenario 3: the account has no access to one private repo"

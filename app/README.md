@@ -21,7 +21,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   In the app, the app owns closing: `zeus` runs with `ZEUS_APP=1`, so the editor does not close terminals when the page closes.
 - **No hidden sessions.** Quitting the app stops every session.
   When tabs are not safe to close, one question lists them all: **Quit Anyway** or **Cancel**.
-  When macOS logs out, restarts, or shuts down, the app asks nothing; without a question, the quit ends within 12 s.
+  When macOS logs out, restarts, or shuts down, the app asks nothing and closes an open quit question; without a question, the quit ends within 12 s.
   If the app crashes, its hidden terminal closes and `zeus` stops as after a closed Terminal window.
 - **Theme.** The setup window, the startup page, and the status pages use the Zeus chat theme and logo.
   At startup the logo glows over a thin progress line while `zeus` checks for updates.
@@ -80,7 +80,9 @@ It presses the app's buttons through the debug test actions and checks the trace
    Cmd+T tabs start separate sessions; Cmd+J shows the terminal and its input reaches that session;
    a close while Zeus works waits for the turn; closing one tab keeps the others; a chat that cannot answer the close check
    (older editor plugin) waits 3 s, then **Close anyway** closes it; **Close anyway** also stops a busy tab; quitting stops every session.
-2. macOS logs out while one tab has unsent text and one tab is busy: the app asks nothing, stops every session, and quits within 12 s.
+2. One tab has unsent text and one tab is busy: a logout that another app cancels changes nothing, a later quit asks about both tabs,
+   and a logout while that question is open stops every session and quits within 12 s without an answer;
+   the quit event of a logout with a draft open asks nothing and quits within 12 s.
 3. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
