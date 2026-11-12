@@ -1,0 +1,35 @@
+#!/bin/bash
+# Simulated curl: makes the files that the installer downloads. No network access.
+target="" url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) target="$2"; shift ;;
+    http*://*|file://*) url="$1" ;;
+  esac
+  shift
+done
+P="$ZEUS_SIM_PAYLOAD"
+write() { if [ -n "$target" ]; then cat >"$target"; else cat; fi; }
+case "$url" in
+  *Anaconda3-*.sh)
+    sleep 1
+    printf '#!/bin/bash\n# Simulated Anaconda installer: -b -p <prefix>\nwhile [ $# -gt 0 ]; do [ "$1" = "-p" ] && prefix="$2"; shift; done\nmkdir -p "$prefix/bin"\ncp "%s/conda" "$prefix/bin/conda"\nchmod +x "$prefix/bin/conda"\nsleep 2\necho "installation finished."\n' "$P" | write
+    ;;
+  *node-v*-darwin-*.tar.gz)
+    work="$(mktemp -d)"
+    mkdir -p "$work/node/bin"
+    printf '#!/bin/sh\nexec "%s" "$@"\n' "$ZEUS_SIM_REAL_NODE" >"$work/node/bin/node"
+    cp "$P/npm" "$work/node/bin/npm"
+    chmod +x "$work/node/bin/node" "$work/node/bin/npm"
+    tar -czf "$work/node.tar.gz" -C "$work" node
+    write <"$work/node.tar.gz"
+    rm -rf "$work"
+    ;;
+  https://claude.ai/install.sh)
+    printf '#!/bin/bash\n# Simulated Claude Code installer.\nmkdir -p "$HOME/.local/bin"\ncp "%s/claude" "$HOME/.local/bin/claude"\nchmod +x "$HOME/.local/bin/claude"\necho "Claude Code installed (simulated)."\n' "$P" | write
+    ;;
+  *)
+    echo "simulated curl: no network in the simulation: $url" >&2
+    exit 22
+    ;;
+esac

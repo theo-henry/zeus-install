@@ -1,0 +1,10 @@
+#!/bin/bash
+# Simulated npm: "install -g @celonis/content-cli" makes content-cli next to this file.
+if [ "${1:-}" = "install" ] && [[ " $* " == *" @celonis/content-cli "* ]]; then
+  printf '#!/bin/sh\necho "content-cli (simulated)"\n' >"$(dirname "$0")/content-cli"
+  chmod +x "$(dirname "$0")/content-cli"
+  sleep 1
+  echo "added 1 package (simulated)"
+  exit 0
+fi
+echo "npm (simulated): $*"
