@@ -5,12 +5,12 @@ It installs the tools that Zeus needs and copies the private zeus repo to `~/Cod
 
 This repo contains only the installer.
 It contains no Zeus content and no secrets.
-You can get the zeus repo only with a GitHub account that has access.
+You can get the zeus repo and the Zeus Editor plugin only with a GitHub account that has access.
 
 ## Before you start
 
 1. Make a GitHub account at [github.com](https://github.com) and turn on 2FA.
-2. Send your GitHub username to Theo for access to the zeus repo.
+2. Send your GitHub username to Theo for access to the zeus repo and to the zeus-editor repo.
 
 ## Install
 
@@ -40,7 +40,8 @@ The installer skips each step that is already done.
 | 7 | Claude Code | `claude` is already installed. |
 | 8 | Celonis content-cli | `content-cli` is already installed. |
 | 9 | Copy of the zeus repo to `~/Code/zeus` | The folder already contains the zeus repo. |
-| 10 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
+| 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. When your account has no access to the private `theo-henry/zeus-editor` repo, the step is not done, the installer names the repo, and it ends with "NOT complete". |
+| 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
 
 The installer does not use `sudo`.
 Your Mac password can be necessary only for the Apple pop-up in step 1.
@@ -54,16 +55,21 @@ Logs for Anaconda and the GitHub CLI are in `~/Library/Logs/zeus-install`.
 3. Type `claude` and press Enter.
    Log in to Claude in the browser the first time.
 4. The Zeus Editor needs Node.js 22 or later.
-5. In Claude, type these four commands:
+5. In Claude, type these three commands:
 
 ```text
 /plugin install celonis-yaml-builder@yaml-builder
 /plugin install celonis-ocpm@celonis-ocpm
 /plugin install celonis-pql@celonis-pql
-/plugin install zeus-editor@zeus-editor
 ```
 
 6. Close Claude (Ctrl + C two times) and open a new Terminal window.
 7. Type `zeus` and press Enter.
    The `zeus` command starts Claude Code with the Zeus Editor and opens the chat page.
-   When the Zeus Editor plugin is not installed, the command tells you how to install it.
+   When the Zeus Editor plugin is not installed, the command tells you to run the install line again.
+
+## When the installer says "NOT complete"
+
+Your GitHub account has no access to `theo-henry/zeus-editor` yet.
+Send your GitHub username to Theo, accept the invitation from GitHub, and run the same install line again.
+The other plugins (`celonis-pql`, `celonis-ocpm`, `celonis-yaml-builder`) are also private repos, so they need an invitation too.
