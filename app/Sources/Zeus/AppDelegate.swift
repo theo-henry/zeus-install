@@ -12,6 +12,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         statusMenu.update()
         listenForTestActions()
 
+        // First setup: the app puts itself in /Applications and continues from there.
+        if setupNeeded, AppMover.shouldMove, AppMover.moveAndRelaunch() {
+            Trace.log("moving the app to Applications")
+            return
+        }
+
         SessionManager.shared.adoptLeftovers()
         let adopted = SessionManager.shared.sessions
         adopted.forEach { show($0) }

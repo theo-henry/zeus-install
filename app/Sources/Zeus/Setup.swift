@@ -21,6 +21,8 @@ final class SetupModel: ObservableObject {
     }
 
     @Published var steps: [Step] = [
+        Step(id: 0, name: "Zeus app in Applications", note: "Zeus copies itself to the Applications folder.",
+             state: AppMover.isInApplications ? .ok : .todo),
         Step(id: 1, name: "Git", note: "Xcode Command Line Tools. A system window asks you to install them."),
         Step(id: 2, name: "Python", note: "Anaconda. You accept its license here."),
         Step(id: 3, name: "GitHub CLI", note: "The gh command."),
@@ -54,13 +56,14 @@ final class SetupModel: ObservableObject {
     private var lastOutput = Date()
     private var idleTimer: Timer?
 
-    var needsInstall: Bool { steps.contains { $0.state == .todo } }
+    /// Step 0 (the app in Applications) is not an installer step.
+    var needsInstall: Bool { steps.contains { $0.id != 0 && $0.state == .todo } }
     var isBusy: Bool { phase == .checking || phase == .installing }
 
     func check() {
         guard process == nil else { return }
         phase = .checking
-        for index in steps.indices { steps[index].state = .unknown; steps[index].detail = "" }
+        for index in steps.indices where steps[index].id != 0 { steps[index].state = .unknown; steps[index].detail = "" }
         run(arguments: ["--check"])
     }
 
@@ -162,7 +165,7 @@ final class SetupModel: ObservableObject {
         }
         if code == 0 {
             phase = .finished
-            for index in steps.indices where [.unknown, .running, .todo, .always].contains(steps[index].state) {
+            for index in steps.indices where steps[index].id != 0 && [.unknown, .running, .todo, .always].contains(steps[index].state) {
                 steps[index].state = .skipped
             }
             applyOptions()

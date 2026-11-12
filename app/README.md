@@ -2,6 +2,9 @@
 
 A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without Terminal.
 
+- **Applications folder.** At the first start, an app that runs from another folder (Downloads, a build folder)
+  copies itself to `/Applications` (`~/Applications` without administrator rights), opens the copy, and quits.
+  A copy in Downloads goes to the Trash. Development builds, `ZEUS_APP_TRACE`, and `ZEUS_APP_NO_MOVE=1` turn this off.
 - **Setup window.** The first start runs the bundled `install.sh` in app mode in a hidden terminal.
   `install.sh --check` ticks the steps that are already done. The window shows the installer output,
   an Accept button for the Anaconda license, the GitHub one-time code, a link for the Claude login, and a field for any other answer.
