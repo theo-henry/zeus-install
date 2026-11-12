@@ -9,7 +9,7 @@
 const VERTEX = `
 attribute vec4 a;      // xyz on the unit sphere, w = per-point value 0..1
 attribute float e;     // 1 = moved point or ray tip, 0 = ray base on the surface
-uniform float t, en, fl, now, px, mini;
+uniform float t, en, fl, now, px, mini, calm;
 uniform mediump float mode;   // 0 = surface points, 1 = rays to the peaks, 3 = inner core
 uniform vec2 sc; uniform vec4 rot;
 uniform vec4 em[10];   // Protrusions: xyz = direction of the peak, w = start time in seconds
@@ -37,6 +37,7 @@ void main() {
         spike += mix(h, h*h*(3. - 2.*h), .45) * env * es[i] * .9 * mix(.12, 1., (1. - ez*ez)*(1. - ez*ez));
       }
     }
+    spike *= calm;   // 0 while the globe holds still for a hand-over.
     rad = 1. + wave(p, t)*.006 + spike*e + fl*.07;
     k = clamp(spike*2.6, 0., 1.);
   } else { rad = .52 + .05*sin(t*1.3 + a.w*6.283); }
@@ -79,9 +80,9 @@ function sphere(count) {
     const angle = i * 2.399963229728653;
     const x = Math.cos(angle) * r;
     const z = Math.sin(angle) * r;
-    const j = Math.random();
-    points.set([x, y, z, j], i * 4);
-    rays.set([x, y, z, j, 0, x, y, z, j, 1], i * 10);
+    const j = (Math.sin(i * 12.9898) * 43758.5453) % 1; // The same for every globe, so two globes look the same.
+    points.set([x, y, z, Math.abs(j)], i * 4);
+    rays.set([x, y, z, Math.abs(j), 0, x, y, z, Math.abs(j), 1], i * 10);
   }
   return { count, points, rays };
 }
@@ -91,7 +92,7 @@ function sphere(count) {
  * Put `canvas` in the page and call `start()`. The globe draws only while its canvas is visible.
  * `setEnergy(0..1)`: how often and how far the protrusions push out (idle about 0.12, working 1).
  * `setMini(true)`: the small form for a 20 to 30 px globe: fewer and larger points, no core, no rays.
- * `flash()`: one bright beat.
+ * `flash()`: one bright beat. `setCalm(true)`: no protrusions, for a hand-over between two globes.
  */
 function createZeusGlobe() {
   const canvas = document.createElement("canvas");
@@ -117,7 +118,7 @@ function createZeusGlobe() {
   gl.useProgram(program);
 
   const U = {};
-  for (const name of ["t", "en", "fl", "now", "px", "mini", "mode", "sc", "rot", "em", "es", "ed"])
+  for (const name of ["t", "en", "fl", "now", "px", "mini", "calm", "mode", "sc", "rot", "em", "es", "ed"])
     U[name] = gl.getUniformLocation(program, name);
   const A = gl.getAttribLocation(program, "a");
   const E = gl.getAttribLocation(program, "e");
@@ -144,7 +145,8 @@ function createZeusGlobe() {
   let energy = 0.12;
   let target = 0.12;
   let flash = 0;
-  let clock = 0;
+  let calm = false;
+  let calmNow = 1; // 1 = protrusions at full height, 0 = none
   let slot = 0;
   let ringBefore = 0;
   let last = 0;
@@ -153,10 +155,15 @@ function createZeusGlobe() {
   let width = 0;
   let height = 0;
 
-  // The turn of the globe at this moment, from the wall clock.
+  // The turn of the globe and the time of its ring of light at this moment, from the wall clock,
+  // so that two globes on one screen are the same.
   const turn = () => {
     const seconds = still ? 0 : (Date.now() / 1000) % 100000;
-    return { spin: (seconds * 0.2) % 6.283185, tilt: 0.35 + Math.sin(seconds * 0.21) * 0.12 };
+    return {
+      spin: (seconds * 0.2) % 6.283185,
+      tilt: 0.35 + Math.sin(seconds * 0.21) * 0.12,
+      clock: (seconds % 900) * 0.7,
+    }; // Kept small: the shader counts with less precision.
   };
 
   // Starts one protrusion. Its peak is one of the globe's own points, near the outline as seen now.
@@ -201,8 +208,9 @@ function createZeusGlobe() {
     const view = turn();
     energy += (target - energy) * 0.04;
     flash *= 0.93;
-    if (!still) {
-      clock += dt * (0.58 + energy * 0.62);
+    calmNow += ((calm ? 0 : 1) - calmNow) * 0.14;
+    const clock = view.clock;
+    if (!still && !calm) {
       const size = () => (0.16 + Math.random() ** 1.6 * 0.5) * (0.75 + energy * 0.55); // Mostly short, sometimes long.
       if (Math.random() < dt * (0.55 + energy * 3)) protrude(seconds, size(), view);
       // The ring of light reaches the edge of the globe and pushes some out.
@@ -216,6 +224,7 @@ function createZeusGlobe() {
     gl.uniform2f(U.sc, (2 * RADIUS * side) / width, (2 * RADIUS * side) / height);
     gl.uniform1f(U.px, (RADIUS * side) / 150);
     gl.uniform1f(U.mini, mini ? 1 : 0);
+    gl.uniform1f(U.calm, calmNow);
     gl.uniform4fv(U.em, em);
     gl.uniform1fv(U.es, es);
     gl.uniform1fv(U.ed, ed);
@@ -273,6 +282,10 @@ function createZeusGlobe() {
     },
     flash() {
       flash = 1;
+    },
+    /** Holds the globe still: the protrusions go back and no new ones start. For the hand-over from the app. */
+    setCalm(value) {
+      calm = Boolean(value);
     },
   };
 }

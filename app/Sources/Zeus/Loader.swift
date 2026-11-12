@@ -117,7 +117,8 @@ enum LoaderPage {
             statusLine.style.opacity = 0;
             document.getElementById("bg").style.opacity = 0;
             document.getElementById("ambient").style.opacity = 0;
-            if (globe) globe.setEnergy(0.12);
+            // The globe holds still while it moves, like the chat page's globe: then the change does not show.
+            if (globe) { globe.setEnergy(0.12); globe.setCalm(true); }
             box.style.transition = "transform .65s cubic-bezier(.2,.8,.2,1)";
             box.style.transform = `translate(${rect.x - place.x}px, ${rect.y - place.y}px) scale(${rect.width / place.size})`;
           },

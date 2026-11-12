@@ -137,7 +137,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard ProcessInfo.processInfo.environment["ZEUS_APP_TRACE"] != nil else { return }
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("io.github.theo-henry.zeus.test"),
                                                             object: nil, queue: .main) { [weak self] note in
-            guard let self, let action = note.object as? String else { return }
+            guard let self, var action = note.object as? String else { return }
+            // "@<pid> <action>" goes to one copy of the app only.
+            if action.hasPrefix("@") {
+                let parts = action.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
+                guard parts.count == 2, Int32(parts[0]) == ProcessInfo.processInfo.processIdentifier else { return }
+                action = parts[1]
+            }
             Trace.log("test action: \(action.prefix(60))")
             if action.hasPrefix("js:") {   // Runs a script in the newest chat page.
                 let view = self.chatWindows.last?.window?.contentView?.subviews.compactMap { $0 as? WKWebView }.first
