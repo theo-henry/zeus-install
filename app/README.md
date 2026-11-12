@@ -11,8 +11,19 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
 - **Chat window.** A click on the app runs `~/.local/bin/zeus --no-open` in `~/Code/zeus` in a hidden terminal,
   reads the `Zeus chat: <url>` line, and shows that page. If `zeus` stops before the page opens, the window shows its output
   with **Try again** and **Run the Zeus Setup**.
-- **No hidden sessions.** Closing a chat window sends SIGTERM to its `zeus`, and quitting the app stops every session.
+- **Tabs.** Cmd+T opens a tab with its own `zeus` session and chat.
+  Cmd+J shows or hides the live terminal of the tab, for login prompts, slash commands, or debugging.
+- **Safe close.** Closing a tab asks the chat (`window.zeusApp.closeState()`) first.
+  While Zeus works, or while the chat has unsent text, attachments, or a pending send, the tab stays open with a banner, and closes when the chat is safe.
+  **Cancel close** keeps the tab.
+  Then the app sends SIGTERM to its `zeus`; the chat stays in the history.
+  In the app, the app owns closing: `zeus` runs with `ZEUS_APP=1`, so the editor does not close terminals when the page closes.
+- **No hidden sessions.** Quitting the app closes every tab with the same checks and stops every session.
   If the app crashes, its hidden terminal closes and `zeus` stops as after a closed Terminal window.
+- **Theme.** The setup window, the startup page, and the status pages use the Zeus chat theme and logo.
+  At startup the logo glows over a thin progress line while `zeus` checks for updates.
+  When the chat opens, the logo breaks into particles over the chat page.
+  With Reduce motion on, the chat opens without the animation.
 - **Links.** Pages on 127.0.0.1 stay in the app (pop-ups open in a new app window). Other links open in the default browser.
 
 ## Build
@@ -25,6 +36,7 @@ app/dev-bundle.sh         # app/build/Zeus-dev.app, a quick debug build for this
 ```
 
 The app has an ad-hoc signature, not an Apple Developer ID.
+A release for other people needs a Developer ID Application signature with the hardened runtime, notarization (`xcrun notarytool submit --wait`), and a stapled ticket (`xcrun stapler staple`).
 Publish `app/build/Zeus.zip` as the `Zeus.zip` asset of a GitHub release of this repo;
 `install-app.sh` and step 12 of `install.sh` download `releases/latest/download/Zeus.zip`.
 
@@ -32,9 +44,20 @@ Publish `app/build/Zeus.zip` as the `Zeus.zip` asset of a GitHub release of this
 
 `ZEUS_APP_TRACE=/path/to/file` writes setup events, session states, and page loads to that file.
 `ZEUS_APP_INSTALLER=/path/to/install.sh` replaces the bundled installer.
+`ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
+`ZEUS_APP_TEST_ID=<id>` (debug builds) makes the test actions reach only this app copy.
+`ZEUS_APP_FORCE_MOTION=1` (debug builds) plays the startup animation also with Reduce motion on.
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.
 The web pages can be inspected with Safari's Develop menu.
+
+## Test the PTY
+
+```bash
+app/test/pty/run.sh
+```
+
+It sends 1 MiB to a raw-mode terminal and checks that every byte arrives, that a resize reaches the terminal, and that the UI run loop stays responsive.
 
 ## Test on a simulated new Mac
 
@@ -50,8 +73,10 @@ It presses the app's buttons through the debug test actions and checks the trace
 
 1. A new Mac: the check finds 12 steps to do; all 13 steps install, with the Anaconda license, the GitHub
    one-time code, and the Claude login answered in the app; Start Zeus opens the chat page from `~/Code/zeus`
-   with `--no-open`; closing the window stops `zeus` with SIGTERM; the app quits.
+   with `--no-open`; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
+   Cmd+T tabs start separate sessions; Cmd+J shows the terminal and its input reaches that session;
+   a close while Zeus works waits for the turn; closing one tab keeps the others; quitting stops every session.
 2. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
 
-With a folder, it saves a screenshot of each state (only the test app's windows). It needs Screen Recording
+With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
 permission for the terminal only for the screenshots.
