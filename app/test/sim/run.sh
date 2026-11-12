@@ -18,6 +18,8 @@ BUNDLE_ID="io.github.theo-henry.zeus"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
 BIN="$WORK/bin"
+# Test actions reach only the app copy that this test starts, not another running Zeus app.
+export ZEUS_APP_TEST_ID="sim-$$"
 mkdir -p "$BIN"
 [ -n "$SHOTS" ] && mkdir -p "$SHOTS"
 
@@ -29,7 +31,8 @@ check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 # Helpers: send a test action to the app, and list the app's windows.
 cat >"$WORK/act.swift" <<'SWIFT'
 import Foundation
-DistributedNotificationCenter.default().postNotificationName(Notification.Name("io.github.theo-henry.zeus.test"),
+let testID = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_ID"].map { "." + $0 } ?? ""
+DistributedNotificationCenter.default().postNotificationName(Notification.Name("io.github.theo-henry.zeus.test" + testID),
     object: CommandLine.arguments[1], userInfo: nil, deliverImmediately: true)
 SWIFT
 cat >"$WORK/windows.swift" <<'SWIFT'
@@ -105,11 +108,12 @@ stop_app() {
   while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
   kill -0 "$APP_PID" 2>/dev/null && { fail "the app quits"; kill "$APP_PID"; } || pass "the app quits"
   APP_PID=""
+  if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-$(basename "$(dirname "$TRACE")").log"; fi
 }
 
 echo
 echo "Scenario 1: a new Mac, full setup, chat, close"
-start_app new
+start_app new ZEUS_SIM_START_DELAY=2500 ZEUS_APP_FORCE_MOTION=1
 check "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
 check "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
@@ -144,14 +148,62 @@ shot 5-finished
 check "the installer wrote only into the simulated home folder" '[ -x "$SANDBOX/.local/bin/zeus" ] && [ -d "$SANDBOX/Code/zeus/.git" ]'
 
 "$BIN/act" setup-start
+if [ -n "$SHOTS" ]; then
+  sleep 0.3
+  shot 6-startup
+  video_id="$("$BIN/windows" "$APP_PID" | head -1 | awk '{print $1}')"
+  [ -z "$video_id" ] || screencapture -x -v -V 4 -l "$video_id" "$SHOTS/startup.mov"
+fi
 check "Start Zeus starts a hidden zeus session" 'wait_for "state: running(" 30'
 check "the chat page loads in the app window" 'wait_for "page loaded: http://127.0.0.1" 20'
 check "zeus runs in ~/Code/zeus with --no-open" 'grep -q "\"--no-open\"" "$STATE/zeus-started" && grep -q "/Code/zeus\"" "$STATE/zeus-started"'
 shot 6-chat
+# A close with draft text must preserve the same WebView and PTY.
+"$BIN/act" test-draft
+sleep 0.5
 "$BIN/act" close-chat
-check "closing the chat window ends the session" 'wait_for "state: ended" 20'
+check "draft text defers tab close" 'wait_for "close deferred: .*Unsent text" 10'
+check "draft session is still running" '[ ! -f "$STATE/zeus-stopped" ]'
+shot 7-draft-close
+"$BIN/act" test-cancel-close
+check "a pending close can be cancelled" 'wait_for "close cancelled:" 10'
+"$BIN/act" test-clear
+sleep 1
+check "cancelled close keeps the tab alive" '[ ! -f "$STATE/zeus-stopped" ]'
+"$BIN/act" close-chat
+check "clearing the draft completes the pending close" 'wait_for "state: ended" 20'
 check "zeus got SIGTERM" '[ "$(cat "$STATE/zeus-stopped" 2>/dev/null)" = SIGTERM ]'
+
+# New tabs must own different PTYs; terminal input must reach only the selected PTY.
+"$BIN/act" test-cmd-t
+sleep 4
+"$BIN/act" test-cmd-t
+sleep 4
+check "each new tab starts a separate PTY" '[ "$(grep -c " start " "$STATE/sessions")" = 3 ]'
+"$BIN/act" test-cmd-j
+check "the per-tab terminal opens" 'wait_for "terminal visible: .* true" 10'
+"$BIN/act" test-terminal-input
+sleep 1
+check "xterm input reaches the live PTY" 'grep -q "input 7465726d696e616c2d746573740a" "$STATE/sessions"'
+shot 8-terminal-tabs
+"$BIN/act" test-draft
+sleep 0.3
+"$BIN/act" test-send
+sleep 0.3
+"$BIN/act" close-chat
+check "busy work defers tab close" 'wait_for "close deferred: .*Zeus is working" 10'
+shot 9-busy-close
+check "the chat turn completes before its PTY stops" 'wait_for "state: ended" 20 && sleep 4 && grep -q "reply Test chat turn" "$STATE/sessions"'
+check "closing one tab preserves the other PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 2 ]'
+"$BIN/act" close-chat
+sleep 2
+check "an idle tab closes its PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 3 ]'
+"$BIN/act" test-cmd-t
+sleep 4
+"$BIN/act" test-cmd-t
+sleep 4
 stop_app
+check "quit stops every remaining PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 5 ]'
 
 echo
 echo "Scenario 2: the account has no access to one private repo"

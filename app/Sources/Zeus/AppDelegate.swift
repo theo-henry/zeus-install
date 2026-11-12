@@ -4,9 +4,11 @@ import WebKit
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var chatWindows: [ChatWindowController] = []
     private var setupWindow: SetupWindowController?
+    private var quitting = false
     private let statusMenu = StatusMenu()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Brand.registerFonts()
         NSApp.mainMenu = makeMainMenu()
         statusMenu.app = self
         statusMenu.update()
@@ -55,8 +57,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         setupWindow?.model.stop()
         guard SessionManager.shared.sessions.contains(where: \.isAlive) else { return .terminateNow }
-        SessionManager.shared.stopAll {
-            NSApp.reply(toApplicationShouldTerminate: true)
+        guard !quitting else { return .terminateLater }
+        quitting = true
+        let windows = chatWindows
+        var remaining = windows.count
+        func finish(_ closed: Bool) {
+            guard self.quitting else { return }
+            if !closed {
+                self.quitting = false
+                self.chatWindows.forEach { $0.cancelClose() }
+                NSApp.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            remaining -= 1
+            guard remaining == 0 else { return }
+            SessionManager.shared.stopAll { NSApp.reply(toApplicationShouldTerminate: true) }
+        }
+        if windows.isEmpty {
+            SessionManager.shared.stopAll { NSApp.reply(toApplicationShouldTerminate: true) }
+        } else {
+            windows.forEach { $0.requestSafeClose(completion: finish) }
         }
         return .terminateLater
     }
@@ -133,9 +153,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Debug only, active only when ZEUS_APP_TRACE is set: another process can press the app's buttons
     /// with a distributed notification "io.github.theo-henry.zeus.test" whose object is the action name.
+    /// With ZEUS_APP_TEST_ID set, the name ends in ".<id>", so that a test drives only its own app copy.
     private func listenForTestActions() {
+        #if DEBUG
         guard ProcessInfo.processInfo.environment["ZEUS_APP_TRACE"] != nil else { return }
-        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("io.github.theo-henry.zeus.test"),
+        let testID = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_ID"].map { "." + $0 } ?? ""
+        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("io.github.theo-henry.zeus.test" + testID),
                                                             object: nil, queue: .main) { [weak self] note in
             guard let self, let action = note.object as? String else { return }
             Trace.log("test action: \(action)")
@@ -150,14 +173,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case "setup-answer-yes": model?.answerQuestion(true)
             case "setup-enter": model?.send("")
             case "setup-show": self.showSetup(nil)
+            case "test-cmd-t", "test-cmd-j":
+                let key = action == "test-cmd-t" ? "t" : "j"
+                if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                    timestamp: 0, windowNumber: NSApp.keyWindow?.windowNumber ?? 0, context: nil,
+                    characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: key == "t" ? 17 : 38) {
+                    _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
+                }
+            case "test-cancel-close": self.chatWindows.last?.cancelClose()
             case "new-chat": self.newChat(nil)
             case "close-chat": self.chatWindows.last?.window?.performClose(nil)
+            case "toggle-terminal": self.chatWindows.last?.toggleTerminal()
+            case "test-draft": self.chatWindows.last?.webView.evaluateJavaScript("document.querySelector('textarea').value = 'Test chat turn'; document.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}))")
+            case "test-clear": self.chatWindows.last?.webView.evaluateJavaScript("document.querySelector('textarea').value = ''; document.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}))")
+            case "test-send": self.chatWindows.last?.webView.evaluateJavaScript("document.querySelector('#send,.send-button').click()")
+            case "test-real-turn":
+                self.chatWindows.last?.webView.evaluateJavaScript("const input=document.querySelector('textarea'); input.value='Reply with APP_OK. Do not use tools or change files.'; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.send-button').click()")
+            case "test-inspect":
+                self.chatWindows.last?.webView.evaluateJavaScript("document.body.innerText.slice(-1800)") { result, error in
+                    Trace.log("test page: \(result ?? error?.localizedDescription ?? "empty")")
+                }
+            case "test-terminal-input": self.chatWindows.last?.testTerminalInput()
             case "toggle-menubar": self.toggleMenuBar(nil)
             // Not from inside this main-queue block: quitting waits for callbacks on the main queue.
             case "quit": NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
             default: break
             }
         }
+        #endif
     }
 
     // MARK: Menu actions
@@ -177,7 +220,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private var keyWebView: WKWebView? {
-        NSApp.keyWindow?.contentView as? WKWebView
+        (NSApp.keyWindow?.windowController as? ChatWindowController)?.webView ?? (NSApp.keyWindow?.contentView as? WKWebView)
+    }
+
+    @objc private func toggleTerminal(_ sender: Any?) {
+        (NSApp.keyWindow?.windowController as? ChatWindowController)?.toggleTerminal(sender)
     }
 
     @objc private func reloadPage(_ sender: Any?) {
@@ -227,6 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         main.addItem(submenu: app)
 
         let file = NSMenu(title: "File")
+        file.addItem(withTitle: "New Tab", action: #selector(newChat(_:)), keyEquivalent: "t")
         file.addItem(withTitle: "New Chat", action: #selector(newChat(_:)), keyEquivalent: "n")
         file.addItem(.separator())
         file.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -244,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         main.addItem(submenu: edit)
 
         let view = NSMenu(title: "View")
+        view.addItem(withTitle: "Show or Hide Terminal", action: #selector(toggleTerminal(_:)), keyEquivalent: "j")
         view.addItem(withTitle: "Reload Page", action: #selector(reloadPage(_:)), keyEquivalent: "r")
         view.addItem(.separator())
         view.addItem(withTitle: "Actual Size", action: #selector(actualSize(_:)), keyEquivalent: "0")

@@ -7,7 +7,14 @@ import Foundation
 final class PTYProcess {
     let pid: pid_t
     private let master: Int32
+    private let ioQueue: DispatchQueue
+    // Input waits here while the terminal's input queue is full. Only touched on ioQueue.
+    private var pendingInput = Data()
+    private var pendingOffset = 0
+    private var writeSuspended = true
+    private var ioClosed = false
     private let readSource: DispatchSourceRead
+    private let writeSource: DispatchSourceWrite
     private let exitSource: DispatchSourceProcess
     private(set) var exitStatus: Int32?
 
@@ -42,7 +49,9 @@ final class PTYProcess {
         master = fd
 
         let queue = DispatchQueue(label: "zeus.pty.\(child)")
+        ioQueue = queue
         readSource = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        writeSource = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: queue)
         exitSource = DispatchSource.makeProcessSource(identifier: child, eventMask: .exit, queue: queue)
 
         readSource.setEventHandler { [weak self] in
@@ -57,7 +66,20 @@ final class PTYProcess {
                 self.readSource.cancel()
             }
         }
-        readSource.setCancelHandler { [fd] in close(fd) }
+        writeSource.setEventHandler { [weak self] in self?.flushInput() }
+        writeSource.setCancelHandler { [fd] in close(fd) }
+        readSource.setCancelHandler { [weak self] in
+            guard let self else { return }
+            self.ioClosed = true
+            self.pendingInput = Data()
+            self.pendingOffset = 0
+            // The write source closes the file descriptor when it ends.
+            self.writeSource.cancel()
+            if self.writeSuspended {
+                self.writeSuspended = false
+                self.writeSource.resume()
+            }
+        }
 
         exitSource.setEventHandler { [weak self] in
             guard let self else { return }
@@ -81,18 +103,50 @@ final class PTYProcess {
 
     func write(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
-        data.withUnsafeBytes { raw in
-            var offset = 0
-            while offset < raw.count {
-                let written = Darwin.write(master, raw.baseAddress! + offset, raw.count - offset)
-                if written <= 0 { break }
-                offset += written
-            }
+        ioQueue.async { [weak self] in
+            guard let self, !self.ioClosed else { return }
+            self.pendingInput.append(data)
+            if self.writeSuspended { self.flushInput() }
         }
     }
 
+    /// Writes waiting input without blocking the UI or the PTY reader. When the terminal's input
+    /// queue is full, the write source calls this again as soon as the queue has room.
+    private func flushInput() {
+        guard !ioClosed else { return }
+        while pendingOffset < pendingInput.count {
+            let written = pendingInput.withUnsafeBytes { raw in
+                Darwin.write(master, raw.baseAddress! + pendingOffset, raw.count - pendingOffset)
+            }
+            if written > 0 { pendingOffset += written; continue }
+            if written < 0, errno == EINTR { continue }
+            if written < 0, errno == EAGAIN {
+                if writeSuspended {
+                    writeSuspended = false
+                    writeSource.resume()
+                }
+                return
+            }
+            break // The terminal is gone; the read source ends the session.
+        }
+        pendingInput = Data()
+        pendingOffset = 0
+        if !writeSuspended {
+            writeSuspended = true
+            writeSource.suspend()
+        }
+    }
+
+    deinit {
+        // A suspended dispatch source must not be released.
+        if writeSuspended { writeSource.resume() }
+    }
+
     func resize(rows: UInt16, cols: UInt16) {
-        _ = zeus_pty_resize(master, rows, cols)
+        ioQueue.async { [weak self] in
+            guard let self, !self.ioClosed else { return }
+            _ = zeus_pty_resize(self.master, rows, cols)
+        }
     }
 
     /// Asks the process to stop (SIGTERM), then forces it (SIGKILL) after `grace` seconds.

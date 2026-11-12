@@ -20,7 +20,11 @@ final class ZeusSession {
     private(set) var state: State = .starting {
         didSet {
             guard state != oldValue else { return }
-            Trace.log("session \(pid) state: \(state)")
+            let summary: String
+            if case let .running(url) = state {
+                summary = "running(\(url.absoluteString.components(separatedBy: "#").first ?? ""))"
+            } else { summary = "\(state)" }
+            Trace.log("session \(pid) state: \(summary)")
             managerHook?(state)
             onStateChange?(state)
         }
@@ -31,6 +35,10 @@ final class ZeusSession {
     /// For SessionManager.
     var managerHook: ((State) -> Void)?
     var onLog: (() -> Void)?
+    var onOutput: ((Data) -> Void)?
+    #if DEBUG
+    private var capture: PTYCapture?
+    #endif
 
     var chatURL: URL? {
         if case let .running(url) = state { return url }
@@ -63,7 +71,16 @@ final class ZeusSession {
                                      environment: env, directory: Paths.zeusDir)
         self.process = process
         pid = process.pid
-        process.onOutput = { [weak self] data in self?.log.append(data) }
+        #if DEBUG
+        capture = PTYCapture(pid: process.pid)
+        #endif
+        process.onOutput = { [weak self] data in
+            #if DEBUG
+            self?.capture?.record(">", data)
+            #endif
+            self?.log.append(data)
+            self?.onOutput?(data)
+        }
         process.onExit = { [weak self] code in self?.processEnded(code: code) }
         log.onChange = { [weak self] in self?.scanForChatURL(); self?.onLog?() }
     }
@@ -89,6 +106,15 @@ final class ZeusSession {
         }
         state = .failed("Zeus stopped (exit code \(code)) before the chat page opened.")
     }
+
+    func write(_ text: String) {
+        #if DEBUG
+        capture?.record("<", Data(text.utf8))
+        #endif
+        process.write(text)
+    }
+
+    func resize(rows: UInt16, cols: UInt16) { process.resize(rows: rows, cols: cols) }
 
     /// Ends the session the way Ctrl+C in Terminal would end `zeus`: it stops Claude Code and cleans up.
     func stop() {
@@ -141,3 +167,33 @@ final class SessionManager {
         check()
     }
 }
+
+#if DEBUG
+/// Debug only, active only when ZEUS_APP_PTY_CAPTURE names a folder: records every byte that the
+/// session's PTY sends (">") and receives ("<"), with times, in <folder>/pty-<pid>.log.
+private final class PTYCapture {
+    private let file: FileHandle
+    private let start = Date()
+
+    init?(pid: pid_t) {
+        guard let dir = ProcessInfo.processInfo.environment["ZEUS_APP_PTY_CAPTURE"], !dir.isEmpty else { return nil }
+        let path = dir + "/pty-\(pid).log"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: path, contents: nil)
+        guard let file = FileHandle(forWritingAtPath: path) else { return nil }
+        self.file = file
+    }
+
+    func record(_ direction: String, _ data: Data) {
+        let escaped = data.map { byte -> String in
+            switch byte {
+            case 0x20 ..< 0x7F where byte != 0x5C: return String(UnicodeScalar(byte))
+            case 0x0A: return "\\n\n"
+            default: return String(format: "\\x%02x", byte)
+            }
+        }.joined()
+        let line = String(format: "%.3f %@ ", Date().timeIntervalSince(start), direction) + escaped + "\n"
+        file.write(Data(line.utf8))
+    }
+}
+#endif

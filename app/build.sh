@@ -26,6 +26,10 @@ done
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 lipo -create "${binaries[@]}" -output "$BUNDLE/Contents/MacOS/Zeus"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist >"$BUNDLE/Contents/Info.plist"
+cp -R Resources/Terminal "$BUNDLE/Contents/Resources/"
+cp Resources/*.ttf "$BUNDLE/Contents/Resources/"
+cp Resources/*.woff "$BUNDLE/Contents/Resources/"
+cp Resources/zeus-logo.svg "$BUNDLE/Contents/Resources/"
 cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
 # The app runs this copy of the installer, so the app and its installer always match.
 cp "$REPO_DIR/install.sh" "$BUNDLE/Contents/Resources/install.sh"

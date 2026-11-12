@@ -35,6 +35,8 @@ pid_t zeus_pty_spawn(const char *path, char *const argv[], char *const envp[], c
     }
     int flags = fcntl(master, F_GETFD);
     if (flags >= 0) fcntl(master, F_SETFD, flags | FD_CLOEXEC);
+    int io_flags = fcntl(master, F_GETFL);
+    if (io_flags >= 0) fcntl(master, F_SETFL, io_flags | O_NONBLOCK);
     *master_fd = master;
     return pid;
 }

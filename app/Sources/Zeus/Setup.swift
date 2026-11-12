@@ -214,15 +214,20 @@ struct SetupView: View {
             }
             footer
         }
-        .padding(20)
+        .padding(24)
+        .font(.custom("ObjectSans-Regular", size: 13))
+        .background(Brand.background)
+        .foregroundStyle(Brand.foreground)
+        .tint(Brand.accent)
+        .preferredColorScheme(.dark)
         .frame(minWidth: 860, minHeight: 640)
     }
 
     private var header: some View {
         HStack(spacing: 14) {
-            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 52, height: 52)
+            ZeusMark().frame(width: 52, height: 52).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Set up Zeus").font(.title2.weight(.semibold))
+                Text("Set up Zeus").font(.custom("PPObjectSans-Semibold", size: 22))
                 Text(subtitle).foregroundStyle(.secondary)
             }
         }
@@ -262,7 +267,7 @@ struct SetupView: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Brand.surface))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12)))
     }
 
@@ -356,7 +361,7 @@ struct SetupView: View {
                         .padding(10)
                     Color.clear.frame(height: 1).id("end")
                 }
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+                .background(RoundedRectangle(cornerRadius: 8).fill(Brand.surface))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.12)))
                 .onChange(of: model.logText) { _ in proxy.scrollTo("end", anchor: .bottom) }
             }
@@ -417,7 +422,10 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 680),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
+        window.titlebarAppearsTransparent = true
         window.title = "Zeus Setup"
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = NSColor(srgbRed: 11/255, green: 37/255, blue: 69/255, alpha: 1)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
