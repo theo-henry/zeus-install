@@ -20,7 +20,8 @@ archs=(arm64 x86_64)
 binaries=()
 for arch in "${archs[@]}"; do
   swift build -c release --arch "$arch" --scratch-path "$OUT/.build-$arch" >&2
-  binaries+=("$OUT/.build-$arch/$arch-apple-macosx/release/Zeus")
+  # Ask SwiftPM for the product folder: its layout differs between Swift versions.
+  binaries+=("$(swift build -c release --arch "$arch" --scratch-path "$OUT/.build-$arch" --show-bin-path)/Zeus")
 done
 
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
