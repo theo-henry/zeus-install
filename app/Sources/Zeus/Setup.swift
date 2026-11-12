@@ -225,7 +225,9 @@ struct SetupView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            ZeusMark().frame(width: 52, height: 52).accessibilityHidden(true)
+            if let logo = Brand.logoImage {
+                Image(nsImage: logo).resizable().frame(width: 52, height: 52).accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Set up Zeus").font(.custom("PPObjectSans-Semibold", size: 22))
                 Text(subtitle).foregroundStyle(.secondary)

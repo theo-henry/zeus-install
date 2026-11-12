@@ -13,6 +13,8 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
     var isPopup = false
     /// Called when a page has loaded.
     var onPageLoaded: ((WKWebView) -> Void)?
+    /// Called when a page cannot load or stops loading.
+    var onPageFailed: (() -> Void)?
 
     static func isLocal(_ url: URL?) -> Bool {
         guard let url else { return false }
@@ -111,10 +113,12 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Trace.log("page failed: \(error.localizedDescription)")
+        onPageFailed?()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         Trace.log("page failed to load: \(error.localizedDescription)")
+        onPageFailed?()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {

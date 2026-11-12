@@ -49,6 +49,7 @@ main() {
     fail "The Zeus app in the download is damaged or changed (signature check failed)."
 
   # Quit a running copy, so that it can be replaced. Its sessions stop as when you quit it yourself.
+  # A tab with unsent text or work in progress makes the app ask first; the app is never replaced while it runs.
   if pgrep -f "$target/Zeus.app/Contents/MacOS/Zeus" >/dev/null 2>&1; then
     osascript -e 'tell application id "io.github.theo-henry.zeus" to quit' >/dev/null 2>&1 || true
     local waited=0
@@ -56,6 +57,9 @@ main() {
       sleep 1
       waited=$((waited + 1))
     done
+    if pgrep -f "$target/Zeus.app/Contents/MacOS/Zeus" >/dev/null 2>&1; then
+      fail "The Zeus app is still open." "Quit the Zeus app, then run the same line again."
+    fi
   fi
   rm -rf "$target/Zeus.app"
   ditto "$work/unpacked/Zeus.app" "$target/Zeus.app"

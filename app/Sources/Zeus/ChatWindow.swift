@@ -17,11 +17,13 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     private let closeBanner = NSStackView()
     private let closeLabel = NSTextField(labelWithString: "")
     private let closeSpinner = NSProgressIndicator()
+    private let closeAnywayButton = NSButton()
+    private let cancelCloseButton = NSButton()
     private var closeReason: String?
+    private var closeRequestedAt = Date()
     private var closePending = false
     private var closeApproved = false
     private var closeGeneration = 0
-    private var onSafeClose: ((Bool) -> Void)?
 
     var onRunSetup: (() -> Void)?
     var onRetry: (() -> Void)?
@@ -73,6 +75,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
             WebViewHandler.matchTitleBar(of: window, to: webView)
             self?.playArrival()
         }
+        handler.onPageFailed = { [weak self] in self?.removeArrivalCover() }
         titleObservation = webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
             guard let self, self.shownURL != nil else { return }
             let title = webView.title ?? ""
@@ -209,15 +212,17 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         return false
     }
 
-    /// The chat is the authority for work, draft text, attachments, and pending sends.
-    /// Missing or failed checks retain both the page and PTY and retry until cancelled.
-    func requestSafeClose(completion: ((Bool) -> Void)? = nil) {
-        if let completion { onSafeClose = completion }
+    /// The chat is the authority for work, draft text, attachments, and pending sends. The tab stays
+    /// open while the chat says it is not safe to close, until the user cancels or closes it anyway.
+    func requestSafeClose() {
         guard !closePending else { return }
         closePending = true
         closeGeneration += 1
         closeReason = nil
+        closeRequestedAt = Date()
         closeLabel.stringValue = "Checking the chat before the tab closes…"
+        closeAnywayButton.isHidden = true
+        setCancelTitle("Cancel close")
         closeBanner.isHidden = false
         closeSpinner.startAnimation(nil)
         checkClose(generation: closeGeneration)
@@ -228,26 +233,49 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         closePending = false
         closeBanner.isHidden = true
         closeSpinner.stopAnimation(nil)
-        let callback = onSafeClose
-        onSafeClose = nil
-        callback?(false)
         Trace.log("close cancelled: \(session.pid)")
     }
 
+    @objc func closeAnyway() {
+        Trace.log("close anyway: \(session.pid) \(closeReason ?? "-")")
+        finishClose()
+    }
+
+    /// Asks the chat once if the tab can close. Calls back with nil when it is safe, else with the reason.
+    /// A chat that cannot answer within `closeCheckLimit` seconds (no window.zeusApp, an error, no reply) is "unavailable".
+    func closeState(completion: @escaping (String?) -> Void) {
+        guard session.isAlive, shownURL != nil else { completion(nil); return }
+        var answered = false
+        let answer = { (reason: String?) in
+            guard !answered else { return }
+            answered = true
+            completion(reason)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeCheckLimit) { answer("unavailable") }
+        webView.callAsyncJavaScript("return await window.zeusApp?.closeState()", arguments: [:],
+                                   in: nil, in: .page) { result in
+            guard case let .success(value) = result, let state = value as? [String: Any] else {
+                answer("unavailable")
+                return
+            }
+            answer(state["safe_to_close"] as? Bool == true ? nil : state["reason"] as? String ?? "unavailable")
+        }
+    }
+
+    /// How long the app waits for a chat that cannot answer before it offers to close anyway.
+    static let closeCheckLimit: TimeInterval = 3
+
     private func checkClose(generation: Int) {
         guard closePending, generation == closeGeneration else { return }
-        guard session.isAlive, shownURL != nil else { finishClose(); return }
-        webView.callAsyncJavaScript("return await window.zeusApp?.closeState()", arguments: [:],
-                                   in: nil, in: .page) { [weak self] result in
+        closeState { [weak self] reason in
             guard let self, self.closePending, generation == self.closeGeneration else { return }
-            var reason = "unavailable"
-            if case let .success(value) = result, let state = value as? [String: Any] {
-                if state["safe_to_close"] as? Bool == true { self.finishClose(); return }
-                reason = state["reason"] as? String ?? reason
-            }
-            if reason != self.closeReason {
+            guard let reason else { self.finishClose(); return }
+            let waiting = reason == "unavailable" && Date().timeIntervalSince(self.closeRequestedAt) < Self.closeCheckLimit
+            if !waiting, reason != self.closeReason {
                 self.closeReason = reason
                 self.closeLabel.stringValue = Self.closeMessage(for: reason)
+                self.setCancelTitle(reason == "unavailable" ? "Cancel" : "Cancel close")
+                self.closeAnywayButton.isHidden = false
                 Trace.log("close deferred: \(self.session.pid) \(reason)")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -264,8 +292,30 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         case "busy": return "Zeus is working. The tab closes when Zeus finishes."
         case "starting": return "Zeus is starting. The tab closes when it is ready."
         case "terminal-draft": return "The terminal has unsent text. Clear it (Cmd+J), and the tab closes."
-        default: return "Zeus cannot check this chat now, so the tab stays open."
+        default: return "Zeus cannot check if this chat is safe to close. Close anyway?"
         }
+    }
+
+    /// The same reasons, for the quit question that lists the tabs.
+    static func closeSummary(for reason: String) -> String {
+        switch reason {
+        case "composer-draft": return "the message box has unsent text or files"
+        case "pending-message": return "a message is still on its way to Zeus"
+        case "busy": return "Zeus is working"
+        case "starting": return "Zeus is starting"
+        case "terminal-draft": return "the terminal has unsent text"
+        default: return "Zeus cannot check if it is safe to close"
+        }
+    }
+
+    private func setCancelTitle(_ title: String) {
+        cancelCloseButton.attributedTitle = Self.bannerTitle(title)
+    }
+
+    private static func bannerTitle(_ title: String) -> NSAttributedString {
+        NSAttributedString(string: title, attributes: [
+            .foregroundColor: Brand.nsLink, .font: NSFont(name: "PPObjectSans-Semibold", size: 13) ?? .boldSystemFont(ofSize: 13),
+        ])
     }
 
     private func makeCloseBanner() {
@@ -282,14 +332,18 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         closeLabel.textColor = Brand.nsForeground
         closeLabel.lineBreakMode = .byTruncatingTail
         closeLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let cancel = NSButton(title: "", target: self, action: #selector(cancelClose))
-        cancel.isBordered = false
-        cancel.attributedTitle = NSAttributedString(string: "Cancel close", attributes: [
-            .foregroundColor: Brand.nsLink, .font: NSFont(name: "PPObjectSans-Semibold", size: 13) ?? .boldSystemFont(ofSize: 13),
-        ])
+        for (button, title, action) in [(closeAnywayButton, "Close anyway", #selector(closeAnyway)),
+                                        (cancelCloseButton, "Cancel close", #selector(cancelClose))] {
+            button.isBordered = false
+            button.target = self
+            button.action = action
+            button.attributedTitle = Self.bannerTitle(title)
+        }
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        for view in [closeSpinner, closeLabel, spacer, cancel] { closeBanner.addArrangedSubview(view) }
+        for view in [closeSpinner, closeLabel, spacer, closeAnywayButton, cancelCloseButton] {
+            closeBanner.addArrangedSubview(view)
+        }
         let line = NSBox()
         line.boxType = .custom
         line.borderWidth = 0
@@ -319,9 +373,6 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         session.onLog = nil
         if !session.isAlive { SessionManager.shared.remove(session) }
         onClosed?(self)
-        let callback = onSafeClose
-        onSafeClose = nil
-        callback?(true)
     }
 }
 

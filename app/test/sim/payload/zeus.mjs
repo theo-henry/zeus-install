@@ -24,12 +24,14 @@ document.getElementById('send').onclick=async()=>{
  document.getElementById('reply').textContent=await(await fetch('/turn',{method:'POST',body:text})).text();pending=false;
 };
 </script></body></html>`;
+// With <state>/no-close-state at start, this session acts like an editor plugin older than the app: no window.zeusApp.
+const html = fs.existsSync(`${state}/no-close-state`) ? page.replace('window.zeusApp=', 'window.oldPlugin=') : page;
 const server = http.createServer((req, res) => {
  if(req.url === '/close-state') {res.end(JSON.stringify({safe_to_close:!busy,reason:busy?'busy':'idle'}));return;}
  if(req.url === '/turn') {
   busy=true;record('busy');let text='';req.on('data',chunk=>text+=chunk);req.on('end',()=>setTimeout(()=>{busy=false;record('reply',text);res.end('Reply: '+text);},3000));return;
  }
- res.writeHead(200,{'content-type':'text/html;charset=utf-8'});res.end(page);
+ res.writeHead(200,{'content-type':'text/html;charset=utf-8'});res.end(html);
 });
 // Delay only the fixture to permit startup screenshots. The app adds no wait.
 setTimeout(()=>server.listen(0,'127.0.0.1',()=>{

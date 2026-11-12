@@ -84,17 +84,49 @@ wait_for() {
   done
 }
 
+# wait_count <trace pattern> <count> [seconds]
+wait_count() {
+  local pattern="$1" count="$2" limit="${3:-60}" waited=0
+  until [ "$(grep -c -- "$pattern" "$TRACE" 2>/dev/null || true)" -ge "$count" ]; do
+    sleep 0.5
+    waited=$((waited + 1))
+    if [ "$waited" -ge $((limit * 2)) ]; then
+      echo "    (timed out waiting for $count x: $pattern)"
+      return 1
+    fi
+  done
+}
+
+stops() { grep -c " stop " "$STATE/sessions" 2>/dev/null || true; }
+
+# wait_starts <count>: waits until that many simulated zeus sessions have started.
+wait_starts() {
+  local waited=0
+  until [ "$(grep -c " start " "$STATE/sessions" 2>/dev/null || true)" -ge "$1" ]; do
+    sleep 0.5
+    waited=$((waited + 1))
+    [ "$waited" -lt 40 ] || return 1
+  done
+}
+
 # start_app <name> [extra env...]
 start_app() {
   local name="$1"
-  shift
   SANDBOX="$WORK/$name/home"
   STATE="$WORK/$name/state"
-  TRACE="$WORK/$name/trace.log"
   mkdir -p "$SANDBOX" "$STATE"
   # A new Mac: no tools in the home folder, and the simulated tools before the system ones.
   printf 'export PATH="%s:/usr/bin:/bin:/usr/sbin:/sbin"\n' "$SIM_DIR/stubs" >"$SANDBOX/.zprofile"
   defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
+  launch_app "$@"
+}
+
+# launch_app <name> [extra env...]: starts the app again in the current simulated home folder.
+launch_app() {
+  local name="$1"
+  shift
+  TRACE="$WORK/$name/trace.log"
+  mkdir -p "$WORK/$name"
   env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" \
     ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_REAL_NODE="$REAL_NODE" \
     ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" "$@" \
@@ -198,15 +230,69 @@ check "closing one tab preserves the other PTY" '[ "$(grep -c " stop " "$STATE/s
 "$BIN/act" close-chat
 sleep 2
 check "an idle tab closes its PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 3 ]'
+
+# A chat that cannot answer the close check (an editor plugin older than the app) must not block the close forever.
+touch "$STATE/no-close-state"
+"$BIN/act" test-cmd-t
+check "a tab with an older editor plugin starts" 'wait_starts 4'
+rm -f "$STATE/no-close-state"
+check "its chat page opens" 'wait_count "state: running(" 4 20 && sleep 2'
+"$BIN/act" close-chat
+sleep 1.5
+check "an unanswered close check first waits and keeps the PTY" '! grep -q "close deferred: .* unavailable" "$TRACE" && [ "$(stops)" = 3 ]'
+check "an unanswered close check then offers Close anyway" 'wait_for "close deferred: .* unavailable" 10'
+shot 10-unavailable-close
+sleep 1
+check "the tab stays open until the user decides" '[ "$(stops)" = 3 ]'
+"$BIN/act" test-close-anyway
+check "Close anyway closes the tab that cannot answer" 'wait_count "state: ended" 4 10 && [ "$(stops)" = 4 ]'
+
+# Close anyway must also override a busy chat.
+"$BIN/act" test-cmd-t
+check "a new tab opens after Close anyway" 'wait_count "state: running(" 5 20 && sleep 2'
+"$BIN/act" test-draft
+sleep 0.3
+"$BIN/act" test-send
+sleep 0.3
+"$BIN/act" close-chat
+check "busy work defers the close of the new tab" 'wait_count "close deferred: .* busy" 2 10'
+shot 11-busy-close-anyway
+"$BIN/act" test-close-anyway
+check "Close anyway stops a busy tab before its turn ends" 'wait_count "state: ended" 5 10 && [ "$(stops)" = 5 ] && [ "$(grep -c " reply " "$STATE/sessions")" = 1 ]'
+
 "$BIN/act" test-cmd-t
 sleep 4
 "$BIN/act" test-cmd-t
 sleep 4
 stop_app
-check "quit stops every remaining PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 5 ]'
+check "quit stops every remaining PTY" '[ "$(stops)" = 7 ]'
 
 echo
-echo "Scenario 2: the account has no access to one private repo"
+echo "Scenario 2: macOS logs out while one tab has a draft and one tab is busy"
+defaults write "$BUNDLE_ID" setupDone -bool true
+launch_app logout
+check "the app opens a chat at once after the setup" 'wait_for "page loaded: http://127.0.0.1" 30'
+"$BIN/act" test-draft
+"$BIN/act" test-cmd-t
+check "a second tab opens" 'wait_count "state: running(" 2 20 && sleep 2'
+"$BIN/act" test-draft
+sleep 0.3
+"$BIN/act" test-send
+sleep 0.5
+logout_start=$(date +%s)
+"$BIN/act" test-logout-quit
+waited=0
+while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 30 ]; do sleep 0.5; waited=$((waited + 1)); done
+logout_time=$(($(date +%s) - logout_start))
+kill -0 "$APP_PID" 2>/dev/null && kill "$APP_PID"
+APP_PID=""
+if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-logout.log"; fi
+check "a logout quit ends within 12 s (took $logout_time s)" '[ "$logout_time" -le 12 ]'
+check "a logout quit asks nothing" 'grep -q "quit started by macOS" "$TRACE" && ! grep -q "quit deferred" "$TRACE"'
+check "a logout quit stops every PTY" '[ "$(stops)" = 9 ]'
+
+echo
+echo "Scenario 3: the account has no access to one private repo"
 start_app noaccess ZEUS_SIM_NO_ACCESS=theo-henry/celonis-pql
 check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 "$BIN/act" setup-install

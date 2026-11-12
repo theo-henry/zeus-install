@@ -15,10 +15,13 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   Cmd+J shows or hides the live terminal of the tab, for login prompts, slash commands, or debugging.
 - **Safe close.** Closing a tab asks the chat (`window.zeusApp.closeState()`) first.
   While Zeus works, or while the chat has unsent text, attachments, or a pending send, the tab stays open with a banner, and closes when the chat is safe.
-  **Cancel close** keeps the tab.
+  **Close anyway** closes the tab at once; **Cancel close** keeps the tab.
+  When the chat cannot answer (for example an older Zeus Editor plugin), the app waits 3 s, then asks: **Close anyway** or **Cancel**.
   Then the app sends SIGTERM to its `zeus`; the chat stays in the history.
   In the app, the app owns closing: `zeus` runs with `ZEUS_APP=1`, so the editor does not close terminals when the page closes.
-- **No hidden sessions.** Quitting the app closes every tab with the same checks and stops every session.
+- **No hidden sessions.** Quitting the app stops every session.
+  When tabs are not safe to close, one question lists them all: **Quit Anyway** or **Cancel**.
+  When macOS logs out, restarts, or shuts down, the app asks nothing; without a question, the quit ends within 12 s.
   If the app crashes, its hidden terminal closes and `zeus` stops as after a closed Terminal window.
 - **Theme.** The setup window, the startup page, and the status pages use the Zeus chat theme and logo.
   At startup the logo glows over a thin progress line while `zeus` checks for updates.
@@ -75,8 +78,10 @@ It presses the app's buttons through the debug test actions and checks the trace
    one-time code, and the Claude login answered in the app; Start Zeus opens the chat page from `~/Code/zeus`
    with `--no-open`; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
    Cmd+T tabs start separate sessions; Cmd+J shows the terminal and its input reaches that session;
-   a close while Zeus works waits for the turn; closing one tab keeps the others; quitting stops every session.
-2. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
+   a close while Zeus works waits for the turn; closing one tab keeps the others; a chat that cannot answer the close check
+   (older editor plugin) waits 3 s, then **Close anyway** closes it; **Close anyway** also stops a busy tab; quitting stops every session.
+2. macOS logs out while one tab has unsent text and one tab is busy: the app asks nothing, stops every session, and quits within 12 s.
+3. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
 permission for the terminal only for the screenshots.
