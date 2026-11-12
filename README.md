@@ -28,7 +28,10 @@ curl -fsSL https://raw.githubusercontent.com/theo-henry/zeus-install/main/instal
 
 After that, click Zeus in the Dock. You do not need Terminal.
 The Zeus app runs the `zeus` command in a hidden terminal and shows the Zeus chat and the Zeus Editor in its own window.
-Closing a chat window, or quitting the app, stops that Zeus session, so no Claude Code session stays open in the background.
+Each tab has its own Zeus session.
+Closing a tab, or quitting the app, stops that Zeus session, so no Claude Code session stays open in the background.
+While Zeus works, or while the chat has unsent text, the tab waits before it closes; the chat stays in the history.
+Running `zeus` in Terminal still works next to the app.
 
 Use the install line in Terminal, not a browser download of `Zeus.zip`.
 The app has no Apple Developer ID signature.
@@ -40,7 +43,8 @@ A download with `curl` has no such mark, so the app opens without that step.
 
 | Feature | Where |
 | --- | --- |
-| New chat (as a tab of the open chat window) | File > New Chat (Cmd + N) |
+| New tab with a new Zeus session | File > New Tab (Cmd + T) or File > New Chat (Cmd + N) |
+| Show or hide the live terminal of the tab | View > Show or Hide Terminal (Cmd + J) |
 | Setup window again, for example after a failed step | Zeus > Zeus Setup… |
 | Menu bar icon with the running sessions, and Open and Stop for each | Zeus > Show in Menu Bar |
 | Keep Zeus in the Dock | Zeus > Keep in Dock, or the option in the setup window |
