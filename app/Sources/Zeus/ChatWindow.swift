@@ -185,7 +185,13 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
 
     private func handle(_ message: String) {
         switch message {
-        case "chat-ready": handOver()
+        case "chat-ready":
+            // After a reload of the page there is no loading screen: the page comes in at once.
+            if loader == nil {
+                webView.evaluateJavaScript("window.zeusGlobe && (window.zeusGlobe.enter(), window.zeusGlobe.reveal())")
+            } else {
+                handOver()
+            }
         case "retry": onRetry?()
         case "setup": onRunSetup?()
         case "copy-log":
