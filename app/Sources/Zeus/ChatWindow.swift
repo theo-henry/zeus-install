@@ -1,17 +1,17 @@
 import AppKit
 import WebKit
 
-/// The window of one Zeus session. It shows a start page while `zeus` starts, then the chat page.
-/// Closing the window ends the session.
+/// The window of one Zeus session. It shows the loading screen (the Zeus globe) while `zeus` starts,
+/// then hands over to the chat page. Closing the window ends the session.
 final class ChatWindowController: NSWindowController, NSWindowDelegate {
     let session: ZeusSession
     private let handler = WebViewHandler()
     private(set) var webView: WKWebView!
     private var titleObservation: NSKeyValueObservation?
-    private var logUpdateScheduled = false
     private var shownURL: URL?
-    /// The startup page as a still image and the place of its logo, kept while the chat page loads.
-    private var arrival: (cover: NSImageView, logo: [Double])?
+    /// The loading screen, above the chat page until the hand-over.
+    private var loader: LoaderOverlay?
+    private var handingOver = false
 
     private var terminal: TerminalPanel!
     private let closeBanner = NSStackView()
@@ -42,7 +42,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         window.tabbingMode = .preferred
         window.tabbingIdentifier = "ZeusChat"
         window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = NSColor(srgbRed: 11/255, green: 37/255, blue: 69/255, alpha: 1)
+        window.backgroundColor = LoaderPage.background
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
@@ -73,9 +73,12 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         handler.onScriptMessage = { [weak self] message in self?.handle(message) }
         handler.onPageLoaded = { [weak self, weak window] webView in
             WebViewHandler.matchTitleBar(of: window, to: webView)
-            self?.playArrival()
+            // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.
+            guard let self, self.shownURL != nil, webView.url == self.shownURL else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.handOver() }
         }
-        handler.onPageFailed = { [weak self] in self?.removeArrivalCover() }
+        // A chat page that does not load must not stay behind the loading screen.
+        handler.onPageFailed = { [weak self] in self?.handOver() }
         titleObservation = webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
             guard let self, self.shownURL != nil else { return }
             let title = webView.title ?? ""
@@ -83,7 +86,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         }
 
         session.onStateChange = { [weak self] _ in self?.render() }
-        session.onLog = { [weak self] in self?.scheduleLogUpdate() }
+        session.onLog = { [weak self] in self?.updateLoaderStatus() }
         render()
     }
 
@@ -94,95 +97,95 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         switch session.state {
         case .starting:
             shownURL = nil
-            webView.loadHTMLString(StatusPage.starting(log: session.log.text), baseURL: nil)
+            showLoader()
         case let .running(url):
             guard shownURL != url else { return }
-            let fromStartPage = shownURL == nil
             shownURL = url
-            if fromStartPage { loadChatAfterStartPage(url) } else { webView.load(URLRequest(url: url)) }
+            loader?.setStatus("Opening the chat…")
+            webView.load(URLRequest(url: url))   // Behind the loading screen, until the hand-over.
         case let .failed(message):
-            removeArrivalCover()
             shownURL = nil
             window?.title = "Zeus"
             webView.loadHTMLString(StatusPage.failed(message: message, log: session.log.text), baseURL: nil)
+            loader?.remove(over: 0.25)
+            loader = nil
         case .ended:
             // Claude Code ended (for example /exit in the chat). The window has nothing left to show.
             window?.close()
         }
     }
 
-    /// Keeps the startup page on screen as a still image while the chat page loads, so that the
-    /// logo can break into particles over the loaded chat instead of the page flashing.
-    private func loadChatAfterStartPage(_ url: URL) {
-        let request = URLRequest(url: url)
-        let measure = "(() => { const r = document.querySelector('.mark')?.getBoundingClientRect(); return r ? [r.left, r.top, r.width] : null })()"
-        webView.evaluateJavaScript(measure) { [weak self] result, _ in
-            guard let self, self.shownURL == url else { return }
-            guard let logo = result as? [Double], logo.count == 3 else {
-                Trace.log("arrival skipped: no startup logo")
-                self.webView.load(request)
-                return
-            }
-            self.webView.takeSnapshot(with: nil) { [weak self] image, _ in
-                guard let self, self.shownURL == url else { return }
-                if let image {
-                    self.removeArrivalCover()
-                    let cover = NSImageView(image: image)
-                    cover.imageScaling = .scaleAxesIndependently
-                    cover.frame = self.webView.bounds
-                    cover.autoresizingMask = [.width, .height]
-                    cover.wantsLayer = true
-                    self.webView.addSubview(cover)
-                    self.arrival = (cover, logo)
-                }
-                self.webView.load(request)
-            }
-        }
+    // MARK: Loading screen
+
+    /// The loading screen covers the chat page only: the close banner and the terminal panel stay usable.
+    /// It has the chat page's frame, so the globe's place in the chat page is also its place here.
+    private func showLoader() {
+        guard loader == nil, let content = window?.contentView else { return }
+        let overlay = LoaderOverlay(frame: webView.frame)
+        let view = overlay.view
+        view.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(view, positioned: .above, relativeTo: webView)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: webView.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: webView.trailingAnchor),
+            view.topAnchor.constraint(equalTo: webView.topAnchor),
+            view.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
+        ])
+        loader = overlay
+        handingOver = false
     }
 
-    private func playArrival() {
-        guard let arrival, shownURL != nil else { return }
-        self.arrival = nil
-        let cover = arrival.cover
-        var reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        #if DEBUG
-        // Records the animation on a Mac that has Reduce motion on.
-        if ProcessInfo.processInfo.environment["ZEUS_APP_FORCE_MOTION"] == "1" { reduceMotion = false }
-        #endif
-        let arguments: [String: Any] = ["left": arrival.logo[0], "top": arrival.logo[1], "size": arrival.logo[2],
-                                        "logo": Brand.logo, "reduce": reduceMotion]
-        webView.callAsyncJavaScript(StatusPage.arrivalScript, arguments: arguments, in: nil, in: .page) { result in
-            Trace.log("arrival: \(result)")
-            guard !reduceMotion else { cover.removeFromSuperview(); return }
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.45
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                cover.animator().alphaValue = 0
-            }, completionHandler: { cover.removeFromSuperview() })
-        }
+    private func updateLoaderStatus() {
+        guard shownURL == nil, let loader else { return }
+        let updating = session.log.lines.suffix(30).contains { $0.range(of: "updat", options: .caseInsensitive) != nil }
+        loader.setStatus(updating ? "Checking for updates…" : "Starting Zeus…")
     }
 
-    private func removeArrivalCover() {
-        arrival?.cover.removeFromSuperview()
-        arrival = nil
-    }
-
-    private func scheduleLogUpdate() {
-        guard shownURL == nil, !logUpdateScheduled else { return }
-        logUpdateScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+    /// The chat page is drawn. The loading globe moves to the place of the chat page's globe while the
+    /// chat comes in behind it; then the chat page shows its own globe and the loading screen goes away.
+    /// A chat page without a globe to hand over to (an older Zeus Editor, or a chat that is not empty)
+    /// gets a plain cross-fade.
+    private func handOver() {
+        guard let loader, !handingOver, shownURL != nil else { return }
+        handingOver = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + loader.remainingTime) { [weak self] in
             guard let self else { return }
-            self.logUpdateScheduled = false
-            guard self.shownURL == nil else { return }
-            let text = self.session.log.text
-            guard let json = try? JSONSerialization.data(withJSONObject: [text]),
-                  let literal = String(data: json, encoding: .utf8) else { return }
-            self.webView.evaluateJavaScript("window.zeusSetLog && window.zeusSetLog(\(literal)[0])")
+            let question = "window.zeusGlobe ? JSON.stringify(window.zeusGlobe.rect()) : 'null'"
+            self.webView.evaluateJavaScript(question) { [weak self] result, _ in
+                guard let self, let loader = self.loader else { return }
+                self.loader = nil
+                let enter = "window.zeusGlobe && window.zeusGlobe.enter()"
+                let reveal = "window.zeusGlobe && window.zeusGlobe.reveal()"
+                if let rect = Self.rect(from: result) {
+                    Trace.log("hand-over: globe moves to \(rect)")
+                    loader.moveGlobe(to: rect)
+                    self.webView.evaluateJavaScript(enter)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.68) { [weak self] in
+                        self?.webView.evaluateJavaScript(reveal)
+                        loader.remove(over: 0.18)
+                    }
+                } else {
+                    Trace.log("hand-over: cross-fade")
+                    self.webView.evaluateJavaScript("\(enter); \(reveal)")
+                    loader.dissolve()
+                    loader.remove(over: 0.4)
+                }
+            }
         }
+    }
+
+    private static func rect(from result: Any?) -> CGRect? {
+        guard let text = result as? String, let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let x = object["x"] as? Double, let y = object["y"] as? Double,
+              let width = object["width"] as? Double, let height = object["height"] as? Double,
+              width > 0, height > 0 else { return nil }
+        return CGRect(x: x, y: y, width: width, height: height)
     }
 
     private func handle(_ message: String) {
         switch message {
+        case "chat-ready": handOver()
         case "retry": onRetry?()
         case "setup": onRunSetup?()
         case "copy-log":

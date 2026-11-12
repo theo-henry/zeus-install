@@ -155,7 +155,7 @@ stop_app() {
 
 echo
 echo "Scenario 1: a new Mac, full setup, chat, close"
-start_app new ZEUS_SIM_START_DELAY=2500 ZEUS_APP_FORCE_MOTION=1
+start_app new ZEUS_SIM_START_DELAY=2500
 check "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
 check "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
