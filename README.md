@@ -10,7 +10,8 @@ You can get the zeus repo and the Zeus Editor plugin only with a GitHub account 
 ## Before you start
 
 1. Make a GitHub account at [github.com](https://github.com) and turn on 2FA.
-2. Send your GitHub username to Theo for access to the zeus repo and to the zeus-editor repo.
+2. Send your GitHub username to Theo for access to the private Zeus repos:
+   `zeus`, `zeus-editor`, `YAML-builder`, `celonis-ocpm`, and `celonis-pql`.
 
 ## Install
 
@@ -35,12 +36,12 @@ The installer skips each step that is already done.
 | 2 | Python (Anaconda) | conda is already installed, or Python 3.10 or later and the GitHub CLI are already installed. |
 | 3 | GitHub CLI (from conda-forge) | `gh` is already installed. |
 | 4 | GitHub login in the browser | You are already logged in. |
-| 5 | Check of your access to the zeus repo | Never skipped. The installer stops here if you have no access. |
+| 5 | Check of your access to all the private Zeus repos (`zeus`, `zeus-editor`, `YAML-builder`, `celonis-ocpm`, `celonis-pql`) | Never skipped. It only reads. The installer lists all the repos you cannot reach and stops here, before it installs more. |
 | 6 | Node.js 24 in `~/.local/node` | Node.js 18.20.5 or later is already installed. |
 | 7 | Claude Code | `claude` is already installed. |
 | 8 | Celonis content-cli | `content-cli` is already installed. |
 | 9 | Copy of the zeus repo to `~/Code/zeus` | The folder already contains the zeus repo. |
-| 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. When your account has no access to the private `theo-henry/zeus-editor` repo, the step is not done, the installer names the repo, and it ends with "NOT complete". |
+| 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. |
 | 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
 
 The installer does not use `sudo`.
@@ -68,8 +69,11 @@ Logs for Anaconda and the GitHub CLI are in `~/Library/Logs/zeus-install`.
    The `zeus` command starts Claude Code with the Zeus Editor and opens the chat page.
    When the Zeus Editor plugin is not installed, the command tells you to run the install line again.
 
-## When the installer says "NOT complete"
+## When the installer says "no access"
 
-Your GitHub account has no access to `theo-henry/zeus-editor` yet.
-Send your GitHub username to Theo, accept the invitation from GitHub, and run the same install line again.
-The other plugins (`celonis-pql`, `celonis-ocpm`, `celonis-yaml-builder`) are also private repos, so they need an invitation too.
+Step 5 lists each private repo that your GitHub account cannot reach.
+1. Check for invitations at [github.com/notifications](https://github.com/notifications).
+   The installer also prints a link to the invitations page of each missing repo.
+2. Accept each invitation.
+3. If there is no invitation, send your GitHub username to Theo and ask for access to the repos in the list.
+4. Run the same install line again.
