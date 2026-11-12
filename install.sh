@@ -9,6 +9,7 @@
 # Environment:
 #   ZEUS_INSTALL_ACCEPT_ANACONDA_LICENSE=yes  accept the Anaconda license without a prompt.
 #   ZEUS_INSTALL_SYSTEM_CONDA_DIRS="..."      folders outside the home folder to search for conda (for tests).
+#   ZEUS_INSTALL_REPOS="owner/a owner/b"      replaces the list of private repos for the access check (for tests).
 
 # ShellCheck 0.11 reports SC2218 for helpers that are defined before main runs (0.10 does not).
 # shellcheck disable=SC2218
@@ -18,6 +19,9 @@ ZEUS_REPO="theo-henry/zeus"
 ZEUS_DIR="$HOME/Code/zeus"
 ZEUS_OWNER="Theo"
 EDITOR_REPO="theo-henry/zeus-editor"
+# Every private repo that Zeus uses. Step 5 checks access to all of them before anything is installed.
+# Add a new repo here only. The workspace is $ZEUS_REPO. The others are the plugin marketplaces.
+ZEUS_REPOS="$ZEUS_REPO $EDITOR_REPO theo-henry/YAML-builder theo-henry/celonis-ocpm theo-henry/celonis-pql"
 EDITOR_PLUGIN="zeus-editor@zeus-editor"
 EDITOR_MARKETPLACE="zeus-editor"
 
@@ -43,7 +47,6 @@ PATH_LINE='export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"'
 
 LOG_DIR="$HOME/Library/Logs/zeus-install"
 SUMMARY=()
-EDITOR_MISSING=""
 WORK_DIR=""
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -284,17 +287,42 @@ login_github() {
     fail "'gh auth setup-git' failed."
 }
 
-# Step 5 - Check access to the private zeus repo.
+# Tells the user which private repos the account cannot reach, and who can fix it. Stops the install.
+# Arguments: the user name, then the missing repos (owner/name).
+fail_no_access() {
+  local user="$1" repo
+  shift
+  local -a lines=("Your GitHub account '$user' has no access to these private repos:")
+  for repo in "$@"; do
+    lines+=("  - $repo")
+  done
+  lines+=("" "1. Check for invitations on GitHub and accept them:" "     https://github.com/notifications")
+  for repo in "$@"; do
+    lines+=("     https://github.com/$repo/invitations")
+  done
+  lines+=("2. If there is no invitation, send your GitHub username '$user' to $ZEUS_OWNER" "   and ask for access to the repos in the list.")
+  fail "Your GitHub account has no access to all the private Zeus repos." "${lines[@]}"
+}
+
+# Step 5 - Check access to every private repo that Zeus uses. This only reads. Nothing is installed.
 check_access() {
-  step "5/11 Access to the zeus repo"
-  local user
+  step "5/11 Access to the Zeus repos"
+  local user repo
+  local -a missing=()
   user="$(gh api user --jq .login 2>/dev/null)" || user="(unknown)"
-  if ! gh api "repos/$ZEUS_REPO" --silent >/dev/null 2>&1; then
-    fail "Your GitHub account '$user' has no access to the zeus repo yet." \
-      "Send your GitHub username '$user' to $ZEUS_OWNER."
+  for repo in ${ZEUS_INSTALL_REPOS:-$ZEUS_REPOS}; do
+    if gh api "repos/$repo" --silent >/dev/null 2>&1; then
+      info "Access to $repo."
+    else
+      info "NO access to $repo."
+      missing+=("$repo")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    fail_no_access "$user" "${missing[@]}"
   fi
-  info "GitHub account '$user' has access."
-  record "done" "Access to the zeus repo ($user)"
+  info "GitHub account '$user' has access to all the repos."
+  record "done" "Access to the Zeus repos ($user)"
 }
 
 # Step 6 - Node.js in the home folder.
@@ -414,18 +442,9 @@ SHIM
 }
 
 # Step 10 - The Zeus Editor plugin, for the current user (all folders).
-# The repo is private. Without access, the step is not done and the installer says who must invite you.
+# Step 5 already checked access to the private repo.
 install_editor_plugin() {
   step "10/11 Zeus Editor plugin"
-  local user
-  user="$(gh api user --jq .login 2>/dev/null)" || user="(unknown)"
-  if ! gh api "repos/$EDITOR_REPO" --silent >/dev/null 2>&1; then
-    info "Your GitHub account '$user' has no access to the zeus-editor repo ($EDITOR_REPO)."
-    info "The Zeus Editor plugin is not installed."
-    record "MISSING" "Zeus Editor plugin (no access to $EDITOR_REPO)"
-    EDITOR_MISSING="$user"
-    return
-  fi
   # Adding a marketplace that exists is safe. The update then fetches the newest version.
   claude plugin marketplace add "$EDITOR_REPO" --scope user </dev/null >"$LOG_DIR/zeus-editor.log" 2>&1 ||
     fail "The Zeus Editor marketplace could not be added." "See the log: $LOG_DIR/zeus-editor.log"
@@ -464,23 +483,12 @@ install_zeus_command() {
 
 print_summary() {
   printf '\n'
-  if [ -n "$EDITOR_MISSING" ]; then
-    printf '\033[1;31m%s\033[0m\n' "Zeus install is NOT complete."
-  else
-    bold "Zeus install is complete."
-  fi
+  bold "Zeus install is complete."
   local line
   for line in "${SUMMARY[@]}"; do
     info "$line"
   done
   printf '\n'
-  if [ -n "$EDITOR_MISSING" ]; then
-    bold "Action needed"
-    info "Send your GitHub username '$EDITOR_MISSING' to $ZEUS_OWNER."
-    info "$ZEUS_OWNER must invite it to the private repo $EDITOR_REPO."
-    info "Accept the invitation (GitHub e-mail), then run the same install line again."
-    printf '\n'
-  fi
   bold "Next steps"
   info "1. Close this Terminal window and open a new one."
   info "2. Type: cd ~/Code/zeus"
@@ -491,9 +499,6 @@ print_summary() {
   info "     /plugin install celonis-pql@celonis-pql"
   info "5. Close Claude (Ctrl + C two times), open a new Terminal window, then type: zeus"
   printf '\n'
-  if [ -n "$EDITOR_MISSING" ]; then
-    exit 1
-  fi
 }
 
 main() {
