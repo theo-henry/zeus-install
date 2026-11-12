@@ -149,7 +149,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case "new-chat": self.newChat(nil)
             case "close-chat": self.chatWindows.last?.window?.performClose(nil)
             case "toggle-menubar": self.toggleMenuBar(nil)
-            case "quit": NSApp.terminate(nil)
+            // Not from inside this main-queue block: quitting waits for callbacks on the main queue.
+            case "quit": NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
             default: break
             }
         }
