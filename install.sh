@@ -93,7 +93,11 @@ fail() {
   for line in "$@"; do
     printf '    %s\n' "$line" >&2
   done
-  printf '\n    When it is fixed, run the same install line again. Completed steps are skipped.\n' >&2
+  if [ -n "$APP_MODE" ]; then
+    printf '\n    When it is fixed, click Try again. Completed steps are skipped.\n' >&2
+  else
+    printf '\n    When it is fixed, run the same install line again. Completed steps are skipped.\n' >&2
+  fi
   exit 1
 }
 

@@ -35,3 +35,23 @@ Publish `app/build/Zeus.zip` as the `Zeus.zip` asset of a GitHub release of this
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.
 The web pages can be inspected with Safari's Develop menu.
+
+## Test on a simulated new Mac
+
+```bash
+app/test/sim/run.sh [screenshot-folder]
+```
+
+The test runs the app and the bundled installer with `HOME` set to an empty temporary folder, and with
+simulated tools first on `PATH` (`app/test/sim/stubs` and `payload`): xcode-select, the Anaconda and Node.js
+downloads, conda, gh, npm, claude, and a `zeus` that serves a simple chat page. Nothing is downloaded, and the
+real home folder, Claude Code, GitHub login, and app settings are not used (the app settings are restored).
+It presses the app's buttons through the debug test actions and checks the trace:
+
+1. A new Mac: the check finds 12 steps to do; all 13 steps install, with the Anaconda license, the GitHub
+   one-time code, and the Claude login answered in the app; Start Zeus opens the chat page from `~/Code/zeus`
+   with `--no-open`; closing the window stops `zeus` with SIGTERM; the app quits.
+2. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
+
+With a folder, it saves a screenshot of each state (only the test app's windows). It needs Screen Recording
+permission for the terminal only for the screenshots.

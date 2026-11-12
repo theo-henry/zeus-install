@@ -1,0 +1,33 @@
+#!/bin/bash
+# Simulated GitHub CLI. ZEUS_SIM_NO_ACCESS=<repo> makes the access check fail for that repo.
+S="$ZEUS_SIM_STATE"
+case "${1:-} ${2:-}" in
+  "auth status")
+    if [ -f "$S/gh-login" ]; then echo "Logged in to github.com account sim-user"; exit 0; fi
+    echo "You are not logged into any GitHub hosts." >&2
+    exit 1
+    ;;
+  "auth login")
+    echo
+    echo "! First copy your one-time code: SIM1-2345"
+    printf 'Press Enter to open https://github.com/login/device in your browser... '
+    read -r _
+    echo
+    echo "✓ Authentication complete."
+    touch "$S/gh-login"
+    echo "✓ Logged in as sim-user"
+    ;;
+  "auth setup-git") exit 0 ;;
+  "api user") echo "sim-user" ;;
+  "repo clone")
+    mkdir -p "$4"
+    git -C "$4" init -q
+    git -C "$4" remote add origin "https://github.com/$3.git"
+    echo "Cloning into '$4'... (simulated)"
+    ;;
+  api\ repos/*)
+    if [ -n "${ZEUS_SIM_NO_ACCESS:-}" ] && [ "$2" = "repos/$ZEUS_SIM_NO_ACCESS" ]; then exit 1; fi
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac

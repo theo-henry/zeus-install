@@ -151,6 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 Preferences.setupDone = true
                 model?.onFinished?()
             case "setup-menubar-on": model?.showMenuBar = true
+            case "setup-answer-yes": model?.answerQuestion(true)
+            case "setup-enter": model?.send("")
             case "setup-show": self.showSetup(nil)
             case "new-chat": self.newChat(nil)
             case "close-chat": self.chatWindows.last?.window?.performClose(nil)
