@@ -25,7 +25,10 @@ document.getElementById('send').onclick=async()=>{
 };
 </script></body></html>`;
 // With <state>/no-close-state at start, this session acts like an editor plugin older than the app: no window.zeusApp.
-const html = fs.existsSync(`${state}/no-close-state`) ? page.replace('window.zeusApp=', 'window.oldPlugin=') : page;
+// With <state>/hung-close-state at start, window.zeusApp.closeState() never answers.
+const html = fs.existsSync(`${state}/no-close-state`) ? page.replace('window.zeusApp=', 'window.oldPlugin=')
+  : fs.existsSync(`${state}/hung-close-state`) ? page.replace('closeState:async()=>{', 'closeState:async()=>{await new Promise(r=>setTimeout(r,600000));')
+  : page;
 const server = http.createServer((req, res) => {
  if(req.url === '/close-state') {res.end(JSON.stringify({safe_to_close:!busy,reason:busy?'busy':'idle'}));return;}
  if(req.url === '/turn') {
@@ -39,5 +42,6 @@ setTimeout(()=>server.listen(0,'127.0.0.1',()=>{
 }), Number(process.env.ZEUS_SIM_START_DELAY || 0));
 fs.writeFileSync(`${state}/zeus-started`,JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),app:process.env.ZEUS_APP}));
 process.stdin.on('data',data=>record('input',data.toString('hex')));
-const stop=signal=>{fs.writeFileSync(`${state}/zeus-stopped`,signal);record('stop',signal);server.close();process.exit(0);};
+// ZEUS_SIM_STOP_DELAY (ms): zeus takes that long to stop, like Claude Code that ends a turn.
+const stop=signal=>{fs.writeFileSync(`${state}/zeus-stopped`,signal);record('stop',signal);server.close();setTimeout(()=>process.exit(0),Number(process.env.ZEUS_SIM_STOP_DELAY||0));};
 process.on('SIGTERM',()=>stop('SIGTERM'));process.on('SIGHUP',()=>stop('SIGHUP'));

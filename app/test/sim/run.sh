@@ -308,11 +308,14 @@ if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-logout.log"; fi
 check "a logout during the quit question ends the quit within 12 s (took $logout_time s)" '[ "$logout_time" -le 12 ]'
 check "the logout stops every PTY" '[ "$(stops)" = 9 ]'
 
-# A logout quit event with no question open: the app asks nothing.
-launch_app logout-event
+# A logout quit event while a user quit still waits for a close check that does not answer (up to 3 s), and zeus
+# takes 4 s to stop: the app asks nothing, also after the check ends.
+touch "$STATE/hung-close-state"
+launch_app logout-event ZEUS_SIM_STOP_DELAY=4000
 check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30'
-"$BIN/act" test-draft
-sleep 0.5
+rm -f "$STATE/hung-close-state"
+"$BIN/act" quit
+sleep 1
 logout_start=$(date +%s)
 "$BIN/logout" "$APP_PID"
 waited=0
@@ -320,6 +323,7 @@ while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 30 ]; do sleep 0.5; wait
 logout_time=$(($(date +%s) - logout_start))
 kill -0 "$APP_PID" 2>/dev/null && kill "$APP_PID"
 APP_PID=""
+if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-logout-event.log"; fi
 check "the quit event of a logout ends the app within 12 s (took $logout_time s)" '[ "$logout_time" -le 12 ]'
 check "the quit event of a logout asks nothing" 'grep -q "quit by macOS" "$TRACE" && ! grep -q "quit deferred" "$TRACE"'
 check "the quit event of a logout stops the PTY" '[ "$(stops)" = 10 ]'

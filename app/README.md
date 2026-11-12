@@ -82,7 +82,7 @@ It presses the app's buttons through the debug test actions and checks the trace
    (older editor plugin) waits 3 s, then **Close anyway** closes it; **Close anyway** also stops a busy tab; quitting stops every session.
 2. One tab has unsent text and one tab is busy: a logout that another app cancels changes nothing, a later quit asks about both tabs,
    and a logout while that question is open stops every session and quits within 12 s without an answer;
-   the quit event of a logout with a draft open asks nothing and quits within 12 s.
+   the quit event of a logout while a quit still checks the tabs asks nothing, also after the check, and quits within 12 s.
 3. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording

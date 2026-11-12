@@ -81,6 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if stoppingForQuit { return .terminateLater }
         if quitApproved {
             stoppingForQuit = true
+            checkingQuit = false
+            endQuitQuestion()
             stopAllAndQuit()
             return .terminateLater
         }
