@@ -14,8 +14,7 @@ final class ZeusSession {
     let pid: pid_t
     let startedAt: Date
     let log = TerminalLog()
-    private let process: PTYProcess?
-    private var exitSource: DispatchSourceProcess?
+    private let process: PTYProcess
     private var stopRequested = false
 
     private(set) var state: State = .starting {
@@ -69,22 +68,6 @@ final class ZeusSession {
         log.onChange = { [weak self] in self?.scanForChatURL(); self?.onLog?() }
     }
 
-    /// A session that an earlier run of the app started, still running after the app quit unexpectedly.
-    init(adoptingPID pid: pid_t, url: URL, startedAt: Date) {
-        self.pid = pid
-        self.startedAt = startedAt
-        process = nil
-        state = .running(url)
-        log.appendLine("This session was started by an earlier run of the Zeus app (process \(pid)).")
-        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
-        source.setEventHandler { [weak self] in
-            self?.exitSource?.cancel()
-            self?.processEnded(code: 0)
-        }
-        source.resume()
-        exitSource = source
-    }
-
     private func scanForChatURL() {
         guard state == .starting else { return }
         // zeus prints: "Zeus chat: http://127.0.0.1:<port>/chat/<id>#k=<token>"
@@ -111,34 +94,17 @@ final class ZeusSession {
     func stop() {
         stopRequested = true
         // zeus gives Claude Code up to 7 seconds to stop, then removes its launch record; wait longer than that.
-        if let process {
-            process.terminate(grace: 10)
-        } else if kill(pid, 0) == 0 {
-            kill(pid, SIGTERM)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [pid] in
-                if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
-            }
-        } else {
-            state = .ended
-        }
+        process.terminate(grace: 10)
     }
 }
 
-/// All the sessions of the app. Remembers their process IDs, so that sessions left behind by a crash
-/// of the app are found at the next start and do not stay hidden.
+/// All the sessions of this app. A session never outlives the app: if the app crashes, its hidden
+/// terminal closes and zeus stops, as after a closed Terminal window.
 final class SessionManager {
     static let shared = SessionManager()
 
     private(set) var sessions: [ZeusSession] = []
     var onChange: (() -> Void)?
-
-    private var recordFile: String { Paths.appSupport + "/sessions.json" }
-
-    private struct Record: Codable {
-        let pid: Int32
-        let url: String
-        let startedAt: Date
-    }
 
     @discardableResult
     func start() throws -> ZeusSession {
@@ -152,49 +118,13 @@ final class SessionManager {
         session.managerHook = { [weak self, weak session] state in
             guard let self, let session else { return }
             if state == .ended { self.sessions.removeAll { $0 === session } }
-            self.save()
             self.onChange?()
         }
-        save()
         onChange?()
-    }
-
-    /// Adds the sessions that an earlier run of the app left running.
-    func adoptLeftovers() {
-        guard let data = FileManager.default.contents(atPath: recordFile),
-              let records = try? JSONDecoder().decode([Record].self, from: data) else { return }
-        for record in records where kill(record.pid, 0) == 0 && launchRecordExists(pid: record.pid) {
-            guard let url = URL(string: record.url) else { continue }
-            add(ZeusSession(adoptingPID: record.pid, url: url, startedAt: record.startedAt))
-        }
-        save()
-    }
-
-    /// zeus writes ~/.zeus-editor/chat/launches/<id>.json with its pid, and removes it when it stops.
-    /// This check makes sure that the pid is still that zeus, not a new process with the same number.
-    private func launchRecordExists(pid: Int32) -> Bool {
-        let dir = Paths.launchesDir
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return false }
-        for file in files where file.hasSuffix(".json") {
-            guard let data = FileManager.default.contents(atPath: dir + "/" + file),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-            if (object["pid"] as? NSNumber)?.int32Value == pid { return true }
-        }
-        return false
-    }
-
-    private func save() {
-        let records = sessions.compactMap { session -> Record? in
-            guard session.isAlive else { return nil }
-            return Record(pid: session.pid, url: session.chatURL?.absoluteString ?? "", startedAt: session.startedAt)
-        }.filter { !$0.url.isEmpty }
-        guard let data = try? JSONEncoder().encode(records) else { return }
-        FileManager.default.createFile(atPath: recordFile, contents: data, attributes: [.posixPermissions: 0o600])
     }
 
     func remove(_ session: ZeusSession) {
         sessions.removeAll { $0 === session }
-        save()
         onChange?()
     }
 

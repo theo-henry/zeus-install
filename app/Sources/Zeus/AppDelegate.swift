@@ -18,14 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
 
-        SessionManager.shared.adoptLeftovers()
-        let adopted = SessionManager.shared.sessions
-        adopted.forEach { show($0) }
-
-        Trace.log("launched: setupNeeded=\(setupNeeded) adopted=\(adopted.count)")
+        Trace.log("launched: setupNeeded=\(setupNeeded)")
         if setupNeeded {
             showSetup(nil)
-        } else if adopted.isEmpty {
+        } else {
             newChat(nil)
         }
         NSApp.activate(ignoringOtherApps: true)
