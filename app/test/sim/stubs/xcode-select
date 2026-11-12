@@ -1,0 +1,17 @@
+#!/bin/bash
+# Simulated xcode-select: the Command Line Tools are missing until "--install"; they appear 3 seconds later.
+S="$ZEUS_SIM_STATE"
+case "${1:-}" in
+  -p)
+    if [ -f "$S/clt" ]; then echo "$S/clt-dir"; exit 0; fi
+    echo "xcode-select: error: unable to get active developer directory" >&2
+    exit 2
+    ;;
+  --install)
+    (sleep 3; mkdir -p "$S/clt-dir/usr/bin"; ln -sf /usr/bin/git "$S/clt-dir/usr/bin/git"; touch "$S/clt") >/dev/null 2>&1 &
+    echo "xcode-select: note: install requested for command line developer tools"
+    exit 0
+    ;;
+esac
+echo "simulated xcode-select: unsupported arguments: $*" >&2
+exit 1
