@@ -17,6 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private let statusMenu = StatusMenu()
     /// The update check at launch runs; only its loading screen shows, and no Zeus session opens until it ends.
     private var updating = false
+    #if DEBUG
+    /// The user's pasteboard before the paste test actions, given back by "test-pasteboard-restore".
+    private var savedPasteboard: [NSPasteboardItem]?
+    #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Brand.registerFonts()
@@ -59,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         } else {
             newChat(nil)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activateZeus()
     }
 
     /// The first start, or a Mac where the zeus command or the workspace has gone.
@@ -155,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         alert.addButton(withTitle: "Quit Anyway")
         alert.addButton(withTitle: "Cancel")
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activateZeus()
         quitQuestionWindow = window
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self, self.checkingQuit else { return }
@@ -207,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             alert.informativeText = error.localizedDescription
             alert.addButton(withTitle: "Run the Zeus Setup")
             alert.addButton(withTitle: "Cancel")
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activateZeus()
             if alert.runModal() == .alertFirstButtonReturn { showSetup(nil) }
         }
     }
@@ -216,7 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if let existing = chatTabs.first(where: { $0.session === session }), let host = existing.host {
             host.select(existing)
             host.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activateZeus()
             return
         }
         let tab = ChatTab(session: session)
@@ -240,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         host.add(tab)
         host.showWindow(nil)
         host.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activateZeus()
     }
 
     /// The key window, or the front window of the app while another app is active.
@@ -253,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if let setupWindow {
             setupWindow.showWindow(nil)
             setupWindow.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activateZeus()
             return
         }
         let controller = SetupWindowController()
@@ -268,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         setupWindow = controller
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activateZeus()
     }
 
     // MARK: Test actions
@@ -318,7 +322,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             case "close-chat": self.chatTabs.last.map { $0.host?.close($0) }
             case "toggle-terminal": self.chatTabs.last?.toggleTerminal()
             case "test-draft": self.chatTabs.last?.webView.evaluateJavaScript("document.querySelector('textarea').value = 'Test chat turn'; document.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}))")
-            case "test-clear": self.chatTabs.last?.webView.evaluateJavaScript("document.querySelector('textarea').value = ''; document.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}))")
+            // Clears the message box of the selected tab (of the last tab's window), where the paste checks paste.
+            case "test-clear": self.chatTabs.last?.host?.selectedTab?.webView.evaluateJavaScript("document.querySelector('textarea').value = ''; document.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}))")
             case "test-send": self.chatTabs.last?.webView.evaluateJavaScript("document.querySelector('#send,.send-button').click()")
             case "test-real-turn":
                 self.chatTabs.last?.webView.evaluateJavaScript("const input=document.querySelector('textarea'); input.value='Reply with APP_OK. Do not use tools or change files.'; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.send-button').click()")
@@ -327,6 +332,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     Trace.log("test page: \(result ?? error?.localizedDescription ?? "empty")")
                 }
             case "test-terminal-input": self.chatTabs.last?.testTerminalInput()
+            // Paste: "test-pasteboard" puts the text on the pasteboard ("\\n" is a line end) and keeps the user's pasteboard
+            // until "test-pasteboard-restore". "test-paste" is Edit > Paste, where Cmd+V also ends, in the chat window; that
+            // window may not be the key window (the test app stays behind the other apps), so it goes to its first responder.
+            // "test-click-chat" and "test-click-terminal" click as the user does; "test-keyboard" writes where the keyboard is.
+            case "test-click-chat", "test-click-terminal":
+                self.chatTabs.last?.host?.selectedTab?.testClick(terminal: action == "test-click-terminal")
+            case "test-pasteboard":
+                if self.savedPasteboard == nil {
+                    self.savedPasteboard = (NSPasteboard.general.pasteboardItems ?? []).map { item in
+                        let copy = NSPasteboardItem()
+                        for type in item.types { item.data(forType: type).map { _ = copy.setData($0, forType: type) } }
+                        return copy
+                    }
+                }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(argument.replacingOccurrences(of: "\\n", with: "\n"), forType: .string)
+            case "test-paste":
+                guard let window = self.chatTabs.last?.host?.window else { break }
+                NSApp.sendAction(#selector(NSText.paste(_:)), to: window.firstResponder, from: nil)
+            case "test-pasteboard-restore":
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.writeObjects(self.savedPasteboard ?? [])
+                self.savedPasteboard = nil
+            case "test-next-tab": self.chatTabs.last?.host?.selectTab(offset: 1)
+            case "test-keyboard":
+                guard let tab = self.chatTabs.last?.host?.selectedTab else { break }
+                tab.webView.evaluateJavaScript("JSON.stringify(document.querySelector('textarea')?.value ?? null)") { result, _ in
+                    Trace.log("test keyboard: \(tab.session.pid) \(tab.keyboardOwner) message=\(result ?? "-")")
+                }
             // Picks a project in the project menu of the chat page, as a click does.
             case "test-pick-project":
                 self.chatTabs.last?.webView.callAsyncJavaScript(
@@ -499,5 +533,16 @@ private extension NSMenu {
         let item = NSMenuItem(title: submenu.title, action: nil, keyEquivalent: "")
         item.submenu = submenu
         addItem(item)
+    }
+}
+
+extension NSApplication {
+    /// Brings Zeus in front of the other apps. In debug builds, `ZEUS_APP_TEST_BACKGROUND=1` keeps the app behind
+    /// the other apps, so that a test does not take the screen of the person at the Mac.
+    func activateZeus() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_BACKGROUND"] == "1" { return }
+        #endif
+        activate(ignoringOtherApps: true)
     }
 }

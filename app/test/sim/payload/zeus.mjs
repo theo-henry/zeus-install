@@ -31,6 +31,8 @@ window.zeusGlobe={
  enter(){document.body.classList.add('entered');},
  reveal(){document.body.classList.add('live');},
 };
+// Like the Zeus chat, the message box has the focus when the page opens.
+document.getElementById('prompt').focus();
 requestAnimationFrame(()=>requestAnimationFrame(()=>window.webkit?.messageHandlers?.zeusApp?.postMessage('chat-ready')));
 // The project menu and the project button of the Zeus chat (zeus-editor src/chat/client/main.js).
 for(const option of document.querySelectorAll('.project-menu [role="option"]'))option.onclick=()=>{document.querySelector('.project-pill .pill-text').textContent=option.textContent;};

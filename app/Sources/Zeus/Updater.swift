@@ -374,7 +374,7 @@ final class UpdateWindow {
 
     func bringForward() {
         window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activateZeus()
     }
 
     func close() {

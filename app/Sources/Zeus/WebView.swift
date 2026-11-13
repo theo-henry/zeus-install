@@ -47,6 +47,14 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsMagnification = true
         if #available(macOS 13.3, *) { webView.isInspectable = true }
+        #if DEBUG
+        // A test app behind the other apps: its pages keep running and drawing while other windows cover them.
+        let setOcclusionDetection = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
+        if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_BACKGROUND"] == "1", webView.responds(to: setOcclusionDetection) {
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(webView.method(for: setOcclusionDetection), to: Setter.self)(webView, setOcclusionDetection, false)
+        }
+        #endif
         return webView
     }
 
