@@ -15,6 +15,7 @@ final class LoaderOverlay: NSObject, WKNavigationDelegate {
     init(frame: NSRect, status: String = "Starting Zeus…") {
         self.status = status
         view = WKWebView(frame: frame, configuration: WKWebViewConfiguration())
+        Front.prepare(view)
         super.init()
         view.setValue(false, forKey: "drawsBackground") // The chat page shows through when the background fades.
         view.autoresizingMask = [.width, .height]

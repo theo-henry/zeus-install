@@ -23,6 +23,8 @@ PARTS="${*:-release install app}"
 WORK="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/zeus-update-test.XXXXXX")" && pwd -P)"
 # Test actions reach only the app copies that this test starts.
 export ZEUS_APP_TEST_ID="update-$$"
+# The app stays behind the windows of other apps and does not take the keyboard (debug builds).
+export ZEUS_APP_TEST_BACKGROUND=1
 
 FAILURES=0
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }

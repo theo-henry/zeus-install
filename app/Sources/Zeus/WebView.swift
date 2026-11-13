@@ -42,6 +42,7 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
             return fresh
         }()
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        Front.prepare(webView)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = false

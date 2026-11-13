@@ -248,7 +248,7 @@ enum Updater {
         configuration.createsNewApplicationInstance = true
         // The new copy gets the same environment (HOME, test settings) as this copy.
         configuration.environment = ProcessInfo.processInfo.environment
-        configuration.activates = true
+        configuration.activates = !Front.background
         NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { newApp, error in
             DispatchQueue.main.async {
                 if let error { return rollBack("the new app does not open: \(error.localizedDescription)", newApp) }
@@ -373,8 +373,8 @@ final class UpdateWindow {
     }
 
     func bringForward() {
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activateZeus()
+        Front.show(window)
+        Front.activate()
     }
 
     func close() {
