@@ -4,24 +4,34 @@ import WebKit
 /// The loading screen of a chat window: the Zeus globe in the middle, with one line of status text.
 /// It lies above the chat page as a transparent layer. When the chat is ready, the globe moves to the
 /// place of the chat page's own globe while the chat comes in behind it, and the layer goes away.
-final class LoaderOverlay {
+final class LoaderOverlay: NSObject, WKNavigationDelegate {
     let view: WKWebView
     private let shownAt = Date()
     /// The loading screen stays at least this long, so a fast start does not look like a flicker.
     private let minimumTime: TimeInterval = 1.2
+    /// The status text, also for a change that comes before the page has loaded.
+    private var status: String
 
-    init(frame: NSRect) {
+    init(frame: NSRect, status: String = "Starting Zeus…") {
+        self.status = status
         view = WKWebView(frame: frame, configuration: WKWebViewConfiguration())
+        super.init()
         view.setValue(false, forKey: "drawsBackground") // The chat page shows through when the background fades.
         view.autoresizingMask = [.width, .height]
         view.wantsLayer = true
-        view.loadHTMLString(LoaderPage.html(), baseURL: nil)
+        view.navigationDelegate = self
+        view.loadHTMLString(LoaderPage.html(status: status), baseURL: nil)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        setStatus(status)
     }
 
     /// The time that is left until the loading screen may go away.
     var remainingTime: TimeInterval { max(0, minimumTime - Date().timeIntervalSince(shownAt)) }
 
     func setStatus(_ text: String) {
+        status = text
         run("zeusLoader.status(\(LoaderPage.quote(text)))")
     }
 
@@ -68,7 +78,7 @@ enum LoaderPage {
         return script
     }()
 
-    static func html() -> String {
+    static func html(status: String) -> String {
         """
         <!doctype html><html><head><meta charset="utf-8"><style>
         html, body { margin:0; height:100%; overflow:hidden; background:transparent;
@@ -88,10 +98,11 @@ enum LoaderPage {
         </style></head><body>
         <div id="bg"></div><div id="ambient"></div>
         <div id="globe"><div id="inner"></div></div>
-        <div id="status" role="status">Starting Zeus…</div>
+        <div id="status" role="status"></div>
         <script>\(globeScript)</script>
         <script>
         const box = document.getElementById("globe"), statusLine = document.getElementById("status");
+        statusLine.textContent = \(quote(status));
         const globe = typeof createZeusGlobe === "function" ? createZeusGlobe() : null;
         if (globe) { document.getElementById("inner").append(globe.canvas); globe.setEnergy(0.55); globe.start(); }
         let place = null, moving = false;

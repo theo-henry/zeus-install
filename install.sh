@@ -10,14 +10,17 @@
 #   ZEUS_INSTALL_ACCEPT_ANACONDA_LICENSE=yes  accept the Anaconda license without a prompt.
 #   ZEUS_INSTALL_SYSTEM_CONDA_DIRS="..."      folders outside the home folder to search for conda (for tests).
 #   ZEUS_INSTALL_REPOS="owner/a owner/b"      replaces the list of private repos for the access check (for tests).
-#   ZEUS_APP_URL=...                         replaces the download address of the Zeus app (for tests).
+#   ZEUS_APP_REPO="owner/name"               replaces the private repo with the Zeus app releases (for tests).
 #   ZEUS_APP_DIR=...                         installs the Zeus app into this folder, not /Applications (for tests).
+#   ZEUS_APP_NO_OPEN=1                       installs the Zeus app but does not open it (for tests).
 #   ZEUS_INSTALL_APP=1                        app mode, used by Zeus.app. It adds two steps (the Zeus skill plugins and
 #                                             the Claude login) and prints machine-readable lines that start with
 #                                             "@@zeus " so that the app can show a checklist. Terminal use is unchanged.
 #
 # Options:
-#   --check   app mode only: report which steps are already done, then stop. Installs nothing.
+#   --check      app mode only: report which steps are already done, then stop. Installs nothing.
+#   --app-only   used by install-app.sh: steps 1 to 5 (GitHub login and access check), then the Zeus app.
+#                The app does the other steps in its setup window.
 
 # ShellCheck 0.11 reports SC2218 for helpers that are defined before main runs (0.10 does not).
 # shellcheck disable=SC2218
@@ -61,11 +64,18 @@ WORK_DIR=""
 APP_MODE=""
 if [ "${ZEUS_INSTALL_APP:-}" = "1" ]; then APP_MODE=1; fi
 SKILL_PLUGINS="celonis-yaml-builder@yaml-builder:theo-henry/YAML-builder celonis-ocpm@celonis-ocpm:theo-henry/celonis-ocpm celonis-pql@celonis-pql:theo-henry/celonis-pql"
-ZEUS_APP_URL="${ZEUS_APP_URL:-https://github.com/theo-henry/zeus-install/releases/latest/download/Zeus.zip}"
+# The Zeus app comes from a release of the private zeus repo, so only an account with access can download it.
+# App releases have tags "app-v<version>" (see app/release.sh); other releases of the repo are not used.
+ZEUS_APP_REPO="${ZEUS_APP_REPO:-$ZEUS_REPO}"
+APP_BUNDLE_ID="io.github.theo-henry.zeus"
 APP_INSTALLED=""
+APP_ONLY=""
+if [ "${1:-}" = "--app-only" ]; then APP_ONLY=1; fi
 # Terminal use: step 12 installs the Zeus app. App mode: steps 12 and 13 finish the setup that the app needs.
+# --app-only: step 6 installs the Zeus app, and the app does steps 6 to 13 in its setup window.
 TOTAL_STEPS=12
 if [ -n "$APP_MODE" ]; then TOTAL_STEPS=13; fi
+if [ -n "$APP_ONLY" ]; then TOTAL_STEPS=6; fi
 CURRENT_STEP=0
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -603,34 +613,106 @@ check_steps() {
   emit "checked"
 }
 
-# Step 12 (Terminal use) - The Zeus app. It opens Zeus without Terminal and finishes the setup
-# (the skill plugins and the Claude login) in its own window. A failed download does not stop the
-# installer: Zeus works without the app.
+# Prints the tag of the newest Zeus app release ("app-v<version>") in $ZEUS_APP_REPO.
+# Drafts, pre-releases, and releases with other tags are not used. Fails without access or without a release.
+latest_app_tag() {
+  local tags
+  tags="$(gh api "repos/$ZEUS_APP_REPO/releases?per_page=100" \
+    --jq '.[] | select((.draft or .prerelease) | not) | .tag_name' 2>/dev/null)" || return 1
+  printf '%s\n' "$tags" | grep -E '^app-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 | grep .
+}
+
+# Downloads the newest Zeus app release with gh into $1/unpacked/Zeus.app and checks it: the checksum,
+# the zip, the bundle identifier, the version, and the signature. On failure, sets APP_ERROR and returns 1.
+APP_ERROR=""
+download_zeus_app() {
+  local dir="$1" tag version expected actual plist
+  if ! tag="$(latest_app_tag)"; then
+    APP_ERROR="No Zeus app release was found in $ZEUS_APP_REPO."
+    return 1
+  fi
+  version="${tag#app-v}"
+  info "Downloading the Zeus app $version"
+  mkdir -p "$dir"
+  if ! gh release download "$tag" -R "$ZEUS_APP_REPO" -p Zeus.zip -p Zeus.zip.sha256 -D "$dir" --clobber \
+    </dev/null >"$LOG_DIR/zeus-app.log" 2>&1; then
+    APP_ERROR="The download of the Zeus app failed. See the log: $LOG_DIR/zeus-app.log"
+    return 1
+  fi
+  expected="$(awk '{print $1; exit}' "$dir/Zeus.zip.sha256" 2>/dev/null || true)"
+  actual="$(shasum -a 256 "$dir/Zeus.zip" | awk '{print $1}')"
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    APP_ERROR="The Zeus app download is damaged or changed (checksum mismatch)."
+    return 1
+  fi
+  plist="$dir/unpacked/Zeus.app/Contents/Info.plist"
+  if ! ditto -x -k "$dir/Zeus.zip" "$dir/unpacked" 2>/dev/null || [ ! -f "$plist" ]; then
+    APP_ERROR="The Zeus app download is damaged (no Zeus.app in Zeus.zip)."
+    return 1
+  fi
+  if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null)" != "$APP_BUNDLE_ID" ] ||
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null)" != "$version" ]; then
+    APP_ERROR="The Zeus app in the download is not Zeus $version."
+    return 1
+  fi
+  if ! codesign --verify --strict "$dir/unpacked/Zeus.app" 2>/dev/null; then
+    APP_ERROR="The Zeus app in the download is damaged or changed (signature check failed)."
+    return 1
+  fi
+}
+
+# Asks a running Zeus app to quit, so that it can be replaced. Its sessions stop as when you quit it yourself.
+# A tab with unsent text or work in progress makes the app ask first. Returns 1 when the app is still open.
+quit_zeus_app() {
+  local app="$1/Zeus.app/Contents/MacOS/Zeus" waited=0
+  pgrep -f "$app" >/dev/null 2>&1 || return 0
+  osascript -e "tell application id \"$APP_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+  while pgrep -f "$app" >/dev/null 2>&1 && [ "$waited" -lt 30 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  ! pgrep -f "$app" >/dev/null 2>&1
+}
+
+# Step 12 (Terminal use) or step 6 (--app-only) - The Zeus app. It opens Zeus without Terminal and finishes
+# the setup in its own window. Step 5 already checked access to the private repo with the app releases.
+# In Terminal use, a failed download does not stop the installer: Zeus works without the app.
+# With --app-only, the app is what the user asked for, so a failure stops the installer.
 install_zeus_app() {
-  step 12 "Zeus app"
+  step "$TOTAL_STEPS" "Zeus app"
   local target="${ZEUS_APP_DIR:-/Applications}"
   if [ ! -w "$target" ]; then
     target="$HOME/Applications"
     mkdir -p "$target"
   fi
-  if ! curl -fsSL --retry 3 -o "$WORK_DIR/Zeus.zip" "$ZEUS_APP_URL" ||
-    ! ditto -x -k "$WORK_DIR/Zeus.zip" "$WORK_DIR/zeus-app" ||
-    ! codesign --verify --strict "$WORK_DIR/zeus-app/Zeus.app" 2>/dev/null; then
-    info "The Zeus app could not be downloaded. Zeus works without it; use the steps below."
+  if ! download_zeus_app "$WORK_DIR/zeus-app"; then
+    if [ -n "$APP_ONLY" ]; then
+      fail "$APP_ERROR" "Check your internet connection, then run the same line again."
+    fi
+    info "$APP_ERROR"
+    info "The Zeus app is not installed. Zeus works without it; use the steps below."
     record "failed" "Zeus app (not installed)"
     return
   fi
-  if pgrep -f "$target/Zeus.app/Contents/MacOS/Zeus" >/dev/null 2>&1; then
+  if [ -n "$APP_ONLY" ]; then
+    quit_zeus_app "$target" ||
+      fail "The Zeus app is still open." "Quit the Zeus app, then run the same line again."
+  elif pgrep -f "$target/Zeus.app/Contents/MacOS/Zeus" >/dev/null 2>&1; then
     info "Quit the Zeus app, then run the same line again to update it."
     record "skipped" "Zeus app (open, not updated)"
     return
   fi
   rm -rf "$target/Zeus.app"
-  ditto "$WORK_DIR/zeus-app/Zeus.app" "$target/Zeus.app"
+  ditto "$WORK_DIR/zeus-app/unpacked/Zeus.app" "$target/Zeus.app"
+  # gh does not mark its downloads as downloaded from the internet; this removes a mark from another tool.
   xattr -dr com.apple.quarantine "$target/Zeus.app" 2>/dev/null || true
   APP_INSTALLED="$target/Zeus.app"
   info "Installed $target/Zeus.app."
   record "done" "Zeus app"
+}
+
+open_zeus_app() {
+  if [ "${ZEUS_APP_NO_OPEN:-}" != "1" ]; then open "$APP_INSTALLED" 2>/dev/null || true; fi
 }
 
 print_summary() {
@@ -638,6 +720,17 @@ print_summary() {
     emit "finished"
     printf '\n'
     bold "Zeus install is complete."
+    return
+  fi
+  if [ -n "$APP_ONLY" ]; then
+    printf '\n'
+    bold "The Zeus app is installed."
+    info "The Zeus app opens now. Follow its setup window: it installs the other tools that Zeus needs,"
+    info "logs you in to Claude, and keeps Zeus in the Dock. Then click Start Zeus."
+    info "Later, click Zeus in the Dock to start Zeus. You do not need Terminal."
+    info "The app updates itself when it starts."
+    printf '\n'
+    open_zeus_app
     return
   fi
   if [ -n "$APP_INSTALLED" ]; then
@@ -653,7 +746,7 @@ print_summary() {
     info "logs you in to Claude, and keeps Zeus in the Dock. Then click Start Zeus."
     info "Later, click Zeus in the Dock to start Zeus. You do not need Terminal."
     printf '\n'
-    open "$APP_INSTALLED" 2>/dev/null || true
+    open_zeus_app
     return
   fi
   printf '\n'
@@ -694,9 +787,16 @@ main() {
     check_steps
     return
   fi
+  if [ -n "$APP_ONLY" ] && [ -n "$APP_MODE" ]; then
+    fail "--app-only does not work in app mode (ZEUS_INSTALL_APP=1)."
+  fi
 
   bold "Zeus installer"
-  info "This installs the tools for Zeus. Completed steps are skipped."
+  if [ -n "$APP_ONLY" ]; then
+    info "This checks your GitHub access to Zeus, then installs the Zeus app. Completed steps are skipped."
+  else
+    info "This installs the tools for Zeus. Completed steps are skipped."
+  fi
 
   # Tools that an earlier run installed in the home folder.
   use_local_path
@@ -710,6 +810,11 @@ main() {
   install_gh
   login_github
   check_access
+  if [ -n "$APP_ONLY" ]; then
+    install_zeus_app
+    print_summary
+    return
+  fi
   install_node
   install_claude
   install_content_cli

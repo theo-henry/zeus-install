@@ -1,5 +1,7 @@
 #!/bin/bash
 # Simulated curl: makes the files that the installer downloads. No network access.
+# The scripts that it writes expand their own variables when they run.
+# shellcheck disable=SC2016
 target="" url=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -27,6 +29,10 @@ case "$url" in
     ;;
   https://claude.ai/install.sh)
     printf '#!/bin/bash\n# Simulated Claude Code installer.\nmkdir -p "$HOME/.local/bin"\ncp "%s/claude" "$HOME/.local/bin/claude"\nchmod +x "$HOME/.local/bin/claude"\necho "Claude Code installed (simulated)."\n' "$P" | write
+    ;;
+  file://*)
+    # A local file, such as install.sh for install-app.sh.
+    write <"${url#file://}" || exit 37
     ;;
   *)
     echo "simulated curl: no network in the simulation: $url" >&2

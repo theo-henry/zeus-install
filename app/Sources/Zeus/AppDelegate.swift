@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The window that shows the quit question as a sheet.
     private var quitQuestionWindow: NSWindow?
     private let statusMenu = StatusMenu()
+    /// The update check at launch runs; only its loading screen shows, and no Zeus session opens until it ends.
+    private var updating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Brand.registerFonts()
@@ -29,13 +31,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             self.approveQuit()
         }
 
+        Trace.log("launched: version=\(Updater.currentVersion) setupNeeded=\(setupNeeded)")
+        // The new copy of an updated app tells the old copy that it runs, and does not check again.
+        if Updater.confirmPendingUpdate() {
+            startZeus()
+            return
+        }
+
         // First setup: the app puts itself in /Applications and continues from there.
         if setupNeeded, AppMover.shouldMove, AppMover.moveAndRelaunch() {
             Trace.log("moving the app to Applications")
             return
         }
 
-        Trace.log("launched: setupNeeded=\(setupNeeded)")
+        // Updates install only here, before any Zeus session starts.
+        updating = true
+        Updater.checkAtLaunch { [weak self] relaunching in
+            guard let self, !relaunching else { return }
+            self.updating = false
+            self.startZeus()
+        }
+    }
+
+    private func startZeus() {
         if setupNeeded {
             showSetup(nil)
         } else {
@@ -52,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     /// A click on the Dock icon while no window is open.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if updating {
+            UpdateWindow.shared.bringForward()
+            return true
+        }
         if flag { return true }
         let alive = SessionManager.shared.sessions.filter(\.isAlive)
         if let setupWindow, setupWindow.model.isBusy {
@@ -167,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: Windows
 
     @objc func newChat(_ sender: Any?) {
+        guard !updating else { return }
         do {
             let session = try SessionManager.shared.start()
             Trace.log("session \(session.pid) started")
@@ -220,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var keyChatTab: ChatTab? { keyChatWindow?.selectedTab }
 
     @objc func showSetup(_ sender: Any?) {
+        guard !updating else { return }
         if let setupWindow {
             setupWindow.showWindow(nil)
             setupWindow.window?.makeKeyAndOrderFront(nil)

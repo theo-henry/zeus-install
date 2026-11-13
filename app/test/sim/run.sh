@@ -8,6 +8,9 @@
 #
 # Usage: app/test/sim/run.sh [screenshot-folder]
 # With a folder, it saves a screenshot of each app window state there (the app's windows only).
+
+# check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 SIM_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -151,7 +154,7 @@ stop_app() {
   act quit
   local waited=0
   while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
-  kill -0 "$APP_PID" 2>/dev/null && { fail "the app quits"; kill "$APP_PID"; } || pass "the app quits"
+  if kill -0 "$APP_PID" 2>/dev/null; then fail "the app quits"; kill "$APP_PID"; else pass "the app quits"; fi
   APP_PID=""
   if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-$(basename "$(dirname "$TRACE")").log"; fi
 }

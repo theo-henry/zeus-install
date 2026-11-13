@@ -5,6 +5,13 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
 - **Applications folder.** At the first start, an app that runs from another folder (Downloads, a build folder)
   copies itself to `/Applications` (`~/Applications` without administrator rights), opens the copy, and quits.
   A copy in Downloads goes to the Trash. Development builds, `ZEUS_APP_TRACE`, and `ZEUS_APP_NO_MOVE=1` turn this off.
+- **Updates.** At each start, before any chat window or Zeus session opens, the app asks the private zeus repo for the newest release with a tag `app-v<version>` (`gh api`, with the user's GitHub CLI login; the app holds no token).
+  While it checks, the app shows the loading screen (the Zeus globe) with "Checking for updates…"; the check stops after 5 s, and the app then starts its current version.
+  When that version is higher, the loading screen shows "Downloading Zeus X.Y.Z…", the app downloads `Zeus.zip` and `Zeus.zip.sha256` (`gh release download`), and checks the checksum, the zip, the bundle identifier, the version, and the signature.
+  Then it swaps the new app into the place of the running app in one rename (`renamex_np` with `RENAME_SWAP`), opens the new copy, and waits up to 20 s for the new copy to confirm in `~/Library/Application Support/Zeus/update.json`.
+  After the confirmation, it removes the old copy and quits; without it, it stops the new copy, swaps the old app back, and starts as before.
+  Offline, without `gh`, without access, or with any error, the app starts its current version and shows nothing.
+  Development versions (such as `0.0.0-dev`), a read-only app folder, and `ZEUS_APP_NO_UPDATE=1` turn the check off.
 - **Setup window.** The first start runs the bundled `install.sh` in app mode in a hidden terminal.
   `install.sh --check` ticks the steps that are already done. The window shows the installer output,
   an Accept button for the Anaconda license, the GitHub one-time code, a link for the Claude login, and a field for any other answer.
@@ -50,13 +57,18 @@ app/dev-bundle.sh         # app/build/Zeus-dev.app, a quick debug build for this
 ```
 
 The app has an ad-hoc signature, not an Apple Developer ID.
-A release for other people needs a Developer ID Application signature with the hardened runtime, notarization (`xcrun notarytool submit --wait`), and a stapled ticket (`xcrun stapler staple`).
-Publish `app/build/Zeus.zip` as the `Zeus.zip` asset of a GitHub release of this repo;
-`install-app.sh` and step 12 of `install.sh` download `releases/latest/download/Zeus.zip`.
+The GitHub CLI does not mark its downloads with the quarantine attribute, so macOS opens the app without a Developer ID.
+
+To publish a release, run `app/release.sh [version]` (see [Release the Zeus app](../README.md#release-the-zeus-app-maintainer)).
+It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in the private zeus repo.
+`install-app.sh` (through `install.sh --app-only`), step 12 of `install.sh`, and the app's self-update download the newest one.
 
 ## Debug
 
-`ZEUS_APP_TRACE=/path/to/file` writes setup events, session states, and page loads to that file.
+`ZEUS_APP_TRACE=/path/to/file` adds setup events, update events, session states, and page loads to the end of that file.
+`ZEUS_APP_REPO=owner/name` replaces the repo of the app releases, as in `install.sh`.
+`ZEUS_APP_NO_UPDATE=1` turns off the update check at start.
+`ZEUS_APP_TEST_NO_CONFIRM=1` (debug builds) makes the new copy of an update not confirm, so that the old copy rolls back.
 `ZEUS_APP_INSTALLER=/path/to/install.sh` replaces the bundled installer.
 `ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
 `ZEUS_APP_TEST_ID=<id>` (debug builds) makes the test actions reach only this app copy.
@@ -71,6 +83,22 @@ app/test/pty/run.sh
 ```
 
 It sends 1 MiB to a raw-mode terminal and checks that every byte arrives, that a resize reaches the terminal, and that the UI run loop stays responsive.
+
+## Test the releases and the self-update
+
+```bash
+app/test/update/run.sh [release] [install] [app]
+```
+
+GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is made, and nothing is downloaded.
+
+1. `release`: `app/release.sh` in a temporary copy of this repo stops for a working tree with changes, a commit that is not the newest main commit,
+   a wrong or a too low version, and an existing tag; otherwise it builds the app for both architectures and makes the next `app-v` release with a valid zip and checksum.
+2. `install`: `install-app.sh` on a simulated new Mac stops after step 5 without access and downloads nothing;
+   with access, it installs the newest `app-v` release (not drafts, pre-releases, or other tags), and it stops for a wrong checksum or version, or without an app release.
+3. `app`: the app updates itself from 1.0.0 to 1.1.0, restarts in the new version, and keeps the user state;
+   it starts its current version when it is up to date, without access, or when the download is damaged or is not Zeus;
+   when the new copy does not confirm, the old copy is put back.
 
 ## Test on a simulated new Mac
 
