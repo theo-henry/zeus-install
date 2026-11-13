@@ -452,7 +452,7 @@ update_zeus() {
     record "skipped" "Zeus repo (~/Code/zeus)"
     return
   fi
-  result="$(python3 "$updater" --now --root "$ZEUS_DIR" 2>/dev/null | tail -n 1)"
+  result="$( { python3 "$updater" --now --root "$ZEUS_DIR" 2>/dev/null || true; } | tail -n 1)"
   outcome="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
   case "$outcome" in
     current)
@@ -466,12 +466,8 @@ update_zeus() {
     *)
       message="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("message",""))' 2>/dev/null || true)"
       step="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("step",""))' 2>/dev/null || true)"
-      if [ -n "$message" ]; then
-        info "$message"
-      else
-        info "Zeus in ~/Code/zeus could not update itself. Nothing was changed or discarded."
-        info "To update: ${step:-run \`git pull --ff-only\` in ~/Code/zeus}."
-      fi
+      info "${message:-Zeus in ~/Code/zeus could not update itself. Nothing was changed or discarded.}"
+      info "To update: ${step:-run \`git pull --ff-only\` in ~/Code/zeus}."
       record "skipped" "Zeus repo (~/Code/zeus, not updated)"
       ;;
   esac
