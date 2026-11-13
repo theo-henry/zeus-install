@@ -126,8 +126,8 @@ keyboard_has() {
   wait_count "test keyboard: " $((before + 1)) 10 >/dev/null && grep "test keyboard: " "$TRACE" | tail -1 | grep -qF -- "$1"
 }
 
-# pty_got <text>: the simulated zeus of a tab got this text as terminal input. Its terminal gives it a line only at
-# the line end, so the text must be followed by one.
+# pty_got <text>: the simulated zeus of a tab got this text as terminal input. Its terminal is in raw mode, as the
+# terminal of zeus: the text comes in at once, without a line end.
 pty_got() { grep -q "input [0-9a-f]*$(printf %s "$1" | xxd -p | tr -d '\n')" "$STATE/sessions"; }
 
 # wait_starts <count>: waits until that many simulated zeus sessions have started.
@@ -270,7 +270,8 @@ act test-cmd-j
 check "the per-tab terminal opens" 'wait_for "terminal visible: .* true" 10'
 act test-terminal-input
 sleep 1
-check "xterm input reaches the live PTY" 'grep -q "input 7465726d696e616c2d746573740a" "$STATE/sessions"'
+# The simulated zeus reads its terminal in raw mode, as zeus does: Enter comes in as \r.
+check "xterm input reaches the live PTY" 'grep -q "input 7465726d696e616c2d746573740d" "$STATE/sessions"'
 shot 8-terminal-tabs
 # A paste goes where the user clicked. The test app is behind the other apps, so each click here is the click that
 # only brings the window to the front, which the page does not get: that click must still move the keyboard.

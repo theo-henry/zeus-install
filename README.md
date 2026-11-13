@@ -53,7 +53,8 @@ When a newer version is available, the app downloads it and starts again in the 
 Your settings, your workspace, and your chats do not change.
 If the new version does not start, the app puts the old version back and starts it.
 When you are offline, or your account has no access, the app starts its current version and shows no message.
-The app does not check for updates while it runs; quit it and open it again to get an update.
+While the app runs, **Check for updates** in the settings of the chat shows what is new, and **Update now** installs it.
+The app waits until Zeus has finished its work in every tab, starts again in the new version, and opens the same tabs with their chats, projects, and unsent text.
 The Zeus content (`~/Code/zeus` and the plugins) updates itself each time Zeus starts, as before.
 
 ### The Zeus app

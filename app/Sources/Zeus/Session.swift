@@ -159,6 +159,11 @@ final class SessionManager {
         let alive = sessions.filter(\.isAlive)
         if alive.isEmpty { completion(); return }
         alive.forEach { $0.stop() }
+        waitUntilEnded(timeout: timeout, completion: completion)
+    }
+
+    /// Calls `completion` when no session is alive, or after `timeout` seconds. It stops nothing.
+    func waitUntilEnded(timeout: TimeInterval, completion: @escaping () -> Void) {
         let deadline = Date().addingTimeInterval(timeout)
         func check() {
             if sessions.allSatisfy({ !$0.isAlive }) || Date() > deadline { completion(); return }

@@ -1,12 +1,15 @@
 #!/bin/bash
-# Tests of the private Zeus app releases: app/release.sh, install-app.sh (install.sh --app-only), and the
-# app's self-update at launch. GitHub is simulated (app/test/sim/payload/gh): no repo, release, or tag is made,
-# and nothing is downloaded. Each part uses its own temporary home folder; the real one is not used.
+# Tests of the private Zeus app releases: app/release.sh, install-app.sh (install.sh --app-only), the
+# app's self-update at launch, and the app update from the settings of a Zeus page. GitHub is simulated
+# (app/test/sim/payload/gh): no repo, release, or tag is made, and nothing is downloaded. Each part uses its own
+# temporary home folder; the real one is not used.
 #
-# Usage: app/test/update/run.sh [release] [install] [app]     (default: all three parts)
+# Usage: app/test/update/run.sh [release] [install] [app] [settings]     (default: all four parts)
 #   release   app/release.sh in a temporary copy of this repo. It builds the app for both architectures (slow).
 #   install   install-app.sh on a simulated new Mac: the access check first, then the newest app release.
 #   app       the app updates itself, starts its current version without access, and rolls back a failed update.
+#   settings  "Check for updates" and "Update now" of a chat page: the app updates while tabs are open and opens
+#             the same tabs again (sessions resumed, project, name, unsent text), also after a roll back.
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables and calls in it.
 # shellcheck disable=SC2016,SC2034,SC2119,SC2120
@@ -17,7 +20,7 @@ APP_DIR="$(cd "$TEST_DIR/../.." && pwd)"
 REPO_DIR="$(dirname "$APP_DIR")"
 SIM_DIR="$APP_DIR/test/sim"
 BUNDLE_ID="io.github.theo-henry.zeus"
-PARTS="${*:-release install app}"
+PARTS="${*:-release install app settings}"
 
 # The real path (/private/var, not /var): the app copies that macOS starts run from it, and pgrep sees that path.
 WORK="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/zeus-update-test.XXXXXX")" && pwd -P)"
@@ -82,7 +85,7 @@ publish() {
 
 app_version() { /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null; }
 
-if wants install || wants app; then
+if wants install || wants app || wants settings; then
   echo "Building the development app"
   DEV_APP="$("$APP_DIR/dev-bundle.sh" 2>/dev/null | tail -1)"
 fi
@@ -199,9 +202,7 @@ if wants install; then
 fi
 
 # ---------------------------------------------------------------------------------------------------------
-if wants app; then
-  echo
-  echo "Part 3: the app updates itself at launch"
+if wants app || wants settings; then
   BIN="$WORK/bin"
   mkdir -p "$BIN"
   cat >"$WORK/act.swift" <<'SWIFT'
@@ -264,6 +265,11 @@ SWIFT
       if [ "$waited" -ge $((limit * 2)) ]; then echo "    (timed out waiting for: $1)"; return 1; fi
     done
   }
+fi
+
+if wants app; then
+  echo
+  echo "Part 3: the app updates itself at launch"
 
   app_case update 1.0.0
   releases "$STATE" "v5.0.0:false:false" "app-v1.0.0:false:false" "app-v1.1.0:false:false" "app-v1.2.0:true:false"
@@ -331,6 +337,163 @@ SWIFT
   check "the new copy was stopped and the update files are removed" \
     'wait_until rollback_cleaned 30'
   quit_all
+fi
+
+# ---------------------------------------------------------------------------------------------------------
+if wants settings; then
+  echo
+  echo "Part 4: the update from the settings of a Zeus page"
+  REAL_NODE="$(command -v node)"
+  # chat_case <name> <installed version>: an app case after the Zeus setup, with a simulated zeus that serves a chat page.
+  chat_case() {
+    app_case "$1" "$2"
+    mkdir -p "$SANDBOX/Code/zeus"
+    printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$REAL_NODE" "$SIM_DIR/payload/zeus.mjs" >"$SANDBOX/.local/bin/zeus"
+    chmod +x "$SANDBOX/.local/bin/zeus"
+    defaults write "$BUNDLE_ID" setupDone -bool true
+  }
+  act() { "$BIN/act" "$1"; }
+  # wait_count <trace pattern> <count> [seconds]
+  wait_count() {
+    local pattern="$1" count="$2" limit="${3:-60}" waited=0 found
+    while found="$(grep -c -- "$pattern" "$TRACE" 2>/dev/null || true)"; [ "${found:-0}" -lt "$count" ]; do
+      sleep 0.5
+      waited=$((waited + 1))
+      if [ "$waited" -ge $((limit * 2)) ]; then echo "    (timed out waiting for $count x: $pattern)"; return 1; fi
+    done
+  }
+  # update_page_has <text>...: the chat page of the last tab writes its last update event into the trace, and it has each text.
+  # page_has <text>: the page has window.zeusApp.update with this text.
+  page_has() {
+    local before
+    before="$(grep -c "update page: " "$TRACE" || true)"
+    act test-update-page
+    wait_count "update page: " $((before + 1)) 10 >/dev/null && grep "update page: " "$TRACE" | tail -1 | grep -qF -- "$1"
+  }
+  update_page_has() {
+    local before line text
+    before="$(grep -c "update page: " "$TRACE" || true)"
+    act test-update-page
+    wait_count "update page: " $((before + 1)) 10 >/dev/null || return 1
+    line="$(grep "update page: " "$TRACE" | tail -1 | sed 's/.*"events":\[//; s/.*},{//')"
+    for text in "$@"; do printf '%s' "$line" | grep -qF -- "$text" || { echo "    (no $text in: $line)"; return 1; }; done
+  }
+  # Tabs with unsent text make the quit ask first; a quit of macOS (log out) asks nothing.
+  quit_chats() {
+    local waited=0
+    act quit
+    while [ "$(copies)" != 0 ] && ! grep -q "quit deferred" "$TRACE" && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
+    if grep -q "quit deferred" "$TRACE"; then act test-power-off; fi
+    quit_all
+  }
+  sessions_with() { grep -c " $1 " "$STATE/sessions" 2>/dev/null || true; }
+  # The session ids that the first copy's sessions had, in the order they started.
+  first_ids() { grep " session " "$STATE/sessions" | head -"$1" | awk '{print $3}' | sort | tr '\n' ' '; }
+  resumed_ids() { grep " resume " "$STATE/sessions" | awk '{print $3}' | sort | tr '\n' ' '; }
+  three_stopped() { [ "$(sessions_with stop)" = 3 ]; }
+  # The text came in as terminal input of a resumed session, without Enter.
+  resumed_terminal_has() {
+    local pid
+    for pid in $(grep " resume " "$STATE/sessions" | awk '{print $1}'); do
+      grep -q "^$pid input $(printf %s "$1" | xxd -p)$" "$STATE/sessions" && return 0
+    done
+    return 1
+  }
+  # Three tabs: Solvias with the tab name "Solvias QA"; unsent text in the message box; a busy turn, an open
+  # terminal, and unsent text in the terminal.
+  three_tabs() {
+    wait_count "state: running" 1 60 && wait_count "hand-over" 1 30 || return 1
+    act test-pick-project:Solvias
+    act test-rename-open
+    act "test-rename-save:Solvias QA"
+    act new-chat
+    wait_count "state: running" 2 60 && wait_count "hand-over" 2 30 || return 1
+    act test-draft
+    act new-chat
+    wait_count "state: running" 3 60 && wait_count "hand-over" 3 30 || return 1
+    act toggle-terminal
+    sleep 1
+    act "test-terminal-type:ls -la"
+    act test-draft
+    act test-send
+    sleep 0.5
+    act test-draft
+  }
+
+  chat_case settings 1.0.0
+  releases "$STATE" "app-v1.0.0:false:false"
+  launch ZEUS_SIM_TURN_MS=8000
+  check "the app is up to date at launch and opens the chat" 'wait_for "update: none (up to date)" 60 && wait_count "state: running" 1 60'
+  check "every Zeus page has window.zeusApp.update" 'wait_count "hand-over" 1 30 && page_has "{\"version\":1,"'
+  act 'test-post:{"type":"app-update-check"}'
+  check "Check for updates: the page gets the newest app release and no update" \
+    'wait_for "app update: answer 1.0.0 available=false" 30 && update_page_has "\"type\":\"app-update\"" "\"current\":\"1.0.0\"" "\"latest\":\"1.0.0\"" "\"notes\":null" "\"available\":false"'
+  releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false" "app-v1.2.0:true:false"
+  publish "$STATE" app-v1.1.0 1.1.0
+  act 'test-post:{"type":"app-update-check"}'
+  check "after a new release, the page gets its version and its notes (not drafts)" \
+    'wait_for "app update: answer 1.1.0 available=true" 30 && update_page_has "\"latest\":\"1.1.0\"" "\"notes\":\"Zeus 1.1.0\\n\\nnotes\"" "\"available\":true"'
+  check "the check downloads nothing" '! grep -q "release download" "$STATE/gh.log"'
+  check "three tabs open: a project with a tab name, unsent text, and a busy turn with unsent terminal text" 'three_tabs'
+  act 'test-post:{"type":"app-update-apply"}'
+  check "Update now downloads and checks the new version" 'wait_for "app update: progress downloading" 60 && wait_for "update: downloading app-v1.1.0" 60'
+  check "the update waits for the busy tab" 'wait_for "app update: waiting for 1 busy tabs" 60 && ! grep -q "update: ending" "$TRACE"'
+  check "the pages get the progress" 'update_page_has "\"type\":\"app-update-progress\"" "\"state\":\"waiting\"" "\"version\":\"1.1.0\"" "\"busy\":1"'
+  check "the turn ends before the update goes on" 'wait_for "update: ending 3 tabs for 1.1.0" 60 && [ "$(sessions_with reply)" = 1 ]'
+  check "it keeps each tab's session, project, name, and unsent text" \
+    'grep -q "snapshot: .* project=Solvias draft=0 terminal-draft=0" "$TRACE" && grep -q "snapshot: .* draft=14 terminal-draft=0" "$TRACE" &&
+     grep -q "snapshot: .* draft=14 terminal-draft=6" "$TRACE" && [ "$(grep -c "snapshot: .* session=[0-9a-f-]\{36\}" "$TRACE")" = 3 ]'
+  check "it shows the loading screen while it installs" 'grep -q "update window: Installing Zeus 1.1.0…" "$TRACE"'
+  check "it ends every session of the old copy" 'wait_until three_stopped 30'
+  check "the new copy starts and confirms the update" 'wait_for "update: confirmed 1.0.0 -> 1.1.0" 120 && wait_for "update: done 1.0.0 -> 1.1.0" 120'
+  check "the app is now version 1.1.0 and the old copy has quit" \
+    '[ "$(app_version "$APPS/Zeus.app")" = 1.1.0 ] && sleep 1 && ! kill -0 "$APP_PID" 2>/dev/null && grep -q "launched: version=1.1.0" "$TRACE"'
+  check "the new copy opens the same three tabs" 'wait_for "restore: 3 tabs in 1 windows" 60 && wait_count "state: running" 6 60'
+  check "each tab resumes its own Claude Code session" 'wait_count "resume=.* ok" 3 60 && [ "$(resumed_ids)" = "$(first_ids 3)" ]'
+  check "the tab keeps its project and its name" 'wait_for "tab name: Solvias QA project=Solvias custom=Solvias QA" 30 && [ "$(grep -c "tab name: Solvias QA project=Solvias custom=Solvias QA" "$TRACE")" -ge 2 ]'
+  check "the unsent text goes back into the message boxes" 'wait_count "message box text back=true" 2 60'
+  check "the unsent terminal text goes back into the terminal, without Enter" \
+    'wait_for "terminal text back" 60 && sleep 1 && resumed_terminal_has "ls -la"'
+  check "the restore file is removed" '[ ! -e "$SUPPORT/restore.json" ] && [ ! -e "$SUPPORT/update.json" ]'
+  check "one copy of the app runs" '[ "$(copies)" = 1 ]'
+  quit_chats
+
+  chat_case settings-current 1.1.0
+  releases "$STATE" "app-v1.1.0:false:false"
+  launch
+  check "an app that is up to date opens the chat" 'wait_for "update: none (up to date)" 60 && wait_count "state: running" 1 60 && wait_count "hand-over" 1 30'
+  act 'test-post:{"type":"app-update-apply"}'
+  check "Update now says that the app is on the latest version and changes nothing" \
+    'wait_for "app update: none (up to date)" 30 && update_page_has "\"type\":\"app-update-failed\"" "\"error\":\"up-to-date\"" &&
+     [ "$(sessions_with stop)" = 0 ] && [ "$(app_version "$APPS/Zeus.app")" = 1.1.0 ]'
+  quit_chats
+
+  chat_case settings-noaccess 1.0.0
+  releases "$STATE" "app-v1.0.0:false:false"
+  launch
+  check "without access, the app opens the chat" 'wait_count "state: running" 1 60 && wait_count "hand-over" 1 30'
+  rm "$STATE/releases.json"
+  act 'test-post:{"type":"app-update-check"}'
+  check "Check for updates without an answer from GitHub says so" \
+    'wait_for "app update: answer - available=false error=unreachable" 30 && update_page_has "\"error\":\"unreachable\""'
+  quit_chats
+
+  chat_case settings-rollback 1.0.0
+  releases "$STATE" "app-v1.0.0:false:false"
+  launch ZEUS_APP_TEST_NO_CONFIRM=1
+  check "the app opens the chat" 'wait_for "update: none (up to date)" 60 && wait_count "state: running" 1 60'
+  releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false"
+  publish "$STATE" app-v1.1.0 1.1.0
+  check "two tabs open, one with unsent text" 'wait_count "hand-over" 1 30 && act new-chat && wait_count "state: running" 2 60 && wait_count "hand-over" 2 30 && act test-draft'
+  act 'test-post:{"type":"app-update-apply"}'
+  check "when the new copy does not confirm, the old copy is put back" 'wait_for "update: rolled back to 1.0.0" 120'
+  check "the old copy opens the same tabs again, with their sessions and unsent text" \
+    'wait_for "update: tabs open again after the failed update to 1.1.0" 30 && wait_count "resume=.* ok" 2 60 && [ "$(resumed_ids)" = "$(first_ids 2)" ] &&
+     wait_count "message box text back=true" 1 60'
+  check "the app in Applications is version 1.0.0 again, and the old copy runs" \
+    '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && kill -0 "$APP_PID" 2>/dev/null'
+  check "the new copy was stopped and the update files are removed" 'wait_until rollback_cleaned 30 && [ ! -e "$SUPPORT/restore.json" ]'
+  quit_chats
 fi
 
 echo

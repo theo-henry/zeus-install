@@ -12,6 +12,23 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   After the confirmation, it removes the old copy and quits; without it, it stops the new copy, swaps the old app back, and starts as before.
   Offline, without `gh`, without access, or with any error, the app starts its current version and shows nothing.
   Development versions (such as `0.0.0-dev`), a read-only app folder, and `ZEUS_APP_NO_UPDATE=1` turn the check off.
+- **Update from the settings.** **Check for updates** and **Update now** in the settings of the chat and Zeus Editor pages ask the app about the app (`Sources/Zeus/AppUpdate.swift`).
+  At document start, every Zeus page gets `window.zeusApp.update = {version: 1}`.
+  A page posts `{type: "app-update-check"}` to `window.webkit.messageHandlers.zeusApp`; the app asks the zeus repo for its `app-v` releases (as at launch, but it waits up to 20 s)
+  and answers in that page with `window.zeusApp.onUpdateEvent({type: "app-update", current, latest, notes, available, error?, message?})`.
+  `latest` is the newest app release (or null), `notes` has the release notes of each release newer than `current` (or null), and `available` is true when the app can install `latest` now.
+  `error` is `no-gh`, `unreachable` (no answer from GitHub, or no access), `no-release`, `development` (a development build), or `cannot-update` (a read-only app folder, or `ZEUS_APP_NO_UPDATE=1`), and `message` says it in words.
+  A page posts `{type: "app-update-apply"}` for **Update now**. The app downloads and checks the newest release as at launch, while the user keeps working.
+  Then it waits until Zeus works in no tab (a turn, a question or permission prompt in a turn, a message on its way, or a start).
+  Then it keeps each tab, shows the loading screen with "Installing Zeus X.Y.Z…" in the place of the front chat window, ends every session, swaps the app, and opens the new copy.
+  The new copy opens the same tabs in the same windows: each tab starts `zeus` again, restarts its Claude Code session with `--resume` through the control socket of the launch
+  (`{op: "restart", resume: <session id>}`, zeus-editor `packages/launcher/control.js`), and then shows the chat.
+  The tab keeps its project, its name, its open terminal, the unsent text of the message box (`#zeus-message`), and the unsent text of the terminal (typed back without Enter).
+  Attachments that were not sent are not kept.
+  The tabs are in `~/Library/Application Support/Zeus/restore.json` until the new copy reads them.
+  When the new copy does not confirm, the old copy is put back, opens the same tabs again, and says that the new version did not start.
+  On the way, each chat page and the page that asked get `{type: "app-update-progress", state: "checking" | "downloading" | "waiting" | "installing", version?, busy?}`
+  (`busy`: the number of tabs that the update waits for), or `{type: "app-update-failed", error, message}` with `error` `up-to-date`, `download-failed`, or one of the check errors.
 - **Setup window.** The first start runs the bundled `install.sh` in app mode in a hidden terminal.
   `install.sh --check` ticks the steps that are already done. The window shows the installer output,
   an Accept button for the Anaconda license, the GitHub one-time code, a link for the Claude login, and a field for any other answer.
@@ -23,7 +40,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   A tab has the name of the project that its chat shows, or **Project** without a project.
   Right-click a tab and choose **Rename Tab…** to give it a name: Return saves, Escape cancels, and an empty name gives back the project name.
   A renamed tab keeps its name when the project changes.
-  The app does not keep tab names after it quits.
+  The app does not keep tab names after it quits, but it keeps them across an update from the settings.
   The chat page tells the app its project with `window.webkit.messageHandlers.zeusApp.postMessage({type: "project", name})` (`name` is null without a project);
   for chat pages that do not send it, the app reads the project button of the chat.
   Cmd+J shows or hides the live terminal of the tab, for login prompts, slash commands, or debugging.
@@ -100,7 +117,7 @@ It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in t
 `ZEUS_APP_TRACE=/path/to/file` adds setup events, update events, session states, and page loads to the end of that file.
 `ZEUS_APP_REPO=owner/name` replaces the repo of the app releases, as in `install.sh`.
 `ZEUS_APP_NO_UPDATE=1` turns off the update check at start.
-`ZEUS_APP_TEST_NO_CONFIRM=1` (debug builds) makes the new copy of an update not confirm, so that the old copy rolls back.
+`ZEUS_APP_TEST_NO_CONFIRM=1` (debug builds) makes the new copy of an update not confirm, so that the old copy rolls back. That copy then starts nothing.
 `ZEUS_APP_INSTALLER=/path/to/install.sh` replaces the bundled installer.
 `ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
 `ZEUS_APP_TEST_SPEECH=1` (debug builds) replaces Apple's speech recognition with a simulated recognizer that "hears" "Hello Zeus" (`denied`: no permission).
@@ -125,7 +142,7 @@ It sends 1 MiB to a raw-mode terminal and checks that every byte arrives, that a
 ## Test the releases and the self-update
 
 ```bash
-app/test/update/run.sh [release] [install] [app]
+app/test/update/run.sh [release] [install] [app] [settings]
 ```
 
 GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is made, and nothing is downloaded.
@@ -137,6 +154,12 @@ GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is mad
 3. `app`: the app updates itself from 1.0.0 to 1.1.0, restarts in the new version, and keeps the user state;
    it starts its current version when it is up to date, without access, or when the download is damaged or is not Zeus;
    when the new copy does not confirm, the old copy is put back.
+4. `settings`: with a simulated `zeus` (`app/test/sim/payload/zeus.mjs`, with a launch record and a control socket), a chat page asks
+   **Check for updates**: no update, then a new release with its notes (not drafts), and no answer from GitHub.
+   **Update now** with three tabs (a project with a tab name, unsent text, and a busy turn with an open terminal and unsent terminal text)
+   downloads 1.1.0, waits for the turn, keeps the tabs, ends the sessions, and swaps the app; the new copy opens the three tabs,
+   resumes each Claude Code session, and puts back the project, the name, and the unsent text of the message box and of the terminal.
+   **Update now** on the latest version changes nothing; when the new copy does not confirm, the old copy is put back and opens the same tabs again.
 
 ## Test the plugin scope
 

@@ -35,12 +35,13 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         return configuration
     }
 
-    /// Runs at document start in every Zeus page: `window.zeusApp.speech` (speech to text, see `SpeechService`) and
-    /// `window.zeusApp.shortcuts` (the app action ids of the settings, see `ShortcutSettings`).
+    /// Runs at document start in every Zeus page: `window.zeusApp.speech` (speech to text, see `SpeechService`),
+    /// `window.zeusApp.shortcuts` (the app action ids of the settings, see `ShortcutSettings`), and
+    /// `window.zeusApp.update` (the app update of the settings, see `AppUpdate`).
     /// A page that replaces `window.zeusApp` (for its close check) keeps them: the property gives back
     /// the page's object with them added.
     static let pageBridgeScript: WKUserScript = {
-        let info: [String: Any] = ["speech": SpeechService.pageInfo, "shortcuts": ShortcutSettings.pageInfo]
+        let info: [String: Any] = ["speech": SpeechService.pageInfo, "shortcuts": ShortcutSettings.pageInfo, "update": AppUpdate.pageInfo]
         let json = String(decoding: (try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys])) ?? Data("{}".utf8),
                           as: UTF8.self)
         return WKUserScript(source: """
@@ -256,6 +257,8 @@ private final class ScriptBridge: NSObject, WKScriptMessageHandler {
         if SpeechService.shared.handle(message.body, from: message.webView) { return }
         // A page saved the settings: the app shortcuts apply at once, also from a Zeus Editor pop-up of a closed chat tab.
         if ShortcutSettings.shared.handle(message.body) { return }
+        // "Check for updates" and "Update now" in the settings: the answer goes to the page that asked.
+        if AppUpdate.shared.handle(message.body, from: message.webView) { return }
         handler?.onScriptMessage?(message.body)
     }
 }

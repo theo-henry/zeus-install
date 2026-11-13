@@ -4,7 +4,8 @@ import Darwin
 import Foundation
 
 /// Updates the app from the Zeus app releases in the private zeus repo (tags "app-v<version>", made by
-/// app/release.sh). It runs once at launch, before any Zeus session starts, and never during a session.
+/// app/release.sh). It runs at launch, before any Zeus session starts, and when the user asks for it in the
+/// settings of a Zeus page (`AppUpdate`), which first ends the sessions and the new copy opens the same tabs again.
 ///
 /// It uses the user's own GitHub CLI login, so the app holds no token and only an account with access
 /// gets an update. Offline, without gh, without access, or with any error, the app starts its current
@@ -17,6 +18,8 @@ enum Updater {
     /// ZEUS_APP_REPO replaces the repo (for tests), as in install.sh.
     static var repo: String { ProcessInfo.processInfo.environment["ZEUS_APP_REPO"] ?? "theo-henry/zeus" }
     static let checkTimeout: TimeInterval = 5
+    /// The check that the user starts in the settings waits longer than the check at launch.
+    static let userCheckTimeout: TimeInterval = 20
     static let downloadTimeout: TimeInterval = 300
     /// The time that the new copy has to start and confirm the update.
     static let confirmTimeout: TimeInterval = 20
@@ -56,11 +59,19 @@ enum Updater {
 
     // MARK: The new copy
 
-    /// Called first at launch. Returns true when this copy is the new version of an update: it confirms
-    /// the update to the old copy, which then removes the old app and quits.
-    @discardableResult
-    static func confirmPendingUpdate() -> Bool {
-        guard let pending = readPending() else { return false }
+    enum LaunchRole {
+        /// A normal launch.
+        case normal
+        /// The new version of an update: it confirmed the update to the old copy, which then removes the old app and quits.
+        case newCopy
+        /// The new version of an update that does not confirm (ZEUS_APP_TEST_NO_CONFIRM, debug builds):
+        /// it starts nothing and waits until the old copy stops it.
+        case unconfirmed
+    }
+
+    /// Called first at launch.
+    static func confirmPendingUpdate() -> LaunchRole {
+        guard let pending = readPending() else { return .normal }
         let bundlePath = Bundle.main.bundleURL.standardizedFileURL.path
         let oldCopyRuns = kill(pending.waitingPID, 0) == 0
         if pending.to == currentVersion, pending.appPath == bundlePath {
@@ -70,7 +81,7 @@ enum Updater {
             #if DEBUG
             if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_NO_CONFIRM"] == "1" {
                 Trace.log("update: not confirmed (test)")
-                return true
+                return .unconfirmed
             }
             #endif
             if oldCopyRuns {
@@ -83,14 +94,14 @@ enum Updater {
                 Trace.log("update: finished \(pending.from) -> \(pending.to) without the old copy")
                 removeUpdateFiles(pending)
             }
-            return true
+            return .newCopy
         }
         if !oldCopyRuns {
             // A stopped update: the app is the old copy again, or the update files are left from an earlier launch.
             Trace.log("update: removed the files of a stopped update to \(pending.to)")
             if FileManager.default.fileExists(atPath: pending.appPath) { removeUpdateFiles(pending) }
         }
-        return false
+        return .normal
     }
 
     private static func removeUpdateFiles(_ pending: Pending) {
@@ -107,7 +118,9 @@ enum Updater {
         guard let reason = skipReason() else {
             UpdateWindow.shared.show()
             DispatchQueue.global(qos: .userInitiated).async {
-                let result = checkAndDownload()
+                let result = checkAndDownload(timeout: checkTimeout) { version in
+                    DispatchQueue.main.async { UpdateWindow.shared.showDownload(version: version) }
+                }
                 DispatchQueue.main.async {
                     switch result {
                     case .none(let why):
@@ -126,7 +139,7 @@ enum Updater {
     }
 
     /// Why this copy does not update itself, or nil when it does.
-    private static func skipReason() -> String? {
+    static func skipReason() -> String? {
         let env = ProcessInfo.processInfo.environment
         if env["ZEUS_APP_NO_UPDATE"] == "1" { return "ZEUS_APP_NO_UPDATE" }
         guard Version(currentVersion) != nil else { return "development version \(currentVersion)" }
@@ -138,36 +151,61 @@ enum Updater {
         return nil
     }
 
-    private struct Update {
+    struct Update {
         let version: String
         let work: URL
         /// The new Zeus.app, checked, in a folder on the same volume as the app.
         let app: URL
     }
 
-    private enum CheckResult {
+    enum CheckResult {
         case none(String)
         case ready(Update)
     }
 
-    /// Off the main queue: finds the newest release, then downloads and checks it.
-    private static func checkAndDownload() -> CheckResult {
-        guard let gh = findGH() else { return .none("no gh") }
-        guard let current = Version(currentVersion) else { return .none("version \(currentVersion)") }
+    /// One app release: its version and its release notes.
+    struct Release {
+        let version: Version
+        let notes: String
+    }
+
+    enum ReleaseList {
+        case failed(String)
+        case releases([Release])
+    }
+
+    /// Off the main queue: the app releases (not drafts or pre-releases) of the zeus repo, newest first.
+    static func listReleases(timeout: TimeInterval) -> ReleaseList {
+        guard let gh = findGH() else { return .failed("no gh") }
         let list = run(gh, ["api", "repos/\(repo)/releases?per_page=100",
-                            "--jq", ".[] | select((.draft or .prerelease) | not) | .tag_name"], timeout: checkTimeout)
-        guard list.status == 0 else { return .none("no release list: status \(list.status)") }
-        let newest = list.output.split(separator: "\n")
-            .compactMap { line -> Version? in
-                guard line.hasPrefix(tagPrefix) else { return nil }
-                return Version(String(line.dropFirst(tagPrefix.count)))
-            }
-            .max()
-        guard let newest else { return .none("no app release") }
+                            "--jq", "[.[] | select((.draft or .prerelease) | not) | {tag: .tag_name, notes: (.body // \"\")}]"],
+                       timeout: timeout)
+        guard list.status == 0 else { return .failed("no release list: status \(list.status)") }
+        guard let entries = (try? JSONSerialization.jsonObject(with: Data(list.output.utf8))) as? [[String: Any]] else {
+            return .failed("no release list: not JSON")
+        }
+        let releases = entries.compactMap { entry -> Release? in
+            guard let tag = entry["tag"] as? String, tag.hasPrefix(tagPrefix),
+                  let version = Version(String(tag.dropFirst(tagPrefix.count))) else { return nil }
+            return Release(version: version, notes: entry["notes"] as? String ?? "")
+        }
+        return .releases(releases.sorted { $0.version > $1.version })
+    }
+
+    /// Off the main queue: finds the newest release, then downloads and checks it. `onDownload` gets the
+    /// version before the download starts.
+    static func checkAndDownload(timeout: TimeInterval, onDownload: (String) -> Void) -> CheckResult {
+        guard let current = Version(currentVersion) else { return .none("version \(currentVersion)") }
+        let releases: [Release]
+        switch listReleases(timeout: timeout) {
+        case .failed(let why): return .none(why)
+        case .releases(let list): releases = list
+        }
+        guard let newest = releases.first?.version else { return .none("no app release") }
         Trace.log("update: current=\(currentVersion) newest=\(newest)")
         guard newest > current else { return .none("up to date") }
 
-        DispatchQueue.main.async { UpdateWindow.shared.showDownload(version: newest.description) }
+        onDownload(newest.description)
         let fileManager = FileManager.default
         let bundle = Bundle.main.bundleURL.standardizedFileURL
         // A folder on the same volume as the app, so that the swap is one rename.
@@ -179,6 +217,7 @@ enum Updater {
             try? fileManager.removeItem(at: work)
             return .none("failed: \(why)")
         }
+        guard let gh = findGH() else { return failed("no gh") }
         let tag = tagPrefix + newest.description
         Trace.log("update: downloading \(tag) to \(work.path)")
         let download = run(gh, ["release", "download", tag, "-R", repo, "-p", "Zeus.zip", "-p", "Zeus.zip.sha256",
@@ -208,7 +247,8 @@ enum Updater {
     }
 
     /// On the main queue: swaps the new app in, starts it, and waits for its confirmation.
-    private static func install(_ update: Update, done: @escaping (Bool) -> Void) {
+    /// Calls `done(true)` before this copy quits, or `done(false)` after a roll back.
+    static func install(_ update: Update, done: @escaping (Bool) -> Void) {
         let fileManager = FileManager.default
         let bundle = Bundle.main.bundleURL.standardizedFileURL
         let backup = update.work.appendingPathComponent("previous")
@@ -239,9 +279,16 @@ enum Updater {
         Trace.log("update: installed \(update.version), starting it")
 
         // Puts the old app back when the new app does not start.
+        // The handle that `openApplication` gives is not reliable (it can say "terminated" while the new copy runs),
+        // so the new copy is stopped by its process ID and by its path: every other copy of the app at this path.
         let rollBack: (String, NSRunningApplication?) -> Void = { why, newApp in
-            newApp?.forceTerminate()
-            if let pid = readPending()?.newPID { kill(pid, SIGKILL) }
+            var copies = Set(NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+                .filter { $0.bundleURL?.standardizedFileURL.path == bundle.path }
+                .map(\.processIdentifier))
+            if let pid = readPending()?.newPID { copies.insert(pid) }
+            if let pid = newApp?.processIdentifier, pid > 0 { copies.insert(pid) }
+            copies.remove(getpid())
+            for pid in copies where pid > 0 { kill(pid, SIGKILL) }
             // The new app goes to the update folder, which `finish` removes.
             if swap(URL(fileURLWithPath: pending.backupPath), bundle) {
                 Trace.log("update: rolled back to \(currentVersion)")
@@ -341,14 +388,19 @@ struct Version: Comparable, CustomStringConvertible {
 }
 
 /// The window that shows the loading screen (the Zeus globe) while the app checks for an update and
-/// downloads it, before Zeus starts. It has the place and size of the chat window.
+/// downloads it, before Zeus starts, and while an update from the settings installs.
+/// It has the place and size of the chat window.
 final class UpdateWindow {
     static let shared = UpdateWindow()
     private var window: NSWindow?
     private var loader: LoaderOverlay?
 
-    func show() {
-        guard window == nil else { return }
+    /// `frame`: the place of the chat window that the loading screen replaces.
+    func show(status: String = "Checking for updates…", frame: NSRect? = nil) {
+        guard window == nil else {
+            setStatus(status)
+            return
+        }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
                               styleMask: [.titled, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
@@ -360,7 +412,7 @@ final class UpdateWindow {
         window.isReleasedWhenClosed = false
         // The globe has the same place as in the chat window, below the space of the tabs.
         let content = NSView()
-        let loader = LoaderOverlay(frame: .zero, status: "Checking for updates…")
+        let loader = LoaderOverlay(frame: .zero, status: status)
         loader.view.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(loader.view)
         window.contentView = content
@@ -370,16 +422,25 @@ final class UpdateWindow {
             loader.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             loader.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
-        if !window.setFrameUsingName("ZeusChatWindow") { window.center() }
+        if let frame {
+            window.setFrame(frame, display: false)
+        } else if !window.setFrameUsingName("ZeusChatWindow") {
+            window.center()
+        }
         self.window = window
         self.loader = loader
         bringForward()
-        Trace.log("update window: checking")
+        Trace.log(status == "Checking for updates…" ? "update window: checking" : "update window: \(status)")
     }
 
     func showDownload(version: String) {
         loader?.setStatus("Downloading Zeus \(version)…")
         Trace.log("update window: downloading \(version)")
+    }
+
+    func setStatus(_ status: String) {
+        loader?.setStatus(status)
+        Trace.log("update window: \(status)")
     }
 
     func bringForward() {
