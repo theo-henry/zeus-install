@@ -120,15 +120,20 @@ Without the app:
 3. Type `claude` and press Enter.
    Log in to Claude in the browser the first time.
 4. The Zeus Editor needs Node.js 22 or later.
-5. In Claude, type these three commands:
+5. Close Claude (Ctrl + C two times) and type these commands.
+   `--scope user` installs the plugins for you, not in the Zeus folder.
+   A plugin installed in the Zeus folder changes its `.claude/settings.json`, and then Zeus cannot update itself.
 
 ```text
-/plugin install celonis-yaml-builder@yaml-builder
-/plugin install celonis-ocpm@celonis-ocpm
-/plugin install celonis-pql@celonis-pql
+claude plugin marketplace add theo-henry/YAML-builder --scope user
+claude plugin install celonis-yaml-builder@yaml-builder --scope user
+claude plugin marketplace add theo-henry/celonis-ocpm --scope user
+claude plugin install celonis-ocpm@celonis-ocpm --scope user
+claude plugin marketplace add theo-henry/celonis-pql --scope user
+claude plugin install celonis-pql@celonis-pql --scope user
 ```
 
-6. Close Claude (Ctrl + C two times) and open a new Terminal window.
+6. Open a new Terminal window.
 7. Type `zeus` and press Enter.
    The `zeus` command starts Claude Code with the Zeus Editor and opens the chat page.
    When the Zeus Editor plugin is not installed, the command tells you to run the install line again.

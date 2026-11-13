@@ -113,6 +113,17 @@ GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is mad
    it starts its current version when it is up to date, without access, or when the download is damaged or is not Zeus;
    when the new copy does not confirm, the old copy is put back.
 
+## Test the plugin scope
+
+```bash
+app/test/plugin-scope/run.sh
+```
+
+`install.sh` must add every plugin and marketplace with `--scope user`.
+At project scope, Claude Code writes the tracked `.claude/settings.json` of the Zeus folder again, and then `git pull --ff-only` cannot update Zeus.
+The test runs the plugin steps of `install.sh` and the commands in its next steps against a simulated `claude` in a Zeus folder.
+It checks that each plugin install, update, and marketplace add uses `--scope user` and that `.claude/settings.json` does not change.
+
 ## Test on a simulated new Mac
 
 ```bash
