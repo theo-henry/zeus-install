@@ -23,6 +23,8 @@ PARTS="${*:-release install app}"
 WORK="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/zeus-update-test.XXXXXX")" && pwd -P)"
 # Test actions reach only the app copies that this test starts.
 export ZEUS_APP_TEST_ID="update-$$"
+# The app stays behind the windows of other apps and does not take the keyboard (debug builds).
+export ZEUS_APP_TEST_BACKGROUND=1
 
 FAILURES=0
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
@@ -251,6 +253,17 @@ SWIFT
     cp "$TRACE" "$WORK/$NAME.trace" 2>/dev/null || true
   }
   work_folder() { sed -n 's/.*update: downloading [^ ]* to //p' "$TRACE" | head -1; }
+  # The old copy stops the new copy and removes the update files; under load this takes some time.
+  rollback_cleaned() { [ "$(copies)" = 1 ] && [ ! -e "$(work_folder)" ] && [ ! -e "$SUPPORT/update.json" ]; }
+  # wait_until <command> [seconds]: waits until the command succeeds.
+  wait_until() {
+    local waited=0 limit="${2:-60}"
+    until "$1"; do
+      sleep 0.5
+      waited=$((waited + 1))
+      if [ "$waited" -ge $((limit * 2)) ]; then echo "    (timed out waiting for: $1)"; return 1; fi
+    done
+  }
 
   app_case update 1.0.0
   releases "$STATE" "v5.0.0:false:false" "app-v1.0.0:false:false" "app-v1.1.0:false:false" "app-v1.2.0:true:false"
@@ -316,7 +329,7 @@ SWIFT
     '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && codesign --verify --strict "$APPS/Zeus.app"'
   check "the old copy continues and opens the setup window" 'wait_for "setup ended: check=true" 60 && kill -0 "$APP_PID" 2>/dev/null'
   check "the new copy was stopped and the update files are removed" \
-    'sleep 1 && [ "$(copies)" = 1 ] && [ ! -e "$(work_folder)" ] && [ ! -e "$SUPPORT/update.json" ]'
+    'wait_until rollback_cleaned 30'
   quit_all
 fi
 

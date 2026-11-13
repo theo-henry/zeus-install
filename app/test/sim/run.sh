@@ -23,6 +23,8 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
 BIN="$WORK/bin"
 # Test actions reach only the app copy that this test starts, not another running Zeus app.
 export ZEUS_APP_TEST_ID="sim-$$"
+# The app stays behind the windows of other apps and does not take the keyboard (debug builds).
+export ZEUS_APP_TEST_BACKGROUND=1
 mkdir -p "$BIN"
 [ -n "$SHOTS" ] && mkdir -p "$SHOTS"
 

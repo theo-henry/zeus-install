@@ -13,6 +13,7 @@ final class TerminalPanel: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         webView = WKWebView(frame: .zero, configuration: configuration)
+        Front.prepare(webView)
         super.init()
         configuration.userContentController.add(self, name: "terminal")
         webView.navigationDelegate = self

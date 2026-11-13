@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         } else {
             newChat(nil)
         }
-        NSApp.activateZeus()
+        Front.activate()
     }
 
     /// The first start, or a Mac where the zeus command or the workspace has gone.
@@ -158,10 +158,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             .joined(separator: "\n") + "\n\nIf you quit, Zeus stops in every tab."
         alert.addButton(withTitle: "Quit Anyway")
         alert.addButton(withTitle: "Cancel")
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activateZeus()
+        Front.show(window)
+        Front.activate()
         quitQuestionWindow = window
-        alert.beginSheetModal(for: window) { [weak self] response in
+        Front.beginSheet(alert, for: window) { [weak self] response in
             guard let self, self.checkingQuit else { return }
             self.quitQuestionWindow = nil
             if response == .alertSecondButtonReturn {
@@ -211,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             alert.informativeText = error.localizedDescription
             alert.addButton(withTitle: "Run the Zeus Setup")
             alert.addButton(withTitle: "Cancel")
-            NSApp.activateZeus()
+            Front.activate()
             if alert.runModal() == .alertFirstButtonReturn { showSetup(nil) }
         }
     }
@@ -219,8 +219,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func show(_ session: ZeusSession) {
         if let existing = chatTabs.first(where: { $0.session === session }), let host = existing.host {
             host.select(existing)
-            host.window?.makeKeyAndOrderFront(nil)
-            NSApp.activateZeus()
+            Front.show(host.window)
+            Front.activate()
             return
         }
         let tab = ChatTab(session: session)
@@ -242,9 +242,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return window
         }()
         host.add(tab)
-        host.showWindow(nil)
-        host.window?.makeKeyAndOrderFront(nil)
-        NSApp.activateZeus()
+        Front.show(host.window)
+        Front.activate()
     }
 
     /// The key window, or the front window of the app while another app is active.
@@ -255,9 +254,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func showSetup(_ sender: Any?) {
         guard !updating else { return }
         if let setupWindow {
-            setupWindow.showWindow(nil)
-            setupWindow.window?.makeKeyAndOrderFront(nil)
-            NSApp.activateZeus()
+            Front.show(setupWindow.window)
+            Front.activate()
             return
         }
         let controller = SetupWindowController()
@@ -270,9 +268,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: controller.window,
                                                queue: .main) { [weak self] _ in self?.setupWindow = nil }
         setupWindow = controller
-        controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
-        NSApp.activateZeus()
+        Front.show(controller.window)
+        Front.activate()
     }
 
     // MARK: Test actions
@@ -533,16 +530,5 @@ private extension NSMenu {
         let item = NSMenuItem(title: submenu.title, action: nil, keyEquivalent: "")
         item.submenu = submenu
         addItem(item)
-    }
-}
-
-extension NSApplication {
-    /// Brings Zeus in front of the other apps. In debug builds, `ZEUS_APP_TEST_BACKGROUND=1` keeps the app behind
-    /// the other apps, so that a test does not take the screen of the person at the Mac.
-    func activateZeus() {
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_BACKGROUND"] == "1" { return }
-        #endif
-        activate(ignoringOtherApps: true)
     }
 }

@@ -36,6 +36,9 @@ enum Updater {
         var workPath: String
         /// The old copy, which waits for the confirmation.
         var waitingPID: Int32
+        /// The new copy, which writes its process ID at launch. The app that `openApplication` gives can be a
+        /// placeholder without a process (pid -1) while the new copy still starts.
+        var newPID: Int32?
         var confirmed = false
     }
 
@@ -61,6 +64,9 @@ enum Updater {
         let bundlePath = Bundle.main.bundleURL.standardizedFileURL.path
         let oldCopyRuns = kill(pending.waitingPID, 0) == 0
         if pending.to == currentVersion, pending.appPath == bundlePath {
+            var pending = pending
+            pending.newPID = getpid()
+            try? writePending(pending)
             #if DEBUG
             if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_NO_CONFIRM"] == "1" {
                 Trace.log("update: not confirmed (test)")
@@ -235,6 +241,7 @@ enum Updater {
         // Puts the old app back when the new app does not start.
         let rollBack: (String, NSRunningApplication?) -> Void = { why, newApp in
             newApp?.forceTerminate()
+            if let pid = readPending()?.newPID { kill(pid, SIGKILL) }
             // The new app goes to the update folder, which `finish` removes.
             if swap(URL(fileURLWithPath: pending.backupPath), bundle) {
                 Trace.log("update: rolled back to \(currentVersion)")
@@ -248,7 +255,7 @@ enum Updater {
         configuration.createsNewApplicationInstance = true
         // The new copy gets the same environment (HOME, test settings) as this copy.
         configuration.environment = ProcessInfo.processInfo.environment
-        configuration.activates = true
+        configuration.activates = !Front.background
         NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { newApp, error in
             DispatchQueue.main.async {
                 if let error { return rollBack("the new app does not open: \(error.localizedDescription)", newApp) }
@@ -261,9 +268,12 @@ enum Updater {
                         UpdateWindow.shared.close()
                         done(true)
                         NSApp.terminate(nil)
-                    } else if newApp?.isTerminated == true || Date() > deadline {
+                        return
+                    }
+                    let stopped = readPending()?.newPID.map { kill($0, 0) != 0 } ?? false
+                    if stopped || Date() > deadline {
                         timer.invalidate()
-                        rollBack(newApp?.isTerminated == true ? "the new app stopped" : "the new app did not confirm", newApp)
+                        rollBack(stopped ? "the new app stopped" : "the new app did not confirm", newApp)
                     }
                 }
             }
@@ -373,8 +383,8 @@ final class UpdateWindow {
     }
 
     func bringForward() {
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activateZeus()
+        Front.show(window)
+        Front.activate()
     }
 
     func close() {

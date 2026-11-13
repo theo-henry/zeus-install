@@ -472,7 +472,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     static func open(request: URLRequest, configuration: WKWebViewConfiguration) -> WKWebView {
         let controller = EditorWindowController(configuration: configuration)
         open.append(controller)
-        controller.showWindow(nil)
+        Front.show(controller.window)
         return controller.webView
     }
 

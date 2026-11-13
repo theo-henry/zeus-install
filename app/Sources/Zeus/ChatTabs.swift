@@ -169,8 +169,8 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         guard tabs.contains(where: { $0 === tab }), let window else { return }
         select(tab)
         if window.isMiniaturized { window.deminiaturize(nil) }
-        NSApp.activateZeus()
-        window.makeKeyAndOrderFront(nil)
+        Front.activate()
+        Front.show(window)
         window.makeFirstResponder(tab.webView)
         let inPage = (window.firstResponder as? NSView)?.isDescendant(of: tab.webView) ?? false
         Trace.log("chat focused: \(tab.session.pid) \(tab.tabName.title) page-has-keyboard=\(inPage)")
@@ -368,7 +368,7 @@ final class TabStripView: NSView {
     func close(_ tab: ChatTab) { controller?.close(tab) }
 
     @objc private func newTab() {
-        window?.makeKeyAndOrderFront(nil)
+        Front.show(window)
         NSApp.sendAction(#selector(AppDelegate.newChat(_:)), to: nil, from: self)
     }
 }

@@ -42,6 +42,7 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
             return fresh
         }()
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        Front.prepare(webView)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = false
@@ -203,7 +204,7 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
 
     private func present(_ alert: NSAlert, in webView: WKWebView, completion: @escaping (NSApplication.ModalResponse) -> Void) {
         if let window = webView.window {
-            alert.beginSheetModal(for: window, completionHandler: completion)
+            Front.beginSheet(alert, for: window, completion: completion)
         } else {
             completion(alert.runModal())
         }
