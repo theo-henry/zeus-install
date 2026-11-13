@@ -23,10 +23,12 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   When tabs are not safe to close, one question lists them all: **Quit Anyway** or **Cancel**.
   When macOS logs out, restarts, or shuts down, the app asks nothing and closes an open quit question; without a question, the quit ends within 12 s.
   If the app crashes, its hidden terminal closes and `zeus` stops as after a closed Terminal window.
-- **Theme.** The setup window, the startup page, and the status pages use the Zeus chat theme and logo.
-  At startup the logo glows over a thin progress line while `zeus` checks for updates.
-  When the chat opens, the logo breaks into particles over the chat page.
-  With Reduce motion on, the chat opens without the animation.
+- **Theme.** The setup window, the loading screen, and the status pages use the Zeus chat theme.
+  While `zeus` starts, the loading screen shows the Zeus globe with one line of status text, such as "Checking for updates…".
+  When the chat page is ready, the globe moves to the place of the chat page's own globe while the chat comes in behind it.
+  A chat page without a globe (an older Zeus Editor) gets a cross-fade.
+  This hand-over plays only for the first chat after the app starts; later chats (Cmd+T, **Try again**) come in at once when their page is ready.
+  The close banner and the terminal panel stay usable while the loading screen shows.
 - **Links.** Pages on 127.0.0.1 stay in the app (pop-ups open in a new app window). Other links open in the default browser.
 
 ## Build
@@ -49,7 +51,6 @@ Publish `app/build/Zeus.zip` as the `Zeus.zip` asset of a GitHub release of this
 `ZEUS_APP_INSTALLER=/path/to/install.sh` replaces the bundled installer.
 `ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
 `ZEUS_APP_TEST_ID=<id>` (debug builds) makes the test actions reach only this app copy.
-`ZEUS_APP_FORCE_MOTION=1` (debug builds) plays the startup animation also with Reduce motion on.
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.
 The web pages can be inspected with Safari's Develop menu.
@@ -76,8 +77,8 @@ It presses the app's buttons through the debug test actions and checks the trace
 
 1. A new Mac: the check finds 12 steps to do; all 13 steps install, with the Anaconda license, the GitHub
    one-time code, and the Claude login answered in the app; Start Zeus opens the chat page from `~/Code/zeus`
-   with `--no-open`; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
-   Cmd+T tabs start separate sessions; Cmd+J shows the terminal and its input reaches that session;
+   with `--no-open` and the globe hand-over; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
+   Cmd+T tabs start separate sessions and come in without the hand-over; Cmd+J shows the terminal and its input reaches that session;
    a close while Zeus works waits for the turn; closing one tab keeps the others; a chat that cannot answer the close check
    (older editor plugin) waits 3 s, then **Close anyway** closes it; **Close anyway** also stops a busy tab; quitting stops every session.
 2. One tab has unsent text and one tab is busy: a logout that another app cancels changes nothing, a later quit asks about both tabs,

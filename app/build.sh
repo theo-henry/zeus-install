@@ -32,6 +32,8 @@ cp Resources/*.ttf "$BUNDLE/Contents/Resources/"
 cp Resources/*.woff "$BUNDLE/Contents/Resources/"
 cp Resources/zeus-logo.svg "$BUNDLE/Contents/Resources/"
 cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
+# The Zeus globe of the loading screen: the same file as zeus-editor/src/chat/client/globe.js, without "export".
+cp Resources/globe.js "$BUNDLE/Contents/Resources/globe.js"
 # The app runs this copy of the installer, so the app and its installer always match.
 cp "$REPO_DIR/install.sh" "$BUNDLE/Contents/Resources/install.sh"
 printf 'APPL????' >"$BUNDLE/Contents/PkgInfo"

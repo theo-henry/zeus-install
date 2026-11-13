@@ -21,11 +21,6 @@ enum Brand {
     static let nsForeground = NSColor(srgbRed: 241/255, green: 246/255, blue: 249/255, alpha: 1)
     static let nsLine = NSColor(srgbRed: 26/255, green: 58/255, blue: 100/255, alpha: 1)
     static let nsLink = NSColor(srgbRed: 91/255, green: 140/255, blue: 1, alpha: 1)
-    static var logo: String {
-        guard let url = Bundle.main.url(forResource: "zeus-logo", withExtension: "svg"),
-              let svg = try? String(contentsOf: url) else { return "" }
-        return svg
-    }
     static var logoImage: NSImage? {
         Bundle.main.url(forResource: "zeus-logo", withExtension: "svg").flatMap(NSImage.init(contentsOf:))
     }

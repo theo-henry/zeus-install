@@ -241,8 +241,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let testID = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_ID"].map { "." + $0 } ?? ""
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("io.github.theo-henry.zeus.test" + testID),
                                                             object: nil, queue: .main) { [weak self] note in
-            guard let self, let action = note.object as? String else { return }
-            Trace.log("test action: \(action)")
+            guard let self, var action = note.object as? String else { return }
+            // "@<pid> <action>" goes to one copy of the app only.
+            if action.hasPrefix("@") {
+                let parts = action.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
+                guard parts.count == 2, Int32(parts[0]) == ProcessInfo.processInfo.processIdentifier else { return }
+                action = parts[1]
+            }
+            Trace.log("test action: \(action.prefix(60))")
             let model = self.setupWindow?.model
             switch action {
             case "setup-install": model?.install()
@@ -303,6 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSWorkspace.shared.open(URL(fileURLWithPath: Paths.logDir))
     }
 
+    /// The chat page (or editor page) of the front window. A chat window holds it below its loading screen.
     private var keyWebView: WKWebView? {
         (NSApp.keyWindow?.windowController as? ChatWindowController)?.webView ?? (NSApp.keyWindow?.contentView as? WKWebView)
     }

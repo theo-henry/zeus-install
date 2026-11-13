@@ -73,6 +73,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Sends a test action to this test's copy of the app only.
+act() { "$BIN/act" "@$APP_PID $1"; }
+
 shot() {
   [ -n "$SHOTS" ] || return 0
   sleep 0.8
@@ -145,7 +148,7 @@ launch_app() {
 }
 
 stop_app() {
-  "$BIN/act" quit
+  act quit
   local waited=0
   while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
   kill -0 "$APP_PID" 2>/dev/null && { fail "the app quits"; kill "$APP_PID"; } || pass "the app quits"
@@ -155,23 +158,23 @@ stop_app() {
 
 echo
 echo "Scenario 1: a new Mac, full setup, chat, close"
-start_app new ZEUS_SIM_START_DELAY=2500 ZEUS_APP_FORCE_MOTION=1
+start_app new ZEUS_SIM_START_DELAY=2500
 check "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
 check "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
 shot 1-check
 
-"$BIN/act" setup-install
+act setup-install
 check "step 1: the Xcode tools install (simulated system window)" 'wait_for "setup event: done 1 " 40'
 check "step 2: the installer asks for the Anaconda license" 'wait_for "setup event: ask 2 " 20'
 shot 2-anaconda-license
-"$BIN/act" setup-answer-yes
+act setup-answer-yes
 check "step 2: Anaconda installs after Accept" 'wait_for "setup event: done 2 " 30'
 check "step 3: the GitHub CLI installs" 'wait_for "setup event: done 3 " 30'
 check "step 4: the GitHub login starts" 'wait_for "setup event: running 4 " 10'
 sleep 2
 shot 3-github-code
-"$BIN/act" setup-enter
+act setup-enter
 check "step 4: the GitHub login completes after Open GitHub" 'wait_for "setup event: done 4 " 20'
 check "step 5: access to the Zeus repos" 'wait_for "setup event: done 5 " 20'
 check "step 6: Node.js installs" 'wait_for "setup event: done 6 " 30'
@@ -189,7 +192,7 @@ check "the setup finishes" 'wait_for "setup ended: check=false code=0" 20'
 shot 5-finished
 check "the installer wrote only into the simulated home folder" '[ -x "$SANDBOX/.local/bin/zeus" ] && [ -d "$SANDBOX/Code/zeus/.git" ]'
 
-"$BIN/act" setup-start
+act setup-start
 if [ -n "$SHOTS" ]; then
   sleep 0.3
   shot 6-startup
@@ -198,81 +201,83 @@ if [ -n "$SHOTS" ]; then
 fi
 check "Start Zeus starts a hidden zeus session" 'wait_for "state: running(" 30'
 check "the chat page loads in the app window" 'wait_for "page loaded: http://127.0.0.1" 20'
+check "the first chat gets the globe hand-over" 'wait_for "hand-over: globe moves to" 10'
 check "zeus runs in ~/Code/zeus with --no-open" 'grep -q "\"--no-open\"" "$STATE/zeus-started" && grep -q "/Code/zeus\"" "$STATE/zeus-started"'
 shot 6-chat
 # A close with draft text must preserve the same WebView and PTY.
-"$BIN/act" test-draft
+act test-draft
 sleep 0.5
-"$BIN/act" close-chat
+act close-chat
 check "draft text defers tab close" 'wait_for "close deferred: .* composer-draft" 10'
 check "draft session is still running" '[ ! -f "$STATE/zeus-stopped" ]'
 shot 7-draft-close
-"$BIN/act" test-cancel-close
+act test-cancel-close
 check "a pending close can be cancelled" 'wait_for "close cancelled:" 10'
-"$BIN/act" test-clear
+act test-clear
 sleep 1
 check "cancelled close keeps the tab alive" '[ ! -f "$STATE/zeus-stopped" ]'
-"$BIN/act" close-chat
+act close-chat
 check "clearing the draft completes the pending close" 'wait_for "state: ended" 20'
 check "zeus got SIGTERM" '[ "$(cat "$STATE/zeus-stopped" 2>/dev/null)" = SIGTERM ]'
 
 # New tabs must own different PTYs; terminal input must reach only the selected PTY.
-"$BIN/act" test-cmd-t
+act test-cmd-t
 sleep 4
-"$BIN/act" test-cmd-t
+act test-cmd-t
 sleep 4
 check "each new tab starts a separate PTY" '[ "$(grep -c " start " "$STATE/sessions")" = 3 ]'
-"$BIN/act" test-cmd-j
+check "later tabs come in at once, without the globe hand-over" '[ "$(grep -c "hand-over: at once" "$TRACE")" = 2 ] && [ "$(grep -c "hand-over: globe moves" "$TRACE")" = 1 ]'
+act test-cmd-j
 check "the per-tab terminal opens" 'wait_for "terminal visible: .* true" 10'
-"$BIN/act" test-terminal-input
+act test-terminal-input
 sleep 1
 check "xterm input reaches the live PTY" 'grep -q "input 7465726d696e616c2d746573740a" "$STATE/sessions"'
 shot 8-terminal-tabs
-"$BIN/act" test-draft
+act test-draft
 sleep 0.3
-"$BIN/act" test-send
+act test-send
 sleep 0.3
-"$BIN/act" close-chat
+act close-chat
 check "busy work defers tab close" 'wait_for "close deferred: .* busy" 10'
 shot 9-busy-close
 check "the chat turn completes before its PTY stops" 'wait_for "state: ended" 20 && sleep 4 && grep -q "reply Test chat turn" "$STATE/sessions"'
 check "closing one tab preserves the other PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 2 ]'
-"$BIN/act" close-chat
+act close-chat
 sleep 2
 check "an idle tab closes its PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 3 ]'
 
 # A chat that cannot answer the close check (an editor plugin older than the app) must not block the close forever.
 touch "$STATE/no-close-state"
-"$BIN/act" test-cmd-t
+act test-cmd-t
 check "a tab with an older editor plugin starts" 'wait_starts 4'
 rm -f "$STATE/no-close-state"
 check "its chat page opens" 'wait_count "state: running(" 4 20 && sleep 2'
-"$BIN/act" close-chat
+act close-chat
 sleep 1.5
 check "an unanswered close check first waits and keeps the PTY" '! grep -q "close deferred: .* unavailable" "$TRACE" && [ "$(stops)" = 3 ]'
 check "an unanswered close check then offers Close anyway" 'wait_for "close deferred: .* unavailable" 10'
 shot 10-unavailable-close
 sleep 1
 check "the tab stays open until the user decides" '[ "$(stops)" = 3 ]'
-"$BIN/act" test-close-anyway
+act test-close-anyway
 check "Close anyway closes the tab that cannot answer" 'wait_count "state: ended" 4 10 && [ "$(stops)" = 4 ]'
 
 # Close anyway must also override a busy chat.
-"$BIN/act" test-cmd-t
+act test-cmd-t
 check "a new tab opens after Close anyway" 'wait_count "state: running(" 5 20 && sleep 2'
-"$BIN/act" test-draft
+act test-draft
 sleep 0.3
-"$BIN/act" test-send
+act test-send
 sleep 0.3
-"$BIN/act" close-chat
+act close-chat
 check "busy work defers the close of the new tab" 'wait_count "close deferred: .* busy" 2 10'
 shot 11-busy-close-anyway
-"$BIN/act" test-close-anyway
+act test-close-anyway
 check "Close anyway stops a busy tab before its turn ends" 'wait_count "state: ended" 5 10 && [ "$(stops)" = 5 ] && [ "$(grep -c " reply " "$STATE/sessions")" = 1 ]'
 
-"$BIN/act" test-cmd-t
+act test-cmd-t
 sleep 4
-"$BIN/act" test-cmd-t
+act test-cmd-t
 sleep 4
 stop_app
 check "quit stops every remaining PTY" '[ "$(stops)" = 7 ]'
@@ -282,22 +287,22 @@ echo "Scenario 2: a cancelled logout, then a quit and a logout while one tab has
 defaults write "$BUNDLE_ID" setupDone -bool true
 launch_app logout
 check "the app opens a chat at once after the setup" 'wait_for "page loaded: http://127.0.0.1" 30'
-"$BIN/act" test-draft
-"$BIN/act" test-cmd-t
+act test-draft
+act test-cmd-t
 check "a second tab opens" 'wait_count "state: running(" 2 20 && sleep 2'
-"$BIN/act" test-draft
+act test-draft
 sleep 0.3
-"$BIN/act" test-send
+act test-send
 sleep 0.5
 # A logout that another app cancels: macOS warns of the power off, but no quit follows.
-"$BIN/act" test-power-off
+act test-power-off
 check "a power-off warning alone stops nothing" 'wait_for "macOS powers off" 10 && sleep 1 && [ "$(stops)" = 7 ]'
-"$BIN/act" quit
+act quit
 check "a later quit still asks about the unsafe tabs" 'wait_for "quit deferred: " 10 && grep "quit deferred: " "$TRACE" | grep -q composer-draft && grep "quit deferred: " "$TRACE" | grep -q busy'
 shot 12-quit-question
 # A real logout: macOS first warns of the power off, then sends the quit event.
 logout_start=$(date +%s)
-"$BIN/act" test-power-off
+act test-power-off
 "$BIN/logout" "$APP_PID"
 waited=0
 while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 30 ]; do sleep 0.5; waited=$((waited + 1)); done
@@ -314,7 +319,7 @@ touch "$STATE/hung-close-state"
 launch_app logout-event ZEUS_SIM_STOP_DELAY=4000
 check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30'
 rm -f "$STATE/hung-close-state"
-"$BIN/act" quit
+act quit
 sleep 1
 logout_start=$(date +%s)
 "$BIN/logout" "$APP_PID"
@@ -332,9 +337,9 @@ echo
 echo "Scenario 3: the account has no access to one private repo"
 start_app noaccess ZEUS_SIM_NO_ACCESS=theo-henry/celonis-pql
 check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
-"$BIN/act" setup-install
-wait_for "setup event: ask 2 " 40 >/dev/null && "$BIN/act" setup-answer-yes
-wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && "$BIN/act" setup-enter
+act setup-install
+wait_for "setup event: ask 2 " 40 >/dev/null && act setup-answer-yes
+wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && act setup-enter
 check "step 5 fails and names the missing access" 'wait_for "setup event: failed 5 " 40'
 check "the setup stops with an error" 'wait_for "setup ended: check=false code=1" 20'
 shot 7-no-access
