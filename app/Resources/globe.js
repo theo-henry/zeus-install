@@ -3,20 +3,24 @@
 // It runs on the GPU: the vertex shader moves every point, so a frame costs a few uniform updates.
 //
 // The Zeus app (theo-henry/zeus-install, app/Resources/globe.js) shows the same globe on its loading
-// screen and hands over to this one, so keep the two files the same. The turn of the globe comes from
+// screen and hands over to this one, so keep the two files the same. The one difference: the app loads
+// this file as a plain script, so here createZeusGlobe has no `export`. The turn of the globe comes from
 // the wall clock, so that two globes on one screen show the same side at the same moment.
 
 const VERTEX = `
 attribute vec4 a;      // xyz on the unit sphere, w = per-point value 0..1
 attribute float e;     // 1 = moved point or ray tip, 0 = ray base on the surface
-uniform float t, en, fl, now, px, mini, calm;
+uniform float t, en, now, px, mini, calm;
 uniform mediump float mode;   // 0 = surface points, 1 = rays to the peaks, 3 = inner core
 uniform vec2 sc; uniform vec4 rot;
 uniform vec4 em[10];   // Protrusions: xyz = direction of the peak, w = start time in seconds
 uniform float es[10], ed[10];   // their height and duration
 varying float va, vk;
+// t runs from 0 to 62.5 and then starts again. Every speed of t is a whole number of turns in that
+// time (B is one turn), so the wave, the core and the ring of light do not jump when t starts again.
+const float B = 6.2831853/62.5;
 float wave(vec3 p, float t) {
-  return (sin(p.x*1.7+t*.9) + sin(p.y*2.1-t*1.1) + sin(p.z*1.9+t*.7) + sin((p.x+p.y)*2.6+t*1.3) + sin((p.y-p.z)*3.0-t)) / 5.;
+  return (sin(p.x*1.7+t*B*9.) + sin(p.y*2.1-t*B*11.) + sin(p.z*1.9+t*B*7.) + sin((p.x+p.y)*2.6+t*B*13.) + sin((p.y-p.z)*3.0-t*B*10.)) / 5.;
 }
 void main() {
   vec3 p = a.xyz;
@@ -38,9 +42,9 @@ void main() {
       }
     }
     spike *= calm;   // 0 while the globe holds still for a hand-over.
-    rad = 1. + wave(p, t)*.006 + spike*e + fl*.07;
+    rad = 1. + wave(p, t)*.006 + spike*e;
     k = clamp(spike*2.6, 0., 1.);
-  } else { rad = .52 + .05*sin(t*1.3 + a.w*6.283); }
+  } else { rad = .52 + .05*sin(t*B*13. + a.w*6.283); }
   vec3 q = v*rad;
   float s = 3.4/(3.4 - q.z), depth = clamp((q.z + 1.4)/2.8, 0., 1.);
   gl_Position = vec4(q.x*s*sc.x, q.y*s*sc.y, 0., 1.);
@@ -53,7 +57,7 @@ void main() {
     va = (.3 + depth*.7)*(.8 + k*.7 + scan*.9)*(1. + mini*.5);
     k = max(k, scan*.6);
   } else if (mode < 1.5) { va = min(.6, k*.75)*(.25 + depth*.75)*(.2 + .8*e);
-  } else { gl_PointSize = (1.4 + depth*1.6)*px*s; va = (.12 + depth*.3)*(.7 + en*.6 + fl)*(1. + scan*2.5); k = .55 + scan*.4; }
+  } else { gl_PointSize = (1.4 + depth*1.6)*px*s; va = (.12 + depth*.3)*(.7 + en*.6)*(1. + scan*2.5); k = .55 + scan*.4; }
   vk = k;
 }`;
 
@@ -92,7 +96,7 @@ function sphere(count) {
  * Put `canvas` in the page and call `start()`. The globe draws only while its canvas is visible.
  * `setEnergy(0..1)`: how often and how far the protrusions push out (idle about 0.12, working 1).
  * `setMini(true)`: the small form for a 20 to 30 px globe: fewer and larger points, no core, no rays.
- * `flash()`: one bright beat. `setCalm(true)`: no protrusions, for a hand-over between two globes.
+ * `setCalm(true)`: no protrusions, for a hand-over between two globes.
  */
 function createZeusGlobe() {
   const canvas = document.createElement("canvas");
@@ -118,7 +122,7 @@ function createZeusGlobe() {
   gl.useProgram(program);
 
   const U = {};
-  for (const name of ["t", "en", "fl", "now", "px", "mini", "calm", "mode", "sc", "rot", "em", "es", "ed"])
+  for (const name of ["t", "en", "now", "px", "mini", "calm", "mode", "sc", "rot", "em", "es", "ed"])
     U[name] = gl.getUniformLocation(program, name);
   const A = gl.getAttribLocation(program, "a");
   const E = gl.getAttribLocation(program, "e");
@@ -144,7 +148,6 @@ function createZeusGlobe() {
   let mini = false;
   let energy = 0.12;
   let target = 0.12;
-  let flash = 0;
   let calm = false;
   let calmNow = 1; // 1 = protrusions at full height, 0 = none
   let slot = 0;
@@ -158,12 +161,12 @@ function createZeusGlobe() {
   // The turn of the globe and the time of its ring of light at this moment, from the wall clock,
   // so that two globes on one screen are the same.
   const turn = () => {
-    const seconds = still ? 0 : (Date.now() / 1000) % 100000;
+    const seconds = still ? 0 : Date.now() / 1000;
     return {
       spin: (seconds * 0.2) % 6.283185,
       tilt: 0.35 + Math.sin(seconds * 0.21) * 0.12,
-      clock: (seconds % 900) * 0.7,
-    }; // Kept small: the shader counts with less precision.
+      clock: (seconds * 0.7) % 62.5, // Kept small: the shader counts with less precision. See B in the shader.
+    };
   };
 
   // Starts one protrusion. Its peak is one of the globe's own points, near the outline as seen now.
@@ -207,7 +210,6 @@ function createZeusGlobe() {
     last = ms;
     const view = turn();
     energy += (target - energy) * 0.04;
-    flash *= 0.93;
     calmNow += ((calm ? 0 : 1) - calmNow) * 0.14;
     const clock = view.clock;
     if (!still && !calm) {
@@ -231,7 +233,6 @@ function createZeusGlobe() {
     gl.uniform1f(U.now, seconds);
     gl.uniform1f(U.t, clock);
     gl.uniform1f(U.en, energy);
-    gl.uniform1f(U.fl, flash);
     const rotate = (spin, tilt) => gl.uniform4f(U.rot, Math.cos(spin), Math.sin(spin), Math.cos(tilt), Math.sin(tilt));
     const shape = shapes[mini ? 1 : 0];
     gl.enableVertexAttribArray(A);
@@ -268,10 +269,6 @@ function createZeusGlobe() {
     start() {
       if (!request) request = requestAnimationFrame(frame);
     },
-    stop() {
-      cancelAnimationFrame(request);
-      request = 0;
-    },
     setEnergy(value) {
       target = Math.max(0, Math.min(1, value));
     },
@@ -279,9 +276,6 @@ function createZeusGlobe() {
       if (mini === Boolean(value)) return;
       mini = Boolean(value);
       em.fill(-99); // The peaks of the other form do not fit this one.
-    },
-    flash() {
-      flash = 1;
     },
     /** Holds the globe still: the protrusions go back and no new ones start. For the hand-over from the app. */
     setCalm(value) {

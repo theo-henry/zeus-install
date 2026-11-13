@@ -100,7 +100,7 @@ The installer skips each step that is already done.
 | 6 | Node.js 24 in `~/.local/node` | Node.js 18.20.5 or later is already installed. |
 | 7 | Claude Code | `claude` is already installed. |
 | 8 | Celonis content-cli | `content-cli` is already installed. |
-| 9 | Copy of the zeus repo to `~/Code/zeus` | The folder already contains the zeus repo. |
+| 9 | Copy of the zeus repo to `~/Code/zeus`, or an update of an existing copy (fast-forward only, local work is never discarded) | The copy is already up to date or already has the Zeus version that Zeus Editor needs, or it cannot update safely. Then the installer tells you how Zeus gets the update. |
 | 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. |
 | 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
 | 12 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo | The app is open. A failed download does not stop the installer. |
