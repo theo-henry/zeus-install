@@ -800,11 +800,15 @@ print_summary() {
   info "1. Close this Terminal window and open a new one."
   info "2. Type: cd ~/Code/zeus"
   info "3. Type: claude   (log in to Claude in the browser the first time)"
-  info "4. In Claude, type:"
-  info "     /plugin install celonis-yaml-builder@yaml-builder"
-  info "     /plugin install celonis-ocpm@celonis-ocpm"
-  info "     /plugin install celonis-pql@celonis-pql"
-  info "5. Close Claude (Ctrl + C two times), open a new Terminal window, then type: zeus"
+  info "4. Close Claude (Ctrl + C two times), then type these lines one at a time:"
+  # --scope user: a plugin or marketplace added at project scope changes the tracked .claude/settings.json
+  # of the Zeus folder, and then git pull --ff-only cannot update Zeus.
+  local entry
+  for entry in $SKILL_PLUGINS; do
+    info "     claude plugin marketplace add ${entry#*:} --scope user"
+    info "     claude plugin install ${entry%%:*} --scope user"
+  done
+  info "5. Open a new Terminal window, then type: zeus"
   printf '\n'
 }
 
@@ -871,4 +875,5 @@ main() {
 }
 
 # main is called on the last line, so bash has read the full script before it runs.
-main "$@"
+# ZEUS_INSTALL_SOURCED=1 loads the functions only, for the tests (app/test/plugin-scope/run.sh).
+if [ "${ZEUS_INSTALL_SOURCED:-}" != "1" ]; then main "$@"; fi
