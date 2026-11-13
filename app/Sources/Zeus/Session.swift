@@ -11,11 +11,16 @@ final class ZeusSession {
     }
 
     let id = UUID()
-    let pid: pid_t
+    /// Where this session's Claude Code sends its requests; fixed for the whole session.
+    let host: ClaudeHost
+    /// The process ID of `zeus`; 0 until it starts (an EU session checks the Google Cloud sign-in first).
+    private(set) var pid: pid_t = 0
     let startedAt: Date
     let log = TerminalLog()
-    private let process: PTYProcess
+    private var process: PTYProcess?
     private var stopRequested = false
+    /// What the loading screen says before `zeus` writes its first lines.
+    private(set) var startStatus: String?
 
     private(set) var state: State = .starting {
         didSet {
@@ -54,10 +59,12 @@ final class ZeusSession {
 
     var isAlive: Bool { state == .starting || chatURL != nil }
 
-    /// Starts `zeus` in ~/Code/zeus. `--no-open` stops it from opening the browser; the app shows the page.
-    init() throws {
+    /// Starts `zeus` in the Zeus workspace. `--no-open` stops it from opening the browser; the app shows the page.
+    /// An Apolix session starts at once. An EU session first checks the EU setup and the Google Cloud
+    /// sign-in; when that check fails, the session fails with the reason and nothing starts on Apolix.
+    init(host: ClaudeHost = .apolix) throws {
+        self.host = host
         startedAt = Date()
-        let env = ShellEnvironment.make()
         guard FileManager.default.isExecutableFile(atPath: Paths.zeusCommand) else {
             throw NSError(domain: "Zeus", code: 1, userInfo: [NSLocalizedDescriptionKey:
                 "The zeus command is not installed (\(Paths.zeusCommand)). Run the Zeus setup."])
@@ -65,12 +72,25 @@ final class ZeusSession {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: Paths.zeusDir, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw NSError(domain: "Zeus", code: 2, userInfo: [NSLocalizedDescriptionKey:
-                "The Zeus workspace is not in ~/Code/zeus. Run the Zeus setup."])
+                "The Zeus workspace is not in \(Paths.zeusDir). Run the Zeus setup."])
         }
+        log.onChange = { [weak self] in self?.scanForChatURL(); self?.onLog?() }
+        switch host {
+        case .apolix:
+            try spawn(environment: ShellEnvironment.session(host: .apolix))
+        case .eu:
+            startStatus = "Checking the Google Cloud sign-in for EU…"
+            Trace.log("session: EU preflight starts")
+            EUHost.preflight { [weak self] result in self?.preflightEnded(result) }
+        }
+    }
+
+    private func spawn(environment: [String: String]) throws {
         let process = try PTYProcess(executable: Paths.zeusCommand, arguments: ["--no-open"],
-                                     environment: env, directory: Paths.zeusDir)
+                                     environment: environment, directory: Paths.zeusDir)
         self.process = process
         pid = process.pid
+        Trace.log("session \(pid) host: \(host.rawValue) blind=\(environment[BlindMode.variable] ?? "-")")
         #if DEBUG
         capture = PTYCapture(pid: process.pid)
         #endif
@@ -82,7 +102,25 @@ final class ZeusSession {
             self?.onOutput?(data)
         }
         process.onExit = { [weak self] code in self?.processEnded(code: code) }
-        log.onChange = { [weak self] in self?.scanForChatURL(); self?.onLog?() }
+    }
+
+    private func preflightEnded(_ result: Result<[String: String], HostError>) {
+        startStatus = nil
+        // The tab closed, or the consultant switched the host, while the check ran.
+        if stopRequested {
+            if state != .ended { state = .ended }
+            return
+        }
+        do {
+            let variables = try result.get()
+            Trace.log("session: EU preflight passed")
+            try spawn(environment: EUHost.environment(variables: variables))
+            onLog?()
+        } catch {
+            Trace.log("session: EU start refused: \(error.localizedDescription)")
+            if let detail = (error as? HostError)?.detail, !detail.isEmpty { log.append(Data((detail + "\n").utf8)) }
+            state = .failed(error.localizedDescription)
+        }
     }
 
     private func scanForChatURL() {
@@ -111,14 +149,19 @@ final class ZeusSession {
         #if DEBUG
         capture?.record("<", Data(text.utf8))
         #endif
-        process.write(text)
+        process?.write(text)
     }
 
-    func resize(rows: UInt16, cols: UInt16) { process.resize(rows: rows, cols: cols) }
+    func resize(rows: UInt16, cols: UInt16) { process?.resize(rows: rows, cols: cols) }
 
     /// Ends the session the way Ctrl+C in Terminal would end `zeus`: it stops Claude Code and cleans up.
     func stop() {
         stopRequested = true
+        guard let process else {
+            // `zeus` did not start: the EU check still runs, or it failed. Nothing to stop.
+            if state != .ended { state = .ended }
+            return
+        }
         // zeus gives Claude Code up to 7 seconds to stop, then removes its launch record; wait longer than that.
         process.terminate(grace: 10)
     }
@@ -133,8 +176,8 @@ final class SessionManager {
     var onChange: (() -> Void)?
 
     @discardableResult
-    func start() throws -> ZeusSession {
-        let session = try ZeusSession()
+    func start(host: ClaudeHost = .apolix) throws -> ZeusSession {
+        let session = try ZeusSession(host: host)
         add(session)
         return session
     }
