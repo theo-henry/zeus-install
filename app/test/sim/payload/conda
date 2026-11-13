@@ -1,0 +1,14 @@
+#!/bin/bash
+# Simulated conda: "create -p <env> ... gh" makes <env>/bin/gh.
+case "${1:-}" in
+  create)
+    while [ $# -gt 0 ]; do [ "$1" = "-p" ] && prefix="$2"; shift; done
+    mkdir -p "$prefix/bin"
+    cp "$ZEUS_SIM_PAYLOAD/gh" "$prefix/bin/gh"
+    chmod +x "$prefix/bin/gh"
+    sleep 1
+    echo "Created environment $prefix (simulated)."
+    ;;
+  init) echo "no change (simulated)" ;;
+  *) echo "conda (simulated)" ;;
+esac

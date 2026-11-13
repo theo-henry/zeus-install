@@ -1,0 +1,12 @@
+#!/bin/bash
+# Simulated shasum: reports the checksum that install.sh expects for the simulated downloads.
+file="${!#}"
+case "$(basename "$file")" in
+  Anaconda3-*arm64.sh) var=ANACONDA_SHA256_ARM64 ;;
+  Anaconda3-*x86_64.sh) var=ANACONDA_SHA256_X86_64 ;;
+  node-*-arm64.tar.gz) var=NODE_SHA256_ARM64 ;;
+  node-*-x64.tar.gz) var=NODE_SHA256_X64 ;;
+  *) exec /usr/bin/shasum "$@" ;;
+esac
+hash="$(sed -n "s/^$var=\"\(.*\)\"/\1/p" "$ZEUS_SIM_INSTALLER")"
+echo "$hash  $file"
