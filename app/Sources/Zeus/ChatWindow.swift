@@ -2,9 +2,19 @@ import AppKit
 import WebKit
 
 /// The tab of one Zeus session in a chat window. It shows the loading screen (the Zeus globe) while `zeus` starts,
-/// then hands over to the chat page. Closing the tab ends the session.
+/// then hands over to the chat page. Closing the tab ends the session. The host switch replaces the session
+/// with a new one on the other Claude host, in the same tab.
 final class ChatTab: NSObject {
-    let session: ZeusSession
+    private(set) var session: ZeusSession
+    /// The cost that the chat page of this session reported last.
+    private(set) var cost: SessionCost?
+    /// A host switch runs (its question, the EU handoff, or its summary): the switch waits for it.
+    private(set) var switching = false
+    /// Counts the sessions of this tab, so that a late callback of an earlier session does nothing.
+    private var generation = 0
+    private var handoff: HandoffFlow?
+    /// The chat page of a replaced session stays out of sight (its "session ended" text) until the next page has loaded.
+    private var pageHidden = false
     /// The content of the tab: the close banner, the page, and the terminal.
     let view = NSStackView()
     /// The window that shows the tab.
@@ -35,8 +45,9 @@ final class ChatTab: NSObject {
     private var closed = false
 
     var onRunSetup: (() -> Void)?
-    var onRetry: (() -> Void)?
     var onClosed: ((ChatTab) -> Void)?
+    /// Starts a session on a host for this tab; nil when it cannot start (the app says why).
+    var startSession: ((ClaudeHost) -> ZeusSession?)?
 
     init(session: ZeusSession) {
         self.session = session
@@ -67,19 +78,40 @@ final class ChatTab: NSObject {
         handler.onScriptMessage = { [weak self] message in self?.handle(message) }
         handler.onPageLoaded = { [weak self] webView in
             guard let self else { return }
+            if self.pageHidden, (self.shownURL != nil && webView.url == self.shownURL) || self.isFailed {
+                self.pageHidden = false
+                webView.alphaValue = 1
+            }
             if self.host?.selectedTab === self { WebViewHandler.matchTitleBar(of: webView.window, to: webView) }
             guard self.shownURL != nil, webView.url == self.shownURL else { return }
             // After the first chat, the page comes in as soon as it is loaded.
             guard !Self.greeted else { self.handOver(); return }
             // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.handOver() }
+            let generation = self.generation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                guard let self, self.generation == generation else { return }
+                self.handOver()
+            }
         }
         // A chat page that does not load must not stay behind the loading screen.
         handler.onPageFailed = { [weak self] in self?.handOver() }
 
-        session.onStateChange = { [weak self] _ in self?.render() }
-        session.onLog = { [weak self] in self?.updateLoaderStatus() }
+        attach(session)
+    }
+
+    /// Follows a session: the tab shows its state from now on.
+    private func attach(_ session: ZeusSession) {
+        session.onStateChange = { [weak self, weak session] _ in
+            guard let self, session === self.session else { return }
+            self.render()
+        }
+        session.onLog = { [weak self, weak session] in
+            guard let self, session === self.session else { return }
+            self.updateLoaderStatus()
+        }
         render()
+        updateLoaderStatus()
+        host?.tabStateChanged(self)
     }
 
     private func render() {
@@ -94,7 +126,7 @@ final class ChatTab: NSObject {
             webView.load(URLRequest(url: url))   // Behind the loading screen, until the hand-over.
         case let .failed(message):
             shownURL = nil
-            webView.loadHTMLString(StatusPage.failed(message: message, log: session.log.text), baseURL: nil)
+            webView.loadHTMLString(StatusPage.failed(message: message, log: session.log.text, host: session.host), baseURL: nil)
             if let loader { dismiss(loader, over: 0.25) }
             loader = nil
         case .ended:
@@ -109,9 +141,16 @@ final class ChatTab: NSObject {
     /// It has the chat page's frame, so the globe's place in the chat page is also its place here.
     private func showLoader() {
         guard loader == nil else { return }
-        let content = self.view
         let overlay = LoaderOverlay(frame: webView.frame)
-        let view = overlay.view
+        cover(with: overlay.view)
+        loader = overlay
+        handingOver = false
+    }
+
+    /// Puts a view over the chat page only, in its frame: the close banner and the terminal panel stay usable.
+    /// A later view lies below the views that cover the page already (the handoff step stays on top until it fades).
+    func cover(with view: NSView) {
+        let content = self.view
         view.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(view, positioned: .above, relativeTo: webView)
         NSLayoutConstraint.activate([
@@ -120,8 +159,6 @@ final class ChatTab: NSObject {
             view.topAnchor.constraint(equalTo: webView.topAnchor),
             view.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
         ])
-        loader = overlay
-        handingOver = false
     }
 
     /// Removes the loading screen. When it had the keyboard focus, the chat page gets it.
@@ -134,8 +171,12 @@ final class ChatTab: NSObject {
 
     private func updateLoaderStatus() {
         guard shownURL == nil, let loader else { return }
+        if let status = session.startStatus {
+            loader.setStatus(status)
+            return
+        }
         let updating = session.log.lines.suffix(30).contains { $0.range(of: "updat", options: .caseInsensitive) != nil }
-        loader.setStatus(updating ? "Checking for updates…" : "Starting Zeus…")
+        loader.setStatus(updating ? "Checking for updates…" : session.host == .eu ? "Starting Zeus on EU…" : "Starting Zeus…")
     }
 
     /// The chat page is drawn. The loading globe moves to the place of the chat page's globe while the
@@ -145,6 +186,7 @@ final class ChatTab: NSObject {
     private func handOver() {
         guard let loader, !handingOver, shownURL != nil else { return }
         handingOver = true
+        let generation = self.generation
         if Self.greeted {
             Trace.log("hand-over: at once")
             self.loader = nil
@@ -154,10 +196,10 @@ final class ChatTab: NSObject {
         }
         Self.greeted = true
         DispatchQueue.main.asyncAfter(deadline: .now() + loader.remainingTime) { [weak self] in
-            guard let self else { return }
+            guard let self, self.generation == generation else { return }
             let question = "window.zeusGlobe ? JSON.stringify(window.zeusGlobe.rect()) : 'null'"
             self.webView.evaluateJavaScript(question) { [weak self] result, _ in
-                guard let self, let loader = self.loader else { return }
+                guard let self, self.generation == generation, let loader = self.loader else { return }
                 self.loader = nil
                 let enter = "window.zeusGlobe && window.zeusGlobe.enter()"
                 let reveal = "window.zeusGlobe && window.zeusGlobe.reveal()"
@@ -194,6 +236,11 @@ final class ChatTab: NSObject {
             return
         }
         guard let message = body as? String else { return }
+        // "cost:<JSON>": the chat page passes on the session cost that the editor counted (zeus-editor docs/chat.md, "Session cost").
+        if message.hasPrefix("cost:") {
+            receiveCost(String(message.dropFirst(5)))
+            return
+        }
         switch message {
         case "chat-ready":
             // After a reload of the page there is no loading screen: the page comes in at once.
@@ -202,7 +249,7 @@ final class ChatTab: NSObject {
             } else {
                 handOver()
             }
-        case "retry": onRetry?()
+        case "retry": replaceSession(host: session.host)
         case "setup": onRunSetup?()
         case "copy-log":
             NSPasteboard.general.clearContents()
@@ -213,6 +260,134 @@ final class ChatTab: NSObject {
         default: break
         }
     }
+
+    // MARK: Claude host
+
+    private func receiveCost(_ json: String) {
+        guard shownURL != nil, let reported = SessionCost(json: json) else { return }
+        // A report for another host is from a page of the session that this tab just replaced.
+        guard reported.host.isEmpty || reported.host == session.host.rawValue else { return }
+        guard reported != cost else { return }
+        cost = reported
+        Trace.log("cost: \(reported.label) on \(session.host.rawValue) shown=\(Preferences.showCost(on: session.host))")
+        host?.tabStateChanged(self)
+    }
+
+    /// The consultant picked the other host. From EU to Apolix, the app first hands off the EU work
+    /// (HandoffFlow); otherwise a running chat is asked about first, and a tab that still loads, or
+    /// that failed to start, switches at once.
+    func requestSwitch(to target: ClaudeHost) {
+        guard target != session.host, !switching else { return }
+        switching = true
+        host?.tabStateChanged(self)
+        if session.host == .eu, target == .apolix {
+            let flow = HandoffFlow(tab: self)
+            handoff = flow
+            flow.start { [weak self] outcome in
+                guard let self else { return }
+                self.handoff = nil
+                switch outcome {
+                case .noHandoffNeeded: self.confirmSwitch(to: target)
+                case .switchNow: self.finishSwitch(to: target)
+                case .stay: self.cancelSwitch()
+                }
+            }
+            return
+        }
+        confirmSwitch(to: target)
+    }
+
+    private func cancelSwitch() {
+        switching = false
+        Trace.log("host switch cancelled: \(session.host.rawValue)")
+        host?.tabStateChanged(self)
+    }
+
+    private func finishSwitch(to target: ClaudeHost) {
+        switching = false
+        replaceSession(host: target)
+    }
+
+    /// Asks before a running chat stops. A tab whose chat does not run switches at once.
+    private func confirmSwitch(to target: ClaudeHost) {
+        guard case .running = session.state, let window = view.window else {
+            finishSwitch(to: target)
+            return
+        }
+        closeState { [weak self] reason in
+            guard let self, self.switching else { return }
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_NO_SWITCH_QUESTION"] == "1" {
+                self.finishSwitch(to: target)
+                return
+            }
+            #endif
+            let alert = NSAlert()
+            alert.messageText = "Switch this tab to \(target.title)?"
+            var text = "Zeus stops the session in this tab and starts a new one on \(target.summary). "
+            text += target == .eu
+                ? "Your chats stay in the chat history, and you can continue them on EU."
+                : "Your chats stay in the chat history. A chat that ran on EU stays an EU chat: you can read it here, but you can continue it only on EU."
+            if let reason, reason != "unavailable" { text += "\n\nNow " + ChatTab.closeSummary(for: reason) + ". The switch stops that." }
+            alert.informativeText = text
+            alert.addButton(withTitle: "Switch to \(target.title)")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                if response == .alertFirstButtonReturn { self?.finishSwitch(to: target) } else { self?.cancelSwitch() }
+            }
+        }
+    }
+
+    /// Stops this tab's session and starts a new one on `host` in its place. Also used for "Try again".
+    func replaceSession(host target: ClaudeHost) {
+        if target != session.host { Preferences.lastHost = target }
+        // Start first: when the new session cannot start, the tab keeps the one it has.
+        guard let next = startSession?(target) else {
+            host?.tabStateChanged(self)
+            return
+        }
+        // The loading screen covers the page before the old session stops, and the old page goes out of sight
+        // at once: the loading screen draws only after its own page has loaded.
+        pageHidden = true
+        webView.alphaValue = 0
+        let old = session
+        old.onStateChange = nil
+        old.onLog = nil
+        old.stop()
+        if !old.isAlive { SessionManager.shared.remove(old) }
+        Trace.log("tab: session \(old.pid) on \(old.host.rawValue) replaced by a session on \(target.rawValue)")
+
+        SpeechService.shared.cancel(in: webView, reason: "session replaced")
+        generation += 1
+        session = next
+        cost = nil
+        shownURL = nil
+        closeReason = nil
+        // A loading screen that already moves away belonged to the old chat page.
+        if handingOver, let loader {
+            loader.remove(over: 0.1)
+            self.loader = nil
+        }
+        handingOver = false
+        // The old chat page stops; the loading screen covers the tab until the new one is ready.
+        showLoader()
+        webView.loadHTMLString(StatusPage.blank, baseURL: nil)
+        terminal.show(next)
+        attach(next)
+    }
+
+    #if DEBUG
+    /// The handoff flow that runs, for the test actions.
+    var runningHandoff: HandoffFlow? { handoff }
+    #endif
+
+    private var isFailed: Bool {
+        if case .failed = session.state { return true }
+        return false
+    }
+
+    /// The view that the handoff step covers: the chat page, as the loading screen does.
+    var pageView: NSView { webView }
 
     func reload() {
         if shownURL != nil { webView.reload() } else { render() }
@@ -385,6 +560,8 @@ final class ChatTab: NSObject {
     private func finishClose() {
         guard !closed else { return }
         closed = true
+        handoff?.cancel()
+        handoff = nil
         closeApproved = true
         closePending = false
         closeGeneration += 1

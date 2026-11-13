@@ -125,6 +125,30 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         if window.frame.origin == .zero { window.center() }
         NotificationCenter.default.addObserver(self, selector: #selector(tabNameChanged(_:)),
                                                name: .zeusTabNameChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(developerSettingsChanged),
+                                               name: Preferences.developerSettingsChanged, object: nil)
+        strip.hostBar.onSwitch = { [weak self] host in self?.selectedTab?.requestSwitch(to: host) }
+    }
+
+    // MARK: Claude host
+
+    /// A tab's host, cost, or switch state changed. The host bar shows the selected tab.
+    func tabStateChanged(_ tab: ChatTab) {
+        guard tab === selectedTab else { return }
+        updateHostBar()
+    }
+
+    @objc private func developerSettingsChanged() { updateHostBar() }
+
+    private func updateHostBar() {
+        guard let tab = selectedTab else { return }
+        let host = tab.session.host
+        strip.hostBar.update(host: host, showSwitch: Preferences.developerHostSwitch, cost: tab.cost,
+                             showCost: Preferences.showCost(on: host), switching: tab.switching)
+        #if DEBUG
+        Trace.log("host bar: \(host.rawValue) switch=\(Preferences.developerHostSwitch && !strip.hostBar.isHidden) "
+                  + "pill=\(host == .eu) cost=\(strip.hostBar.costText)")
+        #endif
     }
 
     @available(*, unavailable)
@@ -153,6 +177,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         for other in tabs { other.view.isHidden = other !== tab }
         window?.title = tab.tabName.title
         strip.reload()
+        updateHostBar()
         WebViewHandler.matchTitleBar(of: window, to: tab.webView)
         if changed {
             window?.makeFirstResponder(tab.focusView)
@@ -259,6 +284,8 @@ final class TabStripView: NSView {
     private weak var controller: ChatWindowController?
     private let stack = NSStackView()
     private let addButton = HoverButton(symbol: "plus", label: "New Tab")
+    /// The host, the EU pill, and the cost of the selected tab, at the right end.
+    let hostBar = HostBarView()
     private var leadingConstraint: NSLayoutConstraint!
 
     init(controller: ChatWindowController) {
@@ -276,6 +303,7 @@ final class TabStripView: NSView {
         addButton.target = self
         addButton.action = #selector(newTab)
         addSubview(addButton)
+        addSubview(hostBar)
         leadingConstraint = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 80)
         NSLayoutConstraint.activate([
             leadingConstraint,
@@ -283,6 +311,10 @@ final class TabStripView: NSView {
             addButton.leadingAnchor.constraint(equalTo: stack.trailingAnchor, constant: 4),
             addButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             addButton.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+            hostBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            hostBar.centerYAnchor.constraint(equalTo: centerYAnchor),
+            hostBar.heightAnchor.constraint(equalToConstant: 26),
+            addButton.trailingAnchor.constraint(lessThanOrEqualTo: hostBar.leadingAnchor, constant: -16),
         ])
         for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(windowStyleChanged), name: name, object: nil)
@@ -360,7 +392,7 @@ final class TabStripView: NSView {
 }
 
 /// The Zeus chat colours of the tab strip (zeus-editor src/chat/chat.css).
-private enum TabColors {
+enum TabColors {
     static let selected = NSColor(srgbRed: 19/255, green: 53/255, blue: 97/255, alpha: 1)       // --ink-600
     static let selectedBorder = NSColor(srgbRed: 36/255, green: 71/255, blue: 122/255, alpha: 1) // --line-strong
     static let hover = NSColor(srgbRed: 13/255, green: 42/255, blue: 78/255, alpha: 1)          // --ink-800

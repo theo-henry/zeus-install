@@ -23,6 +23,19 @@ final class TerminalPanel: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         session.onOutput = { [weak self] data in self?.append(data) }
     }
 
+    /// The host switch put a new session in the tab: the terminal shows that one from now on.
+    func show(_ session: ZeusSession) {
+        self.session?.onOutput = nil
+        self.session = session
+        session.onOutput = { [weak self] data in self?.append(data) }
+        pending.removeAll()
+        // The new PTY gets the size of the terminal at once.
+        if ready {
+            webView.evaluateJavaScript("window.term.reset(); window.fitTerminal(); "
+                + "window.webkit.messageHandlers.terminal.postMessage({rows: term.rows, cols: term.cols})")
+        }
+    }
+
     func detach() {
         session?.onOutput = nil
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "terminal")

@@ -32,6 +32,8 @@ window.zeusGlobe={
  reveal(){document.body.classList.add('live');},
 };
 requestAnimationFrame(()=>requestAnimationFrame(()=>window.webkit?.messageHandlers?.zeusApp?.postMessage('chat-ready')));
+// Like zeus-editor: the session cost on connect, as the script message "cost:<JSON>" (docs/chat.md, "Session cost").
+window.webkit?.messageHandlers?.zeusApp?.postMessage('cost:'+JSON.stringify(${JSON.stringify({host: process.env.ZEUS_CLAUDE_HOST || 'apolix', currency: process.env.ZEUS_CLAUDE_HOST === 'eu' ? 'EUR' : 'USD', total: 0.42, chat: 0.42, calls: 2, tokens: {input: 1200, cache_read: 5000, cache_write_5m: 800, cache_write_1h: 0, output: 300}})}));
 // The project menu and the project button of the Zeus chat (zeus-editor src/chat/client/main.js).
 for(const option of document.querySelectorAll('.project-menu [role="option"]'))option.onclick=()=>{document.querySelector('.project-pill .pill-text').textContent=option.textContent;};
 window.zeusApp={closeState:async()=>{
@@ -63,6 +65,13 @@ setTimeout(()=>server.listen(0,'127.0.0.1',()=>{
  console.log(`Zeus chat: http://127.0.0.1:${server.address().port}/chat/${process.pid}#k=simulated`);
 }), Number(process.env.ZEUS_SIM_START_DELAY || 0));
 fs.writeFileSync(`${state}/zeus-started`,JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),app:process.env.ZEUS_APP}));
+// One line for each start, with the variables that choose the Claude host (never a secret's value).
+const seen=name=>process.env[name]===undefined?null:'set';
+fs.appendFileSync(`${state}/zeus-starts.jsonl`,JSON.stringify({pid:process.pid,host:process.env.ZEUS_CLAUDE_HOST??null,
+ vertex:process.env.CLAUDE_CODE_USE_VERTEX??null,region:process.env.CLOUD_ML_REGION??null,project:process.env.ANTHROPIC_VERTEX_PROJECT_ID??null,
+ model:process.env.ANTHROPIC_MODEL??null,quiet:process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC??null,blind:process.env.ZEUS_BLIND_MODE??null,
+ apiKey:seen('ANTHROPIC_API_KEY'),authToken:seen('ANTHROPIC_AUTH_TOKEN'),baseUrl:seen('ANTHROPIC_BASE_URL'),
+ bedrock:seen('AWS_BEARER_TOKEN_BEDROCK'),regionOverride:seen('VERTEX_REGION_CLAUDE_OPUS_5_5'),cwd:process.cwd()})+'\n');
 process.stdin.on('data',data=>record('input',data.toString('hex')));
 // ZEUS_SIM_STOP_DELAY (ms): zeus takes that long to stop, like Claude Code that ends a turn.
 const stop=signal=>{fs.writeFileSync(`${state}/zeus-stopped`,signal);record('stop',signal);server.close();setTimeout(()=>process.exit(0),Number(process.env.ZEUS_SIM_STOP_DELAY||0));};
