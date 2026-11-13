@@ -66,8 +66,9 @@ final class ChatTab: NSObject {
         }
         handler.onScriptMessage = { [weak self] message in self?.handle(message) }
         handler.onPageLoaded = { [weak self] webView in
-            WebViewHandler.matchTitleBar(of: webView.window, to: webView)
-            guard let self, self.shownURL != nil, webView.url == self.shownURL else { return }
+            guard let self else { return }
+            if self.host?.selectedTab === self { WebViewHandler.matchTitleBar(of: webView.window, to: webView) }
+            guard self.shownURL != nil, webView.url == self.shownURL else { return }
             // After the first chat, the page comes in as soon as it is loaded.
             guard !Self.greeted else { self.handOver(); return }
             // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.

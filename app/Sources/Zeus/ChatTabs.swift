@@ -151,6 +151,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         for other in tabs { other.view.isHidden = other !== tab }
         window?.title = tab.tabName.title
         strip.reload()
+        WebViewHandler.matchTitleBar(of: window, to: tab.webView)
         if changed {
             window?.makeFirstResponder(tab.focusView)
             Trace.log("tab selected: \(tab.session.pid) \(tab.tabName.title)")
@@ -484,11 +485,6 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     override func mouseDown(with event: NSEvent) {
         guard let tab else { return }
         strip?.select(tab)
-    }
-
-    /// The middle button closes a tab, as in a browser.
-    override func otherMouseUp(with event: NSEvent) {
-        if event.buttonNumber == 2 { closeTab() }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
