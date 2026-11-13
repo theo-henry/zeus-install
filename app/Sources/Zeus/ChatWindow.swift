@@ -15,6 +15,9 @@ final class ChatTab: NSObject {
     private var handoff: HandoffFlow?
     /// The chat page of a replaced session stays out of sight (its "session ended" text) until the next page has loaded.
     private var pageHidden = false
+    /// An opaque cover over the old page during a host switch. Not alphaValue 0: WebKit stops painting a
+    /// transparent web view and may not paint again when it becomes visible (a blank tab after the switch).
+    private var curtain: NSView?
     /// The content of the tab: the close banner, the page, and the terminal.
     let view = NSStackView()
     /// The window that shows the tab.
@@ -80,7 +83,8 @@ final class ChatTab: NSObject {
             guard let self else { return }
             if self.pageHidden, (self.shownURL != nil && webView.url == self.shownURL) || self.isFailed {
                 self.pageHidden = false
-                webView.alphaValue = 1
+                self.curtain?.removeFromSuperview()
+                self.curtain = nil
             }
             if self.host?.selectedTab === self { WebViewHandler.matchTitleBar(of: webView.window, to: webView) }
             guard self.shownURL != nil, webView.url == self.shownURL else { return }
@@ -152,7 +156,8 @@ final class ChatTab: NSObject {
     func cover(with view: NSView) {
         let content = self.view
         view.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(view, positioned: .above, relativeTo: webView)
+        // Above the switch cover, so the loading screen draws over it once its page has loaded.
+        content.addSubview(view, positioned: .above, relativeTo: curtain ?? webView)
         NSLayoutConstraint.activate([
             view.leadingAnchor.constraint(equalTo: webView.leadingAnchor),
             view.trailingAnchor.constraint(equalTo: webView.trailingAnchor),
@@ -349,7 +354,13 @@ final class ChatTab: NSObject {
         // The loading screen covers the page before the old session stops, and the old page goes out of sight
         // at once: the loading screen draws only after its own page has loaded.
         pageHidden = true
-        webView.alphaValue = 0
+        if curtain == nil {
+            let cover = NSView()
+            cover.wantsLayer = true
+            cover.layer?.backgroundColor = NSColor(srgbRed: 11 / 255, green: 37 / 255, blue: 69 / 255, alpha: 1).cgColor
+            self.cover(with: cover)
+            curtain = cover
+        }
         let old = session
         old.onStateChange = nil
         old.onLog = nil
