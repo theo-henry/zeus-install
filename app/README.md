@@ -20,6 +20,8 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The chat page tells the app its project with `window.webkit.messageHandlers.zeusApp.postMessage({type: "project", name})` (`name` is null without a project);
   for chat pages that do not send it, the app reads the project button of the chat.
   Cmd+J shows or hides the live terminal of the tab, for login prompts, slash commands, or debugging.
+- **Go to the chat.** When the consultant clicks **Go to the chat** in Zeus Editor, the chat page posts `"chat-focus"` to `window.webkit.messageHandlers.zeusApp`.
+  The app then shows the tab of that chat, brings its window and the app to the front, and puts the keyboard in the chat page.
 - **Safe close.** Closing a tab asks the chat (`window.zeusApp.closeState()`) first.
   While Zeus works, or while the chat has unsent text, attachments, or a pending send, the tab stays open with a banner, and closes when the chat is safe.
   **Close anyway** closes the tab at once; **Cancel close** keeps the tab.
