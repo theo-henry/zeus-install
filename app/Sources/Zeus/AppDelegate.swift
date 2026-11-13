@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The window that shows the quit question as a sheet.
     private var quitQuestionWindow: NSWindow?
     private let statusMenu = StatusMenu()
-    /// The update check at launch runs; no window and no Zeus session opens until it ends.
+    /// The update check at launch runs; only its loading screen shows, and no Zeus session opens until it ends.
     private var updating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -70,7 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     /// A click on the Dock icon while no window is open.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if flag || updating { return true }
+        if updating {
+            UpdateWindow.shared.bringForward()
+            return true
+        }
+        if flag { return true }
         let alive = SessionManager.shared.sessions.filter(\.isAlive)
         if let setupWindow, setupWindow.model.isBusy {
             setupWindow.showWindow(nil)

@@ -2,7 +2,6 @@ import AppKit
 import CryptoKit
 import Darwin
 import Foundation
-import SwiftUI
 
 /// Updates the app from the Zeus app releases in the private zeus repo (tags "app-v<version>", made by
 /// app/release.sh). It runs once at launch, before any Zeus session starts, and never during a session.
@@ -17,7 +16,7 @@ enum Updater {
     static let tagPrefix = "app-v"
     /// ZEUS_APP_REPO replaces the repo (for tests), as in install.sh.
     static var repo: String { ProcessInfo.processInfo.environment["ZEUS_APP_REPO"] ?? "theo-henry/zeus" }
-    static let checkTimeout: TimeInterval = 10
+    static let checkTimeout: TimeInterval = 5
     static let downloadTimeout: TimeInterval = 300
     /// The time that the new copy has to start and confirm the update.
     static let confirmTimeout: TimeInterval = 20
@@ -100,14 +99,15 @@ enum Updater {
     /// continues with this version, or `done(true)` when a new copy runs and this copy quits.
     static func checkAtLaunch(done: @escaping (Bool) -> Void) {
         guard let reason = skipReason() else {
+            UpdateWindow.shared.show()
             DispatchQueue.global(qos: .userInitiated).async {
                 let result = checkAndDownload()
                 DispatchQueue.main.async {
                     switch result {
                     case .none(let why):
                         Trace.log("update: none (\(why))")
-                        UpdateWindow.shared.close()
                         done(false)
+                        UpdateWindow.shared.close()
                     case .ready(let update):
                         install(update, done: done)
                     }
@@ -161,7 +161,7 @@ enum Updater {
         Trace.log("update: current=\(currentVersion) newest=\(newest)")
         guard newest > current else { return .none("up to date") }
 
-        DispatchQueue.main.async { UpdateWindow.shared.show(version: newest.description) }
+        DispatchQueue.main.async { UpdateWindow.shared.showDownload(version: newest.description) }
         let fileManager = FileManager.default
         let bundle = Bundle.main.bundleURL.standardizedFileURL
         // A folder on the same volume as the app, so that the swap is one rename.
@@ -210,8 +210,8 @@ enum Updater {
             Trace.log("update: failed: \(why)")
             try? fileManager.removeItem(at: update.work)
             removePending()
-            UpdateWindow.shared.close()
             done(false)
+            UpdateWindow.shared.close()
         }
         let pending = Pending(from: currentVersion, to: update.version, appPath: bundle.path,
                               backupPath: backup.appendingPathComponent("Zeus.app").path, workPath: update.work.path,
@@ -330,55 +330,56 @@ struct Version: Comparable, CustomStringConvertible {
     var description: String { parts.map(String.init).joined(separator: ".") }
 }
 
-/// The small window that shows while an update downloads, before Zeus starts.
+/// The window that shows the loading screen (the Zeus globe) while the app checks for an update and
+/// downloads it, before Zeus starts. It has the place and size of the chat window.
 final class UpdateWindow {
     static let shared = UpdateWindow()
     private var window: NSWindow?
+    private var loader: LoaderOverlay?
 
-    func show(version: String) {
+    func show() {
         guard window == nil else { return }
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: UpdateView.size.width, height: UpdateView.size.height),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.titlebarAppearsTransparent = true
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
+                              styleMask: [.titled, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered, defer: false)
         window.title = "Zeus"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = NSColor(srgbRed: 11/255, green: 37/255, blue: 69/255, alpha: 1)
+        window.backgroundColor = LoaderPage.background
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: UpdateView(version: version))
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // The globe has the same place as in the chat window, below the space of the tabs.
+        let content = NSView()
+        let loader = LoaderOverlay(frame: .zero, status: "Checking for updates…")
+        loader.view.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(loader.view)
+        window.contentView = content
+        NSLayoutConstraint.activate([
+            loader.view.topAnchor.constraint(equalTo: content.topAnchor, constant: TabStripView.height),
+            loader.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            loader.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            loader.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+        ])
+        if !window.setFrameUsingName("ZeusChatWindow") { window.center() }
         self.window = window
-        Trace.log("update window: \(version)")
+        self.loader = loader
+        bringForward()
+        Trace.log("update window: checking")
+    }
+
+    func showDownload(version: String) {
+        loader?.setStatus("Downloading Zeus \(version)…")
+        Trace.log("update window: downloading \(version)")
+    }
+
+    func bringForward() {
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func close() {
         window?.close()
         window = nil
-    }
-}
-
-private struct UpdateView: View {
-    static let size = CGSize(width: 420, height: 130)
-    let version: String
-
-    var body: some View {
-        HStack(spacing: 16) {
-            if let logo = Brand.logoImage {
-                Image(nsImage: logo).resizable().aspectRatio(contentMode: .fit).frame(width: 44, height: 44)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Updating Zeus").font(.custom("Object Sans", size: 17).weight(.semibold))
-                Text("Zeus \(version) is downloading. Zeus starts again when it is ready.")
-                    .font(.custom("Object Sans", size: 13))
-                    .foregroundStyle(Brand.foreground.opacity(0.75))
-                    .fixedSize(horizontal: false, vertical: true)
-                ProgressView().progressViewStyle(.linear).tint(Brand.accent)
-            }
-        }
-        .padding(24)
-        .frame(width: Self.size.width, height: Self.size.height)
-        .foregroundStyle(Brand.foreground)
-        .background(Brand.background)
+        loader = nil
     }
 }

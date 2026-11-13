@@ -48,7 +48,8 @@ A download with the GitHub CLI has no such mark, so the app opens without that s
 
 The Zeus app updates itself each time it starts, before a Zeus session starts.
 It asks the private zeus repo, with your GitHub login, for the newest app release.
-When a newer version is available, a small window shows "Updating Zeus", and the app starts again in the new version.
+While the app checks, it shows the Zeus globe with "Checking for updates…".
+When a newer version is available, the app downloads it and starts again in the new version.
 Your settings, your workspace, and your chats do not change.
 If the new version does not start, the app puts the old version back and starts it.
 When you are offline, or your account has no access, the app starts its current version and shows no message.

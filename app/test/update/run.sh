@@ -257,7 +257,8 @@ SWIFT
   publish "$STATE" app-v1.1.0 1.1.0
   launch
   check "the app finds the newer release at launch" 'wait_for "update: current=1.0.0 newest=1.1.0" 30'
-  check "it shows the update window" 'wait_for "update window: 1.1.0" 10'
+  check "it shows the loading screen during the check" 'wait_for "update window: checking" 10'
+  check "the loading screen shows the download" 'wait_for "update window: downloading 1.1.0" 10'
   check "the new copy starts and confirms the update" 'wait_for "update: confirmed 1.0.0 -> 1.1.0" 40'
   check "the old copy finishes the update and quits" 'wait_for "update: done 1.0.0 -> 1.1.0" 20 && sleep 1 && ! kill -0 "$APP_PID" 2>/dev/null'
   check "the app in Applications is now version 1.1.0 with a valid signature" \
@@ -275,7 +276,7 @@ SWIFT
   releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false"
   launch
   check "an app that is up to date starts at once" 'wait_for "update: none (up to date)" 30 && wait_for "setup ended: check=true" 30'
-  check "it downloads nothing" '! grep -q "release download" "$STATE/gh.log" && ! grep -q "update window" "$TRACE"'
+  check "it downloads nothing" '! grep -q "release download" "$STATE/gh.log" && ! grep -q "update window: downloading" "$TRACE"'
   quit_all
 
   app_case noaccess 1.0.0
@@ -284,7 +285,7 @@ SWIFT
   launch ZEUS_SIM_NO_ACCESS=theo-henry/zeus
   check "without access (or offline), the app starts its current version" \
     'wait_for "update: none (no release list" 30 && wait_for "setup ended: check=true" 30 && [ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ]'
-  check "it shows no update window and no message" '! grep -q "update window" "$TRACE" && ! grep -qi "alert\|failed" "$TRACE"'
+  check "it shows no download and no message" '! grep -q "update window: downloading" "$TRACE" && ! grep -qi "alert\|failed" "$TRACE"'
   quit_all
 
   app_case badsum 1.0.0

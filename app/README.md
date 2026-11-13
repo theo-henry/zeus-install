@@ -5,8 +5,9 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
 - **Applications folder.** At the first start, an app that runs from another folder (Downloads, a build folder)
   copies itself to `/Applications` (`~/Applications` without administrator rights), opens the copy, and quits.
   A copy in Downloads goes to the Trash. Development builds, `ZEUS_APP_TRACE`, and `ZEUS_APP_NO_MOVE=1` turn this off.
-- **Updates.** At each start, before any window or Zeus session opens, the app asks the private zeus repo for the newest release with a tag `app-v<version>` (`gh api`, with the user's GitHub CLI login; the app holds no token).
-  When that version is higher, the app shows a small "Updating Zeus" window, downloads `Zeus.zip` and `Zeus.zip.sha256` (`gh release download`), and checks the checksum, the zip, the bundle identifier, the version, and the signature.
+- **Updates.** At each start, before any chat window or Zeus session opens, the app asks the private zeus repo for the newest release with a tag `app-v<version>` (`gh api`, with the user's GitHub CLI login; the app holds no token).
+  While it checks, the app shows the loading screen (the Zeus globe) with "Checking for updates…"; the check stops after 5 s, and the app then starts its current version.
+  When that version is higher, the loading screen shows "Downloading Zeus X.Y.Z…", the app downloads `Zeus.zip` and `Zeus.zip.sha256` (`gh release download`), and checks the checksum, the zip, the bundle identifier, the version, and the signature.
   Then it swaps the new app into the place of the running app in one rename (`renamex_np` with `RENAME_SWAP`), opens the new copy, and waits up to 20 s for the new copy to confirm in `~/Library/Application Support/Zeus/update.json`.
   After the confirmation, it removes the old copy and quits; without it, it stops the new copy, swaps the old app back, and starts as before.
   Offline, without `gh`, without access, or with any error, the app starts its current version and shows nothing.
