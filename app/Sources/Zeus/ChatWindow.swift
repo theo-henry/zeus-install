@@ -208,6 +208,8 @@ final class ChatTab: NSObject {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(session.log.text, forType: .string)
         case "close": host?.close(self)
+        // "Go to the chat" in Zeus Editor: the chat of this tab must come to the front with the keyboard in it.
+        case "chat-focus": host?.bringToFront(self)
         default: break
         }
     }

@@ -302,6 +302,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 self.chatTabs.last?.webView.callAsyncJavaScript(
                     "[...document.querySelectorAll('.project-menu [role=\"option\"]')].find((option) => option.querySelector('.menu-item-label')?.textContent.trim() === name)?.click()",
                     arguments: ["name": argument], in: nil, in: .page)
+            // The chat page of the first tab posts "chat-focus", as after "Go to the chat" in Zeus Editor.
+            case "test-chat-focus":
+                self.chatTabs.first?.webView.evaluateJavaScript("window.webkit.messageHandlers.zeusApp.postMessage('chat-focus')")
             case "test-rename-open": self.chatTabs.last.map { $0.host?.startRename($0) }
             case "test-rename-save": self.chatTabs.last.map { $0.host?.endRename($0, name: argument) }
             case "toggle-menubar": self.toggleMenuBar(nil)

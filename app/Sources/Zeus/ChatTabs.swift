@@ -158,6 +158,19 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// Shows the tab and its window in front of all other windows, with the keyboard in the chat page,
+    /// also when Zeus Editor is in another app (the default browser).
+    func bringToFront(_ tab: ChatTab) {
+        guard tabs.contains(where: { $0 === tab }), let window else { return }
+        select(tab)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(tab.webView)
+        let inPage = (window.firstResponder as? NSView)?.isDescendant(of: tab.webView) ?? false
+        Trace.log("chat focused: \(tab.session.pid) \(tab.tabName.title) page-has-keyboard=\(inPage)")
+    }
+
     /// Shows the tab next to the selected tab: +1 is the tab to the right, -1 the tab to the left.
     func selectTab(offset: Int) {
         guard tabs.count > 1, let selectedTab, let index = tabs.firstIndex(where: { $0 === selectedTab }) else { return }

@@ -243,6 +243,10 @@ act test-rename-save:
 check "an empty name gives the tab the project name again" 'wait_for "tab name: Vicat project=Vicat custom=-" 10'
 act "test-pick-project:No project"
 check "a tab without a project is named Project again" 'wait_for "tab name: Project project=- custom=-" 10'
+# "Go to the chat" in Zeus Editor: the chat page posts "chat-focus", and its tab (here the first, not selected) comes to the front.
+act test-chat-focus
+check "chat-focus brings the tab of that chat to the front" 'wait_for "chat focused: " 10 && pid="$(grep "chat focused: " "$TRACE" | tail -1 | awk "{print \$4}")" && grep "tab selected: " "$TRACE" | tail -1 | grep -q "tab selected: $pid "'
+check "chat-focus puts the keyboard in the chat page" 'grep "chat focused: " "$TRACE" | tail -1 | grep -q "page-has-keyboard=true"'
 act test-cmd-j
 check "the per-tab terminal opens" 'wait_for "terminal visible: .* true" 10'
 act test-terminal-input
