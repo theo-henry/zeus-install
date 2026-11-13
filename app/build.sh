@@ -38,7 +38,7 @@ cp Resources/globe.js "$BUNDLE/Contents/Resources/globe.js"
 cp "$REPO_DIR/install.sh" "$BUNDLE/Contents/Resources/install.sh"
 printf 'APPL????' >"$BUNDLE/Contents/PkgInfo"
 
-codesign --force --deep --sign - "$BUNDLE"
+codesign --force --deep --sign - --entitlements Resources/Zeus.entitlements "$BUNDLE"
 codesign --verify --strict "$BUNDLE"
 
 # ditto keeps the bundle intact (signature, permissions) in the zip.

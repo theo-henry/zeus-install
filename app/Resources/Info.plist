@@ -37,6 +37,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Zeus uses the microphone for speech to text in the chat and Zeus Editor. The audio stays on this Mac.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Zeus turns your speech into text in the chat and Zeus Editor with Apple's speech recognition on this Mac. No audio leaves this Mac.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Zeus consultant workspace</string>
 </dict>

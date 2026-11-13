@@ -388,6 +388,7 @@ final class ChatTab: NSObject {
         closeApproved = true
         closePending = false
         closeGeneration += 1
+        SpeechService.shared.cancel(in: webView, reason: "tab closed")
         terminal.detach()
         session.stop()
         session.onStateChange = nil
@@ -438,6 +439,18 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     required init?(coder: NSCoder) { fatalError() }
 
     func windowWillClose(_ notification: Notification) {
+        SpeechService.shared.cancel(in: webView, reason: "window closed")
         EditorWindowController.open.removeAll { $0 === self }
     }
+
+    /// Speech to text stops when the page goes out of view: another tab of the window shows, or the window is minimized.
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let window, !window.occlusionState.contains(.visible) else { return }
+        SpeechService.shared.stop(in: webView, reason: "window hidden")
+    }
+
+    #if DEBUG
+    /// The newest Zeus Editor page, for the test actions.
+    static var newestWebView: WKWebView? { open.last?.webView }
+    #endif
 }
