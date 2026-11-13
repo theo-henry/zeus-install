@@ -9,9 +9,17 @@ console.log('Checking for Zeus updates... (simulated)');
 let busy = false;
 const page = `<!doctype html><html lang="en"><head><title>Zeus (simulated)</title><style>
 body{background:#0b2545;color:#f1f6f9;font:16px -apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-main{width:600px}textarea{display:block;width:100%;background:#071d38;color:#f1f6f9;border:1px solid #24477a;padding:16px;margin:20px 0}button{background:#3772ff;color:white;border:0;padding:10px 20px;border-radius:8px}
-</style></head><body><main><h1>Zeus chat</h1><p>PTY session ${process.pid}</p><p id="reply">How can I help?</p><textarea id="prompt" aria-label="Message"></textarea><button id="send">Send</button></main><script>
+main{width:600px}#globe{width:120px;height:120px;margin:0 auto;border-radius:50%;background:radial-gradient(circle at 40% 35%,#5b8cff,#1a3a64);opacity:0}
+.live #globe{opacity:1}textarea{display:block;width:100%;background:#071d38;color:#f1f6f9;border:1px solid #24477a;padding:16px;margin:20px 0}button{background:#3772ff;color:white;border:0;padding:10px 20px;border-radius:8px}
+</style></head><body><main><div id="globe"></div><h1>Zeus chat</h1><p>PTY session ${process.pid}</p><p id="reply">How can I help?</p><textarea id="prompt" aria-label="Message"></textarea><button id="send">Send</button></main><script>
 let pending=false;
+// Like the chat page of zeus-editor: the app moves its loading globe to this globe (rect), then shows the page.
+window.zeusGlobe={
+ rect(){const b=document.getElementById('globe').getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height};},
+ enter(){document.body.classList.add('entered');},
+ reveal(){document.body.classList.add('live');},
+};
+requestAnimationFrame(()=>requestAnimationFrame(()=>window.webkit?.messageHandlers?.zeusApp?.postMessage('chat-ready')));
 window.zeusApp={closeState:async()=>{
  if(document.getElementById('prompt').value.trim())return {safe_to_close:false,reason:'composer-draft'};
  if(pending)return {safe_to_close:false,reason:'busy'};

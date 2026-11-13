@@ -12,6 +12,9 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     /// The loading screen, above the chat page until the hand-over.
     private var loader: LoaderOverlay?
     private var handingOver = false
+    /// The globe hand-over plays once per app run, for the first chat. Later chats (Cmd+T, a retry)
+    /// come in at once when their page is ready: the user does not wait for the animation again.
+    private static var greeted = false
 
     private var terminal: TerminalPanel!
     private let closeBanner = NSStackView()
@@ -73,8 +76,10 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         handler.onScriptMessage = { [weak self] message in self?.handle(message) }
         handler.onPageLoaded = { [weak self, weak window] webView in
             WebViewHandler.matchTitleBar(of: window, to: webView)
-            // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.
             guard let self, self.shownURL != nil, webView.url == self.shownURL else { return }
+            // After the first chat, the page comes in as soon as it is loaded.
+            guard !Self.greeted else { self.handOver(); return }
+            // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.handOver() }
         }
         // A chat page that does not load must not stay behind the loading screen.
@@ -144,10 +149,18 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     /// The chat page is drawn. The loading globe moves to the place of the chat page's globe while the
     /// chat comes in behind it; then the chat page shows its own globe and the loading screen goes away.
     /// A chat page without a globe to hand over to (an older Zeus Editor, or a chat that is not empty)
-    /// gets a plain cross-fade.
+    /// gets a plain cross-fade. After the first chat of the app run, the chat comes in at once.
     private func handOver() {
         guard let loader, !handingOver, shownURL != nil else { return }
         handingOver = true
+        if Self.greeted {
+            Trace.log("hand-over: at once")
+            self.loader = nil
+            webView.evaluateJavaScript("window.zeusGlobe && (window.zeusGlobe.enter(), window.zeusGlobe.reveal())")
+            loader.remove(over: 0.15)
+            return
+        }
+        Self.greeted = true
         DispatchQueue.main.asyncAfter(deadline: .now() + loader.remainingTime) { [weak self] in
             guard let self else { return }
             let question = "window.zeusGlobe ? JSON.stringify(window.zeusGlobe.rect()) : 'null'"

@@ -201,6 +201,7 @@ if [ -n "$SHOTS" ]; then
 fi
 check "Start Zeus starts a hidden zeus session" 'wait_for "state: running(" 30'
 check "the chat page loads in the app window" 'wait_for "page loaded: http://127.0.0.1" 20'
+check "the first chat gets the globe hand-over" 'wait_for "hand-over: globe moves to" 10'
 check "zeus runs in ~/Code/zeus with --no-open" 'grep -q "\"--no-open\"" "$STATE/zeus-started" && grep -q "/Code/zeus\"" "$STATE/zeus-started"'
 shot 6-chat
 # A close with draft text must preserve the same WebView and PTY.
@@ -225,6 +226,7 @@ sleep 4
 act test-cmd-t
 sleep 4
 check "each new tab starts a separate PTY" '[ "$(grep -c " start " "$STATE/sessions")" = 3 ]'
+check "later tabs come in at once, without the globe hand-over" '[ "$(grep -c "hand-over: at once" "$TRACE")" = 2 ] && [ "$(grep -c "hand-over: globe moves" "$TRACE")" = 1 ]'
 act test-cmd-j
 check "the per-tab terminal opens" 'wait_for "terminal visible: .* true" 10'
 act test-terminal-input

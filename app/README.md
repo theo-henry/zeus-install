@@ -27,6 +27,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   While `zeus` starts, the chat page shows the Zeus globe with one line of status text, such as "Checking for updates…".
   When the chat page is ready, the globe moves to the place of the chat page's own globe while the chat comes in behind it.
   A chat page without a globe (an older Zeus Editor) gets a cross-fade.
+  This hand-over plays only for the first chat after the app starts; later chats (Cmd+T, **Try again**) come in at once when their page is ready.
   The close banner and the terminal panel stay usable while the loading screen shows.
 - **Links.** Pages on 127.0.0.1 stay in the app (pop-ups open in a new app window). Other links open in the default browser.
 
@@ -76,8 +77,8 @@ It presses the app's buttons through the debug test actions and checks the trace
 
 1. A new Mac: the check finds 12 steps to do; all 13 steps install, with the Anaconda license, the GitHub
    one-time code, and the Claude login answered in the app; Start Zeus opens the chat page from `~/Code/zeus`
-   with `--no-open`; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
-   Cmd+T tabs start separate sessions; Cmd+J shows the terminal and its input reaches that session;
+   with `--no-open` and the globe hand-over; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
+   Cmd+T tabs start separate sessions and come in without the hand-over; Cmd+J shows the terminal and its input reaches that session;
    a close while Zeus works waits for the turn; closing one tab keeps the others; a chat that cannot answer the close check
    (older editor plugin) waits 3 s, then **Close anyway** closes it; **Close anyway** also stops a busy tab; quitting stops every session.
 2. One tab has unsent text and one tab is busy: a logout that another app cancels changes nothing, a later quit asks about both tabs,
