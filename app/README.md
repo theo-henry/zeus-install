@@ -39,8 +39,11 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   `app.prevTab` (Ctrl+Shift+Tab), and `app.toggleTerminal` (Cmd+J). The pages handle their own actions (`chat.`, `editor.`, and `speech.toggle`).
   The app only reads the file: at start, when a page posts `{type: "settings-changed"}` to `window.webkit.messageHandlers.zeusApp`,
   and when the file changes (also from a browser). The menu items show the new shortcuts at once.
+  Two app actions never share a shortcut: a changed action that collides gets its default, until no two collide.
+  In the chat and Zeus Editor windows, the page does not get the shortcuts of the app actions, and a symbol key matches by its place on a US keyboard.
   A missing or damaged file, an entry that is not a shortcut, a shortcut without Cmd or Ctrl, a shortcut of two app actions,
-  and a reserved shortcut give the default: the macOS shortcuts (Cmd+Q, Cmd+Tab, Cmd+Space, Cmd+H, Cmd+M, Shift+Cmd+3/4/5, Ctrl+Cmd+Q, Alt+Cmd+Escape),
+  and a reserved shortcut give the default: the macOS shortcuts (Cmd+Q, Cmd+Tab, Cmd+Space, Cmd+H, Cmd+M, Shift+Cmd+3/4/5, Ctrl+Cmd+Q, Alt+Cmd+Escape,
+  Cmd+\`, Shift+Cmd+\`, Ctrl+Cmd+Space, Alt+Cmd+Space, Ctrl+Space, Shift+Cmd+Q, Ctrl+Up/Down/Left/Right, Alt+Cmd+D, Shift+Cmd+/),
   Cmd+, (Settings), and the fixed items of the app menu (Alt+Cmd+H, Cmd+Z, Shift+Cmd+Z, Cmd+X, Cmd+C, Cmd+V, Cmd+A, Cmd+R, Cmd+0, Cmd+=, Shift+Cmd+=, Cmd+-, Ctrl+Cmd+F).
   At document start, every Zeus page gets `window.zeusApp.shortcuts = {version: 1, appActions: [<ids>]}`, so that the settings pop-up shows the app shortcuts in the app only.
   **Zeus > Settings…** (Cmd+,) calls `window.zeusApp.openSettings?.()` in the page in front; **Zeus Setup…** has no shortcut.
@@ -178,9 +181,10 @@ It presses the app's buttons through the debug test actions and checks the trace
    another page cannot stop it, and closing the Zeus Editor window, closing the tab, or quitting the app ends it;
    with Apple's recognizer, the page gets the languages of this Mac, and a language that no Mac knows gives `no-on-device` without a permission question.
 4. Keyboard shortcuts: the app reads the changed shortcuts of the settings file at start, gives the default for a reserved shortcut,
-   a shortcut without Cmd or Ctrl, and a shortcut of two actions, and shows the shortcuts in the menu; the chat page has `window.zeusApp.shortcuts`;
+   a shortcut without Cmd or Ctrl, and a shortcut of two actions (also after a chain of collisions), and shows the shortcuts in the menu; the chat page has `window.zeusApp.shortcuts`;
    the old shortcut does nothing and the new one opens a tab; a file saved with a rename, a file written in place, and `{type: "settings-changed"}`
-   apply at once; a damaged file gives the defaults without a crash; Settings… calls `openSettings` in the chat page.
+   apply at once; a damaged file gives the defaults without a crash; a symbol key shortcut with Shift works in a Zeus Editor window;
+   Settings… calls `openSettings` in the chat page.
 5. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording

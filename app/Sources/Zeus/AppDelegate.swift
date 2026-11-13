@@ -324,6 +324,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 guard let event = shortcut.event(windowNumber: window?.windowNumber ?? 0) else { break }
                 let handled = window?.performKeyEquivalent(with: event) == true || NSApp.mainMenu?.performKeyEquivalent(with: event) == true
                 Trace.log("test key: \(shortcut) handled=\(handled)")
+            // The same key press in the newest Zeus Editor window.
+            case "test-editor-key":
+                guard let shortcut = Accelerator(argument), let window = EditorWindowController.newestWebView?.window,
+                      let event = shortcut.event(windowNumber: window.windowNumber) else { break }
+                let handled = window.performKeyEquivalent(with: event) || NSApp.mainMenu?.performKeyEquivalent(with: event) == true
+                Trace.log("test editor key: \(shortcut) handled=\(handled)")
             case "test-menu-shortcuts":
                 Trace.log("menu shortcuts: " + AppAction.allCases.compactMap { action in
                     self.actionItems[action].map { "\(action.rawValue)=\(Accelerator(menuItem: $0).map(String.init(describing:)) ?? "-")" }

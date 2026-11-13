@@ -87,7 +87,12 @@ struct Accelerator: Equatable, CustomStringConvertible {
     /// A key press for this shortcut, as the keyboard makes it (test actions).
     func event(windowNumber: Int) -> NSEvent? {
         let keyCode = Self.keyCodeNames.first { $0.value == key && $0.key != 76 }?.key ?? 0
-        let characters = keyEquivalent
+        // As a US keyboard: Shift changes the character of a letter, a digit, or a symbol key ("/" gives "?").
+        let shifted: [String: String] = [
+            "1": "!", "2": "@", "3": "#", "4": "$", "5": "%", "6": "^", "7": "&", "8": "*", "9": "(", "0": ")",
+            "[": "{", "]": "}", ",": "<", ".": ">", "/": "?", ";": ":", "'": "\"", "`": "~", "-": "_", "=": "+",
+        ]
+        let characters = modifiers.contains(.shift) ? shifted[key] ?? (key.count == 1 ? key : keyEquivalent) : keyEquivalent
         return NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
                                 windowNumber: windowNumber, context: nil, characters: characters,
                                 charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)
@@ -124,12 +129,16 @@ final class ShortcutSettings {
     static let shared = ShortcutSettings()
 
     /// Shortcuts that macOS or the app menu keeps: an app action cannot take them.
-    /// Cmd+, opens the settings, and the others are the system shortcuts and the fixed items of the app menu.
+    /// Cmd+, opens the settings; the others are the system shortcuts (also window cycling, the emoji picker,
+    /// Spotlight, the input source, log out, Mission Control and Spaces, the Dock, and the Help search)
+    /// and the fixed items of the app menu.
     static let reserved: Set<String> = [
         "Cmd+Q", "Cmd+Tab", "Cmd+Space", "Cmd+H", "Cmd+M", "Shift+Cmd+3", "Shift+Cmd+4", "Shift+Cmd+5",
         "Ctrl+Cmd+Q", "Alt+Cmd+Escape", "Cmd+,",
         "Alt+Cmd+H", "Cmd+Z", "Shift+Cmd+Z", "Cmd+X", "Cmd+C", "Cmd+V", "Cmd+A", "Cmd+R", "Cmd+0",
         "Cmd+=", "Shift+Cmd+=", "Cmd+-", "Ctrl+Cmd+F",
+        "Cmd+`", "Shift+Cmd+`", "Ctrl+Cmd+Space", "Alt+Cmd+Space", "Ctrl+Space", "Shift+Cmd+Q",
+        "Ctrl+Up", "Ctrl+Down", "Ctrl+Left", "Ctrl+Right", "Alt+Cmd+D", "Shift+Cmd+/",
     ]
 
     /// The page bridge: `window.zeusApp.shortcuts`, so that the settings pop-up shows the app shortcuts in the app.
@@ -204,11 +213,18 @@ final class ShortcutSettings {
             }
             result[action] = shortcut
         }
-        // Two actions with one shortcut: the changed ones get their defaults again.
-        for action in AppAction.allCases where result[action] != action.defaultShortcut {
-            if AppAction.allCases.contains(where: { $0 != action && result[$0] == result[action] }) {
-                Trace.log("shortcuts: \(action.rawValue) \(result[action]!) is used twice")
-                result[action] = action.defaultShortcut
+        // Two actions with one shortcut: the changed ones get their defaults again. A default can collide with
+        // a changed action that an earlier pass kept, so this repeats until no two actions share a shortcut.
+        // Each pass gives at least one changed action its default, so it ends.
+        var collided = true
+        while collided {
+            collided = false
+            for action in AppAction.allCases where result[action] != action.defaultShortcut {
+                if AppAction.allCases.contains(where: { $0 != action && result[$0] == result[action] }) {
+                    Trace.log("shortcuts: \(action.rawValue) \(result[action]!) is used twice")
+                    result[action] = action.defaultShortcut
+                    collided = true
+                }
             }
         }
         return result

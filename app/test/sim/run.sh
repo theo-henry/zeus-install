@@ -525,6 +525,18 @@ printf '{not json' >"$SETTINGS"
 check "a damaged settings file gives the defaults without a crash" 'wait_for "settings file is not valid JSON" 10 && wait_for "shortcuts: app.newTab=Cmd+T $DEFAULT_SHORTCUTS (file)" 10 && kill -0 "$APP_PID"'
 act test-key:Cmd+T
 check "Cmd+T opens a tab again" 'wait_starts $((starts + 3))'
+# A chain of collisions: newTab keeps Cmd+N only until newChat goes back to its default Cmd+N.
+printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Cmd+N", "app.newChat": "Cmd+J"}}' >"$SETTINGS"
+check "a chain of collisions gives each action its own shortcut" \
+  'wait_for "app.newChat Cmd+J is used twice" 10 && wait_for "app.newTab Cmd+N is used twice" 10 && wait_for "shortcuts: unchanged (file)" 10'
+# Zeus Editor windows match a symbol key with Shift by its place, as the chat window does (";" with Shift types ":").
+printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Shift+Cmd+;"}}' >"$SETTINGS"
+check "a symbol key shortcut applies" 'wait_for "shortcuts: app.newTab=Shift+Cmd+; $DEFAULT_SHORTCUTS (file)" 10'
+act test-open-editor
+check "a Zeus Editor page opens" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/editor" 10'
+act "test-editor-key:Shift+Cmd+;"
+check "the shortcut opens a tab from a Zeus Editor window" 'wait_starts $((starts + 4))'
+act test-close-editor
 rm -f "$SETTINGS"
 act test-settings
 check "Settings… opens the settings of the chat page in front" 'wait_for "settings opened" 10 && shortcuts_page_has "\"settings\":1"'
