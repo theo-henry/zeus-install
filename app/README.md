@@ -88,7 +88,8 @@ It presses the app's buttons through the debug test actions and checks the trace
    one-time code, and the Claude login answered in the app; Start Zeus opens the chat page from `~/Code/zeus`
    with `--no-open` and the globe hand-over; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
    Cmd+T tabs start separate sessions and come in without the hand-over; a tab takes the name of the project picked in its chat,
-   keeps a name given with Rename, and gets the project name again after an empty name; Cmd+J shows the terminal and its input reaches that session;
+   keeps a name given with Rename, and gets the project name again after an empty name;
+   `"chat-focus"` from the chat page of a tab that is not selected shows that tab with the keyboard in its chat page; Cmd+J shows the terminal and its input reaches that session;
    a close while Zeus works waits for the turn; closing one tab keeps the others; a chat that cannot answer the close check
    (older editor plugin) waits 3 s, then **Close anyway** closes it; **Close anyway** also stops a busy tab; quitting stops every session.
 2. One tab has unsent text and one tab is busy: a logout that another app cancels changes nothing, a later quit asks about both tabs,
