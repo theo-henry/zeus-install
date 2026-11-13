@@ -1,7 +1,9 @@
 import AppKit
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
+    /// The chat tabs in the order they opened, and the windows that show them.
+    private var chatTabs: [ChatTab] = []
     private var chatWindows: [ChatWindowController] = []
     private var setupWindow: SetupWindowController?
     /// A user quit checks the tabs and asks about the unsafe ones before it stops the sessions.
@@ -101,26 +103,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func checkTabsBeforeQuit() {
-        let windows = chatWindows
-        guard !windows.isEmpty else { approveQuit(); return }
-        var unsafe: [(ChatWindowController, String)] = []
-        var remaining = windows.count
-        for window in windows {
-            window.closeState { [weak self] reason in
-                if let reason { unsafe.append((window, reason)) }
+        let tabs = chatTabs
+        guard !tabs.isEmpty else { approveQuit(); return }
+        var unsafe: [(ChatTab, String)] = []
+        var remaining = tabs.count
+        for tab in tabs {
+            tab.closeState { [weak self] reason in
+                if let reason { unsafe.append((tab, reason)) }
                 remaining -= 1
                 if remaining == 0 { DispatchQueue.main.async { self?.confirmQuit(unsafe) } }
             }
         }
     }
 
-    private func confirmQuit(_ unsafe: [(ChatWindowController, String)]) {
+    private func confirmQuit(_ unsafe: [(ChatTab, String)]) {
         guard checkingQuit else { return }
-        guard let window = unsafe.first?.0.window else { approveQuit(); return }
+        guard let first = unsafe.first?.0, let window = first.host?.window else { approveQuit(); return }
+        first.host?.select(first)
         Trace.log("quit deferred: \(unsafe.map(\.1).joined(separator: " "))")
         let alert = NSAlert()
         alert.messageText = unsafe.count == 1 ? "A Zeus tab is not safe to close" : "\(unsafe.count) Zeus tabs are not safe to close"
-        alert.informativeText = unsafe.map { "\($0.0.window?.title ?? "Zeus"): \(ChatWindowController.closeSummary(for: $0.1))" }
+        alert.informativeText = unsafe.map { "\($0.0.tabName.title): \(ChatTab.closeSummary(for: $0.1))" }
             .joined(separator: "\n") + "\n\nIf you quit, Zeus stops in every tab."
         alert.addButton(withTitle: "Quit Anyway")
         alert.addButton(withTitle: "Cancel")
@@ -156,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// The close check takes at most `closeCheckLimit`, so the quit ends within 12 s.
     private func stopAllAndQuit() {
-        SessionManager.shared.stopAll(timeout: 12 - ChatWindowController.closeCheckLimit) {
+        SessionManager.shared.stopAll(timeout: 12 - ChatTab.closeCheckLimit) {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
     }
@@ -181,32 +184,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func show(_ session: ZeusSession) {
-        if let existing = chatWindows.first(where: { $0.session === session }) {
-            existing.showWindow(nil)
-            existing.window?.makeKeyAndOrderFront(nil)
+        if let existing = chatTabs.first(where: { $0.session === session }), let host = existing.host {
+            host.select(existing)
+            host.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let controller = ChatWindowController(session: session)
-        controller.onClosed = { [weak self] closed in self?.chatWindows.removeAll { $0 === closed } }
-        controller.onRetry = { [weak self, weak controller] in
-            controller?.window?.close()
+        let tab = ChatTab(session: session)
+        tab.onClosed = { [weak self] closed in self?.chatTabs.removeAll { $0 === closed } }
+        tab.onRetry = { [weak self, weak tab] in
+            tab?.requestClose()
             self?.newChat(nil)
         }
-        controller.onRunSetup = { [weak self, weak controller] in
-            controller?.window?.close()
+        tab.onRunSetup = { [weak self, weak tab] in
+            tab?.requestClose()
             self?.showSetup(nil)
         }
+        chatTabs.append(tab)
         // New chats open as tabs of the chat window in use, like new tabs in a browser.
-        let host = (NSApp.keyWindow?.windowController as? ChatWindowController ?? chatWindows.last)?.window
-        chatWindows.append(controller)
-        if let host, host.isVisible, let window = controller.window {
-            host.addTabbedWindow(window, ordered: .above)
-        }
-        controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
+        let host = keyChatWindow ?? chatWindows.last ?? {
+            let window = ChatWindowController()
+            window.onClosed = { [weak self] closed in self?.chatWindows.removeAll { $0 === closed } }
+            chatWindows.append(window)
+            return window
+        }()
+        host.add(tab)
+        host.showWindow(nil)
+        host.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    /// The key window, or the front window of the app while another app is active.
+    private var frontWindow: NSWindow? { NSApp.keyWindow ?? NSApp.orderedWindows.first }
+    private var keyChatWindow: ChatWindowController? { frontWindow?.windowController as? ChatWindowController }
+    private var keyChatTab: ChatTab? { keyChatWindow?.selectedTab }
 
     @objc func showSetup(_ sender: Any?) {
         if let setupWindow {
@@ -241,14 +252,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let testID = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_ID"].map { "." + $0 } ?? ""
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("io.github.theo-henry.zeus.test" + testID),
                                                             object: nil, queue: .main) { [weak self] note in
-            guard let self, var action = note.object as? String else { return }
+            guard let self, var object = note.object as? String else { return }
             // "@<pid> <action>" goes to one copy of the app only.
-            if action.hasPrefix("@") {
-                let parts = action.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
+            if object.hasPrefix("@") {
+                let parts = object.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
                 guard parts.count == 2, Int32(parts[0]) == ProcessInfo.processInfo.processIdentifier else { return }
-                action = parts[1]
+                object = parts[1]
             }
-            Trace.log("test action: \(action.prefix(60))")
+            Trace.log("test action: \(object.prefix(60))")
+            // An action can carry one argument after a colon: "test-rename-save:New name".
+            let parts = object.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            let action = String(parts[0])
+            let argument = parts.count > 1 ? String(parts[1]) : ""
             let model = self.setupWindow?.model
             switch action {
             case "setup-install": model?.install()
@@ -267,21 +282,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: key == "t" ? 17 : 38) {
                     _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
                 }
-            case "test-cancel-close": self.chatWindows.last?.cancelClose()
-            case "test-close-anyway": self.chatWindows.last?.closeAnyway()
+            case "test-cancel-close": self.chatTabs.last?.cancelClose()
+            case "test-close-anyway": self.chatTabs.last?.closeAnyway()
             case "new-chat": self.newChat(nil)
-            case "close-chat": self.chatWindows.last?.window?.performClose(nil)
-            case "toggle-terminal": self.chatWindows.last?.toggleTerminal()
-            case "test-draft": self.chatWindows.last?.webView.evaluateJavaScript("document.querySelector('textarea').value = 'Test chat turn'; document.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}))")
-            case "test-clear": self.chatWindows.last?.webView.evaluateJavaScript("document.querySelector('textarea').value = ''; document.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}))")
-            case "test-send": self.chatWindows.last?.webView.evaluateJavaScript("document.querySelector('#send,.send-button').click()")
+            case "close-chat": self.chatTabs.last.map { $0.host?.close($0) }
+            case "toggle-terminal": self.chatTabs.last?.toggleTerminal()
+            case "test-draft": self.chatTabs.last?.webView.evaluateJavaScript("document.querySelector('textarea').value = 'Test chat turn'; document.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}))")
+            case "test-clear": self.chatTabs.last?.webView.evaluateJavaScript("document.querySelector('textarea').value = ''; document.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}))")
+            case "test-send": self.chatTabs.last?.webView.evaluateJavaScript("document.querySelector('#send,.send-button').click()")
             case "test-real-turn":
-                self.chatWindows.last?.webView.evaluateJavaScript("const input=document.querySelector('textarea'); input.value='Reply with APP_OK. Do not use tools or change files.'; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.send-button').click()")
+                self.chatTabs.last?.webView.evaluateJavaScript("const input=document.querySelector('textarea'); input.value='Reply with APP_OK. Do not use tools or change files.'; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.send-button').click()")
             case "test-inspect":
-                self.chatWindows.last?.webView.evaluateJavaScript("document.body.innerText.slice(-1800)") { result, error in
+                self.chatTabs.last?.webView.evaluateJavaScript("document.body.innerText.slice(-1800)") { result, error in
                     Trace.log("test page: \(result ?? error?.localizedDescription ?? "empty")")
                 }
-            case "test-terminal-input": self.chatWindows.last?.testTerminalInput()
+            case "test-terminal-input": self.chatTabs.last?.testTerminalInput()
+            // Picks a project in the project menu of the chat page, as a click does.
+            case "test-pick-project":
+                self.chatTabs.last?.webView.callAsyncJavaScript(
+                    "[...document.querySelectorAll('.project-menu [role=\"option\"]')].find((option) => option.querySelector('.menu-item-label')?.textContent.trim() === name)?.click()",
+                    arguments: ["name": argument], in: nil, in: .page)
+            case "test-rename-open": self.chatTabs.last.map { $0.host?.startRename($0) }
+            case "test-rename-save": self.chatTabs.last.map { $0.host?.endRename($0, name: argument) }
             case "toggle-menubar": self.toggleMenuBar(nil)
             // Not from inside this main-queue block: quitting waits for callbacks on the main queue.
             case "quit": NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
@@ -311,16 +333,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// The chat page (or editor page) of the front window. A chat window holds it below its loading screen.
     private var keyWebView: WKWebView? {
-        (NSApp.keyWindow?.windowController as? ChatWindowController)?.webView ?? (NSApp.keyWindow?.contentView as? WKWebView)
+        keyChatTab?.webView ?? (frontWindow?.contentView as? WKWebView)
     }
 
     @objc private func toggleTerminal(_ sender: Any?) {
-        (NSApp.keyWindow?.windowController as? ChatWindowController)?.toggleTerminal(sender)
+        keyChatTab?.toggleTerminal(sender)
     }
 
     @objc private func reloadPage(_ sender: Any?) {
-        if let controller = NSApp.keyWindow?.windowController as? ChatWindowController {
-            controller.reload()
+        if let tab = keyChatTab {
+            tab.reload()
         } else {
             keyWebView?.reload()
         }
@@ -329,6 +351,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func zoomIn(_ sender: Any?) { keyWebView.map { $0.pageZoom = min($0.pageZoom + 0.1, 3) } }
     @objc private func zoomOut(_ sender: Any?) { keyWebView.map { $0.pageZoom = max($0.pageZoom - 0.1, 0.5) } }
     @objc private func actualSize(_ sender: Any?) { keyWebView?.pageZoom = 1 }
+
+    /// Cmd+W closes the selected tab of a chat window, and the window with its last tab.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let tabs = keyChatWindow?.tabs.count ?? 0
+        menu.items.first { $0.action == #selector(NSWindow.performClose(_:)) }?.title = tabs > 1 ? "Close Tab" : "Close Window"
+    }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
@@ -369,6 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         file.addItem(withTitle: "New Chat", action: #selector(newChat(_:)), keyEquivalent: "n")
         file.addItem(.separator())
         file.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        file.delegate = self
         main.addItem(submenu: file)
 
         let edit = NSMenu(title: "Edit")
@@ -397,6 +426,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let window = NSMenu(title: "Window")
         window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         window.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        window.addItem(.separator())
+        let previousTab = window.addItem(withTitle: "Show Previous Tab", action: #selector(NSWindow.selectPreviousTab(_:)), keyEquivalent: "\t")
+        previousTab.keyEquivalentModifierMask = [.control, .shift]
+        let nextTab = window.addItem(withTitle: "Show Next Tab", action: #selector(NSWindow.selectNextTab(_:)), keyEquivalent: "\t")
+        nextTab.keyEquivalentModifierMask = .control
         window.addItem(.separator())
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         main.addItem(submenu: window)

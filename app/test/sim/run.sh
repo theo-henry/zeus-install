@@ -227,6 +227,22 @@ act test-cmd-t
 sleep 4
 check "each new tab starts a separate PTY" '[ "$(grep -c " start " "$STATE/sessions")" = 3 ]'
 check "later tabs come in at once, without the globe hand-over" '[ "$(grep -c "hand-over: at once" "$TRACE")" = 2 ] && [ "$(grep -c "hand-over: globe moves" "$TRACE")" = 1 ]'
+# Tab names: the project of the chat, until the user renames the tab. The app does not keep them.
+check "a new tab without a project is named Project" 'grep "tab selected: " "$TRACE" | tail -1 | grep -q " Project$"'
+wait_count "state: running(" 3 20 >/dev/null && sleep 1
+act test-pick-project:Solvias
+check "a project picked in the chat names the tab" 'wait_for "tab name: Solvias project=Solvias custom=-" 10'
+act test-rename-open
+shot 8-tab-names
+act "test-rename-save:Solvias QA"
+check "a renamed tab shows the new name" 'wait_for "tab name: Solvias QA project=Solvias custom=Solvias QA" 10'
+act test-pick-project:Vicat
+check "a renamed tab keeps its name when the project changes" 'wait_for "tab name: Solvias QA project=Vicat custom=Solvias QA" 10'
+act test-rename-open
+act test-rename-save:
+check "an empty name gives the tab the project name again" 'wait_for "tab name: Vicat project=Vicat custom=-" 10'
+act "test-pick-project:No project"
+check "a tab without a project is named Project again" 'wait_for "tab name: Project project=- custom=-" 10'
 act test-cmd-j
 check "the per-tab terminal opens" 'wait_for "terminal visible: .* true" 10'
 act test-terminal-input

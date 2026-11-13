@@ -7,8 +7,9 @@ import WebKit
 final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     /// Called with the URL of a Zeus page that asks for a new window.
     var openLocalWindow: ((URLRequest, WKWebViewConfiguration) -> WKWebView?)?
-    /// Called for a message from a status page ("retry", "setup", ...).
-    var onScriptMessage: ((String) -> Void)?
+    /// Called for a message from a page: a string from a status page ("retry", "setup", ...),
+    /// or an object from the chat page ({type: "project", ...}).
+    var onScriptMessage: ((Any) -> Void)?
     /// A pop-up window that has loaded nothing yet closes when its first page is not a Zeus page.
     var isPopup = false
     /// Called when a page has loaded.
@@ -198,6 +199,8 @@ private final class ScriptBridge: NSObject, WKScriptMessageHandler {
     weak var handler: WebViewHandler?
     init(handler: WebViewHandler) { self.handler = handler }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        if let body = message.body as? String { handler?.onScriptMessage?(body) }
+        // Frames inside a page can come from other sites; only the page itself talks to the app.
+        guard message.frameInfo.isMainFrame else { return }
+        handler?.onScriptMessage?(message.body)
     }
 }

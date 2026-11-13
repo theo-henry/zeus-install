@@ -11,7 +11,8 @@ const page = `<!doctype html><html lang="en"><head><title>Zeus (simulated)</titl
 body{background:#0b2545;color:#f1f6f9;font:16px -apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
 main{width:600px}#globe{width:120px;height:120px;margin:0 auto;border-radius:50%;background:radial-gradient(circle at 40% 35%,#5b8cff,#1a3a64);opacity:0}
 .live #globe{opacity:1}textarea{display:block;width:100%;background:#071d38;color:#f1f6f9;border:1px solid #24477a;padding:16px;margin:20px 0}button{background:#3772ff;color:white;border:0;padding:10px 20px;border-radius:8px}
-</style></head><body><main><div id="globe"></div><h1>Zeus chat</h1><p>PTY session ${process.pid}</p><p id="reply">How can I help?</p><textarea id="prompt" aria-label="Message"></textarea><button id="send">Send</button></main><script>
+header{position:fixed;top:0;left:0;right:0;display:flex;justify-content:flex-end;gap:8px;padding:12px}.pill{background:none;color:#c7dbe6;border:1px solid #24477a;border-radius:999px;padding:4px 11px}.project-menu{display:none}
+</style></head><body><header><nav class="project-menu" role="listbox"><button role="option"><span class="menu-item-label">Solvias</span></button><button role="option"><span class="menu-item-label">Vicat</span></button><button role="option"><span class="menu-item-label">No project</span></button></nav><button class="pill project-pill"><span class="pill-text">No project</span></button></header><main><div id="globe"></div><h1>Zeus chat</h1><p>PTY session ${process.pid}</p><p id="reply">How can I help?</p><textarea id="prompt" aria-label="Message"></textarea><button id="send">Send</button></main><script>
 let pending=false;
 // Like the chat page of zeus-editor: the app moves its loading globe to this globe (rect), then shows the page.
 window.zeusGlobe={
@@ -20,6 +21,8 @@ window.zeusGlobe={
  reveal(){document.body.classList.add('live');},
 };
 requestAnimationFrame(()=>requestAnimationFrame(()=>window.webkit?.messageHandlers?.zeusApp?.postMessage('chat-ready')));
+// The project menu and the project button of the Zeus chat (zeus-editor src/chat/client/main.js).
+for(const option of document.querySelectorAll('.project-menu [role="option"]'))option.onclick=()=>{document.querySelector('.project-pill .pill-text').textContent=option.textContent;};
 window.zeusApp={closeState:async()=>{
  if(document.getElementById('prompt').value.trim())return {safe_to_close:false,reason:'composer-draft'};
  if(pending)return {safe_to_close:false,reason:'busy'};
