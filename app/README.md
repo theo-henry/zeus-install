@@ -49,7 +49,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The recognition runs on the Mac only (`requiresOnDeviceRecognition`), so no audio leaves the Mac.
   The app asks for the speech recognition and microphone permissions at the first use, not at start.
   At document start, every Zeus page gets `window.zeusApp.speech = {version: 1}`; the page keeps it when it sets its own `window.zeusApp`.
-  A page posts `{type: "speech-languages"}`, `{type: "speech-start", id, locale}` (a BCP-47 id, or null for the language of the Mac), and `{type: "speech-stop", id}` to `window.webkit.messageHandlers.zeusApp`.
+  A page posts `{type: "speech-languages"}`, `{type: "speech-start", id, locale}` (a BCP-47 id, or null for the `default` of the languages answer), and `{type: "speech-stop", id}` to `window.webkit.messageHandlers.zeusApp`.
   The app answers in that page only, with `window.zeusSpeech?.onEvent(event)`:
   `{type: "languages", locales: [{id, name, onDevice: true}], default}` (only the languages that the Mac recognizes on the Mac),
   `{type: "state", id, state: "listening" | "stopped"}`, `{type: "partial", id, text}`, `{type: "final", id, text}`,
