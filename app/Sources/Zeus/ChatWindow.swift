@@ -1,13 +1,18 @@
 import AppKit
 import WebKit
 
-/// The window of one Zeus session. It shows the loading screen (the Zeus globe) while `zeus` starts,
-/// then hands over to the chat page. Closing the window ends the session.
-final class ChatWindowController: NSWindowController, NSWindowDelegate {
+/// The tab of one Zeus session in a chat window. It shows the loading screen (the Zeus globe) while `zeus` starts,
+/// then hands over to the chat page. Closing the tab ends the session.
+final class ChatTab: NSObject {
     let session: ZeusSession
+    /// The content of the tab: the close banner, the page, and the terminal.
+    let view = NSStackView()
+    /// The window that shows the tab.
+    weak var host: ChatWindowController?
     private let handler = WebViewHandler()
     private(set) var webView: WKWebView!
-    private var titleObservation: NSKeyValueObservation?
+    /// The name of the tab: the project of the chat, or a name that the user gave it.
+    let tabName = TabName()
     private var shownURL: URL?
     /// The loading screen, above the chat page until the hand-over.
     private var loader: LoaderOverlay?
@@ -27,56 +32,43 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     private var closePending = false
     private var closeApproved = false
     private var closeGeneration = 0
+    private var closed = false
 
     var onRunSetup: (() -> Void)?
     var onRetry: (() -> Void)?
-    var onClosed: ((ChatWindowController) -> Void)?
+    var onClosed: ((ChatTab) -> Void)?
 
     init(session: ZeusSession) {
         self.session = session
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                              backing: .buffered, defer: false)
-        window.title = "Zeus"
-        // The chat page draws its own header; the title bar only keeps the window buttons.
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.minSize = NSSize(width: 640, height: 480)
-        window.tabbingMode = .preferred
-        window.tabbingIdentifier = "ZeusChat"
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = LoaderPage.background
-        window.isReleasedWhenClosed = false
-        super.init(window: window)
-        window.delegate = self
+        super.init()
 
         webView = handler.makeWebView()
+        webView.configuration.userContentController.addUserScript(TabName.projectScript)
         // The window's Zeus background shows until the first page paints, not a gray frame.
         webView.setValue(false, forKey: "drawsBackground")
         terminal = TerminalPanel(session: session)
         terminal.webView.isHidden = true
         makeCloseBanner()
-        let content = NSStackView(views: [closeBanner, webView, terminal.webView])
+        let content = self.view
+        for part in [closeBanner, webView!, terminal.webView] { content.addArrangedSubview(part) }
         content.orientation = .vertical
         content.spacing = 0
         content.alignment = .leading
-        window.contentView = content
         for view in [closeBanner, webView!, terminal.webView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
         }
         terminal.webView.heightAnchor.constraint(equalToConstant: 260).isActive = true
         webView.heightAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
-        window.setFrameAutosaveName("ZeusChatWindow")
-        if window.frame.origin == .zero { window.center() }
 
         handler.openLocalWindow = { request, configuration in
             EditorWindowController.open(request: request, configuration: configuration)
         }
         handler.onScriptMessage = { [weak self] message in self?.handle(message) }
-        handler.onPageLoaded = { [weak self, weak window] webView in
-            WebViewHandler.matchTitleBar(of: window, to: webView)
-            guard let self, self.shownURL != nil, webView.url == self.shownURL else { return }
+        handler.onPageLoaded = { [weak self] webView in
+            guard let self else { return }
+            if self.host?.selectedTab === self { WebViewHandler.matchTitleBar(of: webView.window, to: webView) }
+            guard self.shownURL != nil, webView.url == self.shownURL else { return }
             // After the first chat, the page comes in as soon as it is loaded.
             guard !Self.greeted else { self.handOver(); return }
             // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.
@@ -84,19 +76,11 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         }
         // A chat page that does not load must not stay behind the loading screen.
         handler.onPageFailed = { [weak self] in self?.handOver() }
-        titleObservation = webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
-            guard let self, self.shownURL != nil else { return }
-            let title = webView.title ?? ""
-            self.window?.title = title.isEmpty ? "Zeus" : title
-        }
 
         session.onStateChange = { [weak self] _ in self?.render() }
         session.onLog = { [weak self] in self?.updateLoaderStatus() }
         render()
     }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
 
     private func render() {
         switch session.state {
@@ -110,13 +94,12 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
             webView.load(URLRequest(url: url))   // Behind the loading screen, until the hand-over.
         case let .failed(message):
             shownURL = nil
-            window?.title = "Zeus"
             webView.loadHTMLString(StatusPage.failed(message: message, log: session.log.text), baseURL: nil)
             if let loader { dismiss(loader, over: 0.25) }
             loader = nil
         case .ended:
-            // Claude Code ended (for example /exit in the chat). The window has nothing left to show.
-            window?.close()
+            // Claude Code ended (for example /exit in the chat). The tab has nothing left to show.
+            finishClose()
         }
     }
 
@@ -125,7 +108,8 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     /// The loading screen covers the chat page only: the close banner and the terminal panel stay usable.
     /// It has the chat page's frame, so the globe's place in the chat page is also its place here.
     private func showLoader() {
-        guard loader == nil, let content = window?.contentView else { return }
+        guard loader == nil else { return }
+        let content = self.view
         let overlay = LoaderOverlay(frame: webView.frame)
         let view = overlay.view
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -143,7 +127,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     /// Removes the loading screen. When it had the keyboard focus, the chat page gets it.
     private func dismiss(_ loader: LoaderOverlay, over duration: TimeInterval) {
         loader.remove(over: duration) { [weak self] in
-            guard let self, let window = self.window, window.firstResponder === window else { return }
+            guard let self, let window = self.view.window, window.firstResponder === window else { return }
             window.makeFirstResponder(self.webView)
         }
     }
@@ -204,7 +188,12 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         return CGRect(x: x, y: y, width: width, height: height)
     }
 
-    private func handle(_ message: String) {
+    private func handle(_ body: Any) {
+        if let message = body as? [String: Any] {
+            if let project = TabName.project(from: message) { tabName.setProject(project) }
+            return
+        }
+        guard let message = body as? String else { return }
         switch message {
         case "chat-ready":
             // After a reload of the page there is no loading screen: the page comes in at once.
@@ -218,7 +207,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         case "copy-log":
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(session.log.text, forType: .string)
-        case "close": window?.performClose(nil)
+        case "close": host?.close(self)
         default: break
         }
     }
@@ -230,16 +219,18 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     @objc func toggleTerminal(_ sender: Any? = nil) {
         terminal.webView.isHidden.toggle()
         if !terminal.webView.isHidden { terminal.focus() }
-        else { window?.makeFirstResponder(webView) }
+        else { view.window?.makeFirstResponder(webView) }
         Trace.log("terminal visible: \(session.pid) \(!terminal.webView.isHidden)")
     }
 
     func testTerminalInput() { terminal.webView.evaluateJavaScript("term.input('terminal-test\\r', true)") }
 
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if closeApproved || !session.isAlive { return true }
-        requestSafeClose()
-        return false
+    /// The view that gets the keyboard when the tab shows.
+    var focusView: NSView { terminal.webView.isHidden ? webView : terminal.webView }
+
+    /// Closes the tab at once when its session has ended, else after the safe-close check.
+    func requestClose() {
+        if closeApproved || !session.isAlive { finishClose() } else { requestSafeClose() }
     }
 
     /// The chat is the authority for work, draft text, attachments, and pending sends. The tab stays
@@ -390,18 +381,17 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func finishClose() {
+        guard !closed else { return }
+        closed = true
         closeApproved = true
         closePending = false
-        window?.close()
-    }
-
-    func windowWillClose(_ notification: Notification) {
         closeGeneration += 1
         terminal.detach()
         session.stop()
         session.onStateChange = nil
         session.onLog = nil
         if !session.isAlive { SessionManager.shared.remove(session) }
+        host?.remove(self)
         onClosed?(self)
     }
 }
