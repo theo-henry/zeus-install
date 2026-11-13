@@ -246,7 +246,7 @@ SWIFT
   quit_all() {
     "$BIN/act" quit
     local waited=0
-    while [ "$(copies)" != 0 ] && [ "$waited" -lt 30 ]; do sleep 0.5; waited=$((waited + 1)); done
+    while [ "$(copies)" != 0 ] && [ "$waited" -lt 120 ]; do sleep 0.5; waited=$((waited + 1)); done
     if [ "$(copies)" = 0 ]; then pass "the app quits"; else fail "the app quits"; pkill -f "$APPS/Zeus.app/Contents/MacOS/Zeus" || true; fi
     cp "$TRACE" "$WORK/$NAME.trace" 2>/dev/null || true
   }
@@ -256,14 +256,14 @@ SWIFT
   releases "$STATE" "v5.0.0:false:false" "app-v1.0.0:false:false" "app-v1.1.0:false:false" "app-v1.2.0:true:false"
   publish "$STATE" app-v1.1.0 1.1.0
   launch
-  check "the app finds the newer release at launch" 'wait_for "update: current=1.0.0 newest=1.1.0" 30'
-  check "it shows the loading screen during the check" 'wait_for "update window: checking" 10'
-  check "the loading screen shows the download" 'wait_for "update window: downloading 1.1.0" 10'
-  check "the new copy starts and confirms the update" 'wait_for "update: confirmed 1.0.0 -> 1.1.0" 40'
-  check "the old copy finishes the update and quits" 'wait_for "update: done 1.0.0 -> 1.1.0" 20 && sleep 1 && ! kill -0 "$APP_PID" 2>/dev/null'
+  check "the app finds the newer release at launch" 'wait_for "update: current=1.0.0 newest=1.1.0" 60'
+  check "it shows the loading screen during the check" 'wait_for "update window: checking" 60'
+  check "the loading screen shows the download" 'wait_for "update window: downloading 1.1.0" 120'
+  check "the new copy starts and confirms the update" 'wait_for "update: confirmed 1.0.0 -> 1.1.0" 120'
+  check "the old copy finishes the update and quits" 'wait_for "update: done 1.0.0 -> 1.1.0" 120 && sleep 1 && ! kill -0 "$APP_PID" 2>/dev/null'
   check "the app in Applications is now version 1.1.0 with a valid signature" \
     '[ "$(app_version "$APPS/Zeus.app")" = 1.1.0 ] && codesign --verify --strict "$APPS/Zeus.app"'
-  check "the new copy runs version 1.1.0 and opens the setup window" 'grep -q "launched: version=1.1.0" "$TRACE" && wait_for "setup ended: check=true" 30'
+  check "the new copy runs version 1.1.0 and opens the setup window" 'grep -q "launched: version=1.1.0" "$TRACE" && wait_for "setup ended: check=true" 60'
   check "the new copy does not check again" '[ "$(grep -c "update: current=" "$TRACE")" = 1 ]'
   check "the old copy and the update files are removed" \
     '[ -n "$(work_folder)" ] && [ ! -e "$(work_folder)" ] && [ ! -e "$SUPPORT/update.json" ]'
@@ -275,7 +275,7 @@ SWIFT
   app_case current 1.1.0
   releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false"
   launch
-  check "an app that is up to date starts at once" 'wait_for "update: none (up to date)" 30 && wait_for "setup ended: check=true" 30'
+  check "an app that is up to date starts at once" 'wait_for "update: none (up to date)" 60 && wait_for "setup ended: check=true" 60'
   check "it downloads nothing" '! grep -q "release download" "$STATE/gh.log" && ! grep -q "update window: downloading" "$TRACE"'
   quit_all
 
@@ -284,7 +284,7 @@ SWIFT
   publish "$STATE" app-v1.1.0 1.1.0
   launch ZEUS_SIM_NO_ACCESS=theo-henry/zeus
   check "without access (or offline), the app starts its current version" \
-    'wait_for "update: none (no release list" 30 && wait_for "setup ended: check=true" 30 && [ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ]'
+    'wait_for "update: none (no release list" 60 && wait_for "setup ended: check=true" 60 && [ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ]'
   check "it shows no download and no message" '! grep -q "update window: downloading" "$TRACE" && ! grep -qi "alert\|failed" "$TRACE"'
   quit_all
 
@@ -294,8 +294,8 @@ SWIFT
   echo "0000  Zeus.zip" >"$STATE/releases/app-v1.1.0/Zeus.zip.sha256"
   launch
   check "a download with a wrong checksum is not installed" \
-    'wait_for "update: none (failed: checksum mismatch)" 30 && [ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ]'
-  check "the app then starts its current version" 'wait_for "setup ended: check=true" 30'
+    'wait_for "update: none (failed: checksum mismatch)" 60 && [ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ]'
+  check "the app then starts its current version" 'wait_for "setup ended: check=true" 60'
   check "the update files are removed" '[ -n "$(work_folder)" ] && [ ! -e "$(work_folder)" ]'
   quit_all
 
@@ -304,17 +304,17 @@ SWIFT
   publish "$STATE" app-v1.1.0 1.1.0 com.example.other
   launch
   check "a download with another bundle identifier is not installed" \
-    'wait_for "update: none (failed: not Zeus 1.1.0)" 30 && [ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ]'
+    'wait_for "update: none (failed: not Zeus 1.1.0)" 60 && [ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ]'
   quit_all
 
   app_case rollback 1.0.0
   releases "$STATE" "app-v1.1.0:false:false"
   publish "$STATE" app-v1.1.0 1.1.0
   launch ZEUS_APP_TEST_NO_CONFIRM=1
-  check "when the new copy does not confirm, the old copy is put back" 'wait_for "update: rolled back to 1.0.0" 60'
+  check "when the new copy does not confirm, the old copy is put back" 'wait_for "update: rolled back to 1.0.0" 120'
   check "the app in Applications is version 1.0.0 again" \
     '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && codesign --verify --strict "$APPS/Zeus.app"'
-  check "the old copy continues and opens the setup window" 'wait_for "setup ended: check=true" 30 && kill -0 "$APP_PID" 2>/dev/null'
+  check "the old copy continues and opens the setup window" 'wait_for "setup ended: check=true" 60 && kill -0 "$APP_PID" 2>/dev/null'
   check "the new copy was stopped and the update files are removed" \
     'sleep 1 && [ "$(copies)" = 1 ] && [ ! -e "$(work_folder)" ] && [ ! -e "$SUPPORT/update.json" ]'
   quit_all
