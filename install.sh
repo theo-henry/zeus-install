@@ -456,8 +456,15 @@ update_zeus() {
   outcome="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
   case "$outcome" in
     current)
-      info "Already cloned in ~/Code/zeus, and up to date."
-      record "skipped" "Zeus repo (~/Code/zeus, up to date)"
+      # `current` means that this Zeus has what Zeus Editor needs; the clone can still be behind origin/main.
+      if [ "$(git -C "$ZEUS_DIR" rev-list --count HEAD..origin/main 2>/dev/null || echo 1)" = 0 ]; then
+        info "Already cloned in ~/Code/zeus, and up to date."
+        record "skipped" "Zeus repo (~/Code/zeus, up to date)"
+      else
+        info "Already cloned in ~/Code/zeus, with the Zeus version that Zeus Editor needs."
+        info "Zeus gets the newer updates when a Zeus session starts."
+        record "skipped" "Zeus repo (~/Code/zeus)"
+      fi
       ;;
     updated)
       info "Updated ~/Code/zeus to the reviewed version."
