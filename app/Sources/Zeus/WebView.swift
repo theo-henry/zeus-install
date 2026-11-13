@@ -29,10 +29,44 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         configuration.websiteDataStore = .default()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        // Pop-ups (Zeus Editor pages) get this configuration too, so every Zeus page can use speech to text.
-        configuration.userContentController.addUserScript(SpeechService.availabilityScript)
+        // Pop-ups (Zeus Editor pages) get this configuration too, so every Zeus page can use speech to text
+        // and knows the app shortcuts.
+        configuration.userContentController.addUserScript(pageBridgeScript)
         return configuration
     }
+
+    /// Runs at document start in every Zeus page: `window.zeusApp.speech` (speech to text, see `SpeechService`) and
+    /// `window.zeusApp.shortcuts` (the app action ids of the settings, see `ShortcutSettings`).
+    /// A page that replaces `window.zeusApp` (for its close check) keeps them: the property gives back
+    /// the page's object with them added.
+    static let pageBridgeScript: WKUserScript = {
+        let info: [String: Any] = ["speech": SpeechService.pageInfo, "shortcuts": ShortcutSettings.pageInfo]
+        let json = String(decoding: (try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys])) ?? Data("{}".utf8),
+                          as: UTF8.self)
+        return WKUserScript(source: """
+            (() => {
+              const freeze = (value) => {
+                if (value && typeof value === "object") Object.values(value).forEach(freeze);
+                return Object.freeze(value);
+              };
+              const extras = freeze(\(json));
+              const names = Object.keys(extras);
+              const withExtras = (value) => {
+                if (value === null || typeof value !== "object" || names.every((name) => value[name] === extras[name])) return value;
+                if (Object.isExtensible(value)) return Object.assign(value, extras);
+                const wrapped = Object.create(value, Object.fromEntries(names.map((name) => [name, { value: extras[name], enumerable: true }])));
+                return Object.isFrozen(value) ? Object.freeze(wrapped) : wrapped;
+              };
+              let current = withExtras(Object.assign(window.zeusApp || {}, extras));
+              Object.defineProperty(window, "zeusApp", {
+                configurable: true,
+                enumerable: true,
+                get: () => current,
+                set: (value) => { current = withExtras(value); },
+              });
+            })();
+            """, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    }()
 
     /// A pop-up gets the configuration of the page that opened it, which already has the bridge.
     func makeWebView(configuration: WKWebViewConfiguration? = nil) -> WKWebView {
@@ -220,6 +254,8 @@ private final class ScriptBridge: NSObject, WKScriptMessageHandler {
         guard message.frameInfo.isMainFrame else { return }
         // Speech messages go to the page that sent them, also from a Zeus Editor pop-up of a closed chat tab.
         if SpeechService.shared.handle(message.body, from: message.webView) { return }
+        // A page saved the settings: the app shortcuts apply at once, also from a Zeus Editor pop-up of a closed chat tab.
+        if ShortcutSettings.shared.handle(message.body) { return }
         handler?.onScriptMessage?(message.body)
     }
 }

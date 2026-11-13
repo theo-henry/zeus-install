@@ -36,7 +36,8 @@ document.getElementById('prompt').focus();
 requestAnimationFrame(()=>requestAnimationFrame(()=>window.webkit?.messageHandlers?.zeusApp?.postMessage('chat-ready')));
 // The project menu and the project button of the Zeus chat (zeus-editor src/chat/client/main.js).
 for(const option of document.querySelectorAll('.project-menu [role="option"]'))option.onclick=()=>{document.querySelector('.project-pill .pill-text').textContent=option.textContent;};
-window.zeusApp={closeState:async()=>{
+// Like the settings pop-up of the Zeus chat: the app menu item Settings… (Cmd+,) opens it.
+window.zeusApp={openSettings(){window.settingsOpened=(window.settingsOpened||0)+1;},closeState:async()=>{
  if(document.getElementById('prompt').value.trim())return {safe_to_close:false,reason:'composer-draft'};
  if(pending)return {safe_to_close:false,reason:'busy'};
  return await (await fetch('/close-state')).json();

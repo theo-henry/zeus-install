@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The window that shows the quit question as a sheet.
     private var quitQuestionWindow: NSWindow?
     private let statusMenu = StatusMenu()
+    /// The menu item of each app action, which shows and runs its shortcut from the Zeus settings.
+    private var actionItems: [AppAction: NSMenuItem] = [:]
     /// The update check at launch runs; only its loading screen shows, and no Zeus session opens until it ends.
     private var updating = false
     #if DEBUG
@@ -25,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Brand.registerFonts()
         NSApp.mainMenu = makeMainMenu()
+        ShortcutSettings.shared.onChange = { [weak self] in self?.applyShortcuts() }
+        ShortcutSettings.shared.start()
         statusMenu.app = self
         statusMenu.update()
         listenForTestActions()
@@ -313,6 +317,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: key == "t" ? 17 : 38) {
                     _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
                 }
+            // A key press of a shortcut ("test-key:Shift+Cmd+K"), as the keyboard sends it: the chat window first, then the menu.
+            case "test-key":
+                guard let shortcut = Accelerator(argument) else { Trace.log("test key: not a shortcut"); break }
+                let window = self.chatTabs.last?.host?.window
+                guard let event = shortcut.event(windowNumber: window?.windowNumber ?? 0) else { break }
+                let handled = window?.performKeyEquivalent(with: event) == true || NSApp.mainMenu?.performKeyEquivalent(with: event) == true
+                Trace.log("test key: \(shortcut) handled=\(handled)")
+            // The same key press in the newest Zeus Editor window.
+            case "test-editor-key":
+                guard let shortcut = Accelerator(argument), let window = EditorWindowController.newestWebView?.window,
+                      let event = shortcut.event(windowNumber: window.windowNumber) else { break }
+                let handled = window.performKeyEquivalent(with: event) || NSApp.mainMenu?.performKeyEquivalent(with: event) == true
+                Trace.log("test editor key: \(shortcut) handled=\(handled)")
+            case "test-menu-shortcuts":
+                Trace.log("menu shortcuts: " + AppAction.allCases.compactMap { action in
+                    self.actionItems[action].map { "\(action.rawValue)=\(Accelerator(menuItem: $0).map(String.init(describing:)) ?? "-")" }
+                }.joined(separator: " "))
+            case "test-settings": self.openSettings(nil)
+            case "test-shortcuts-page":
+                let script = "JSON.stringify({shortcuts: window.zeusApp?.shortcuts ?? null, close: typeof window.zeusApp?.closeState, settings: window.settingsOpened ?? 0})"
+                self.chatTabs.last?.host?.selectedTab?.webView.evaluateJavaScript(script) { result, error in
+                    Trace.log("shortcuts page: \(result ?? error?.localizedDescription ?? "empty")")
+                }
+            case "test-settings-changed":
+                self.chatTabs.last?.webView.evaluateJavaScript("window.webkit.messageHandlers.zeusApp.postMessage({type: 'settings-changed'})")
             case "test-cancel-close": self.chatTabs.last?.cancelClose()
             case "test-close-anyway": self.chatTabs.last?.closeAnyway()
             case "new-chat": self.newChat(nil)
@@ -421,6 +450,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         keyChatTab?.toggleTerminal(sender)
     }
 
+    /// Settings… (Cmd+,): the settings pop-up of the chat page (or Zeus Editor page) in front, with the keyboard in it.
+    @objc private func openSettings(_ sender: Any?) {
+        if let tab = keyChatTab {
+            tab.host?.bringToFront(tab)
+        } else if let webView = keyWebView {
+            webView.window?.makeFirstResponder(webView)
+        }
+        keyWebView?.evaluateJavaScript("window.zeusApp?.openSettings?.(); void 0")
+        Trace.log("settings opened")
+    }
+
+    /// Runs the menu item of an app action, as its shortcut does. Returns false when the item is not available now.
+    func perform(_ action: AppAction) -> Bool {
+        guard let item = actionItems[action], let menu = item.menu, let selector = item.action else { return false }
+        menu.update()
+        guard item.isEnabled else { return false }
+        return NSApp.sendAction(selector, to: item.target, from: item)
+    }
+
+    /// Gives the menu items of the app actions their shortcuts from the Zeus settings.
+    private func applyShortcuts() {
+        for (action, item) in actionItems {
+            let shortcut = ShortcutSettings.shared.shortcut(for: action)
+            item.keyEquivalent = shortcut.keyEquivalent
+            item.keyEquivalentModifierMask = shortcut.modifiers
+        }
+    }
+
     @objc private func reloadPage(_ sender: Any?) {
         if let tab = keyChatTab {
             tab.reload()
@@ -447,7 +504,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             let pinned = DockPin.isPinned()
             menuItem.state = pinned ? .on : .off
             return !pinned
-        case #selector(reloadPage(_:)), #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualSize(_:)):
+        case #selector(reloadPage(_:)), #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualSize(_:)), #selector(openSettings(_:)):
             return keyWebView != nil
         default:
             break
@@ -461,7 +518,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let app = NSMenu(title: "Zeus")
         app.addItem(withTitle: "About Zeus", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        app.addItem(withTitle: "Zeus Setup…", action: #selector(showSetup(_:)), keyEquivalent: ",")
+        app.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
+        app.addItem(withTitle: "Zeus Setup…", action: #selector(showSetup(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Show in Menu Bar", action: #selector(toggleMenuBar(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Keep in Dock", action: #selector(keepInDock(_:)), keyEquivalent: "")
         app.addItem(.separator())
@@ -474,10 +532,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         main.addItem(submenu: app)
 
         let file = NSMenu(title: "File")
-        file.addItem(withTitle: "New Tab", action: #selector(newChat(_:)), keyEquivalent: "t")
-        file.addItem(withTitle: "New Chat", action: #selector(newChat(_:)), keyEquivalent: "n")
+        actionItems[.newTab] = file.addItem(withTitle: "New Tab", action: #selector(newChat(_:)), keyEquivalent: "t")
+        actionItems[.newChat] = file.addItem(withTitle: "New Chat", action: #selector(newChat(_:)), keyEquivalent: "n")
         file.addItem(.separator())
-        file.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        actionItems[.closeTab] = file.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         file.delegate = self
         main.addItem(submenu: file)
 
@@ -493,7 +551,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         main.addItem(submenu: edit)
 
         let view = NSMenu(title: "View")
-        view.addItem(withTitle: "Show or Hide Terminal", action: #selector(toggleTerminal(_:)), keyEquivalent: "j")
+        actionItems[.toggleTerminal] = view.addItem(withTitle: "Show or Hide Terminal", action: #selector(toggleTerminal(_:)), keyEquivalent: "j")
         view.addItem(withTitle: "Reload Page", action: #selector(reloadPage(_:)), keyEquivalent: "r")
         view.addItem(.separator())
         view.addItem(withTitle: "Actual Size", action: #selector(actualSize(_:)), keyEquivalent: "0")
@@ -510,8 +568,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         window.addItem(.separator())
         let previousTab = window.addItem(withTitle: "Show Previous Tab", action: #selector(NSWindow.selectPreviousTab(_:)), keyEquivalent: "\t")
         previousTab.keyEquivalentModifierMask = [.control, .shift]
+        actionItems[.prevTab] = previousTab
         let nextTab = window.addItem(withTitle: "Show Next Tab", action: #selector(NSWindow.selectNextTab(_:)), keyEquivalent: "\t")
         nextTab.keyEquivalentModifierMask = .control
+        actionItems[.nextTab] = nextTab
         window.addItem(.separator())
         window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         main.addItem(submenu: window)

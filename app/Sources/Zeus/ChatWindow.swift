@@ -462,6 +462,18 @@ final class ChatTab: NSObject {
     }
 }
 
+/// The window of a Zeus Editor page: the page must not take the shortcuts of the app actions, and they match as in
+/// a chat window (a symbol key by its place on the keyboard), not only by the character as the menu does.
+/// The next and previous tab actions show the window tabs of macOS.
+final class EditorWindow: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let action = ShortcutSettings.shared.action(for: event), (NSApp.delegate as? AppDelegate)?.perform(action) == true {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 /// A Zeus Editor page that a chat page opened in a new window. It has no session of its own.
 final class EditorWindowController: NSWindowController, NSWindowDelegate {
     private static var open: [EditorWindowController] = []
@@ -477,9 +489,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private init(configuration: WKWebViewConfiguration) {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 780),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                              backing: .buffered, defer: false)
+        let window = EditorWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 780),
+                                  styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                  backing: .buffered, defer: false)
         window.title = "Zeus Editor"
         window.tabbingMode = .preferred
         window.isReleasedWhenClosed = false

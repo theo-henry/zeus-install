@@ -465,7 +465,86 @@ check "Apple's recognizer gives no-on-device for a language that it does not kno
 stop_app
 
 echo
-echo "Scenario 4: the account has no access to one private repo"
+echo "Scenario 4: keyboard shortcuts from the Zeus settings file"
+SETTINGS="$SANDBOX/Library/Application Support/Zeus/settings.json"
+mkdir -p "$(dirname "$SETTINGS")"
+# Changed shortcuts only; a reserved shortcut, a shortcut without Cmd or Ctrl, and a shortcut of another action give the default.
+cat >"$SETTINGS" <<'JSON'
+{"version": 1, "shortcuts": {"app.newTab": "Shift+Cmd+K", "app.toggleTerminal": "Cmd+Q", "app.closeTab": "Shift+K",
+ "app.newChat": "Ctrl+Tab", "chat.send": "Cmd+Enter"}, "theme": "dark"}
+JSON
+DEFAULT_SHORTCUTS="app.newChat=Cmd+N app.closeTab=Cmd+W app.nextTab=Ctrl+Tab app.prevTab=Ctrl+Shift+Tab app.toggleTerminal=Cmd+J"
+launch_app shortcuts
+check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+check "the app reads the changed shortcuts at launch" 'grep -q "shortcuts: app.newTab=Shift+Cmd+K $DEFAULT_SHORTCUTS (launch)" "$TRACE"'
+check "a reserved shortcut, a shortcut without Cmd or Ctrl, and a shortcut of two actions give the default" \
+  'grep -q "app.toggleTerminal Cmd+Q is reserved" "$TRACE" && grep -q "app.closeTab Shift+K needs Cmd or Ctrl" "$TRACE" && grep -q "app.newChat Ctrl+Tab is used twice" "$TRACE"'
+# menu_has <text>: the app writes the shortcuts of the app menu items into the trace, and the line has this text.
+menu_has() {
+  local before
+  before="$(grep -c "menu shortcuts: " "$TRACE" || true)"
+  act test-menu-shortcuts
+  wait_count "menu shortcuts: " $((before + 1)) 10 >/dev/null && grep "menu shortcuts: " "$TRACE" | tail -1 | grep -qF -- "$1"
+}
+# shortcuts_page_has <text>: the chat page of the selected tab writes its window.zeusApp into the trace, and it has this text.
+shortcuts_page_has() {
+  local before
+  before="$(grep -c "shortcuts page: " "$TRACE" || true)"
+  act test-shortcuts-page
+  wait_count "shortcuts page: " $((before + 1)) 10 >/dev/null && grep "shortcuts page: " "$TRACE" | tail -1 | grep -qF -- "$1"
+}
+check "the menu shows the shortcuts of the settings file" 'menu_has "app.newTab=Shift+Cmd+K $DEFAULT_SHORTCUTS"'
+check "the chat page knows the app actions, also after it sets window.zeusApp" \
+  'shortcuts_page_has "{\"shortcuts\":{\"appActions\":[\"app.newTab\",\"app.newChat\",\"app.closeTab\",\"app.nextTab\",\"app.prevTab\",\"app.toggleTerminal\"],\"version\":1},\"close\":\"function\""'
+starts="$(grep -c " start " "$STATE/sessions")"
+act test-key:Cmd+T
+check "the old shortcut Cmd+T does not open a tab" 'sleep 3 && [ "$(grep -c " start " "$STATE/sessions")" = "$starts" ]'
+act test-key:Shift+Cmd+K
+check "the new shortcut Shift+Cmd+K opens a tab" 'wait_starts $((starts + 1)) && wait_count "state: running(" 2 20 && sleep 2'
+act test-key:Cmd+J
+check "Cmd+J still shows the terminal" 'wait_for "terminal visible: .* true" 10'
+act test-key:Ctrl+Shift+Tab
+check "Control-Shift-Tab still shows the previous tab" 'wait_count "tab selected: " 3 10'
+# A browser saves the settings: a temp file and a rename. The app applies the change at once.
+printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Alt+Cmd+T", "app.nextTab": "Ctrl+]"}}' >"$SETTINGS.tmp"
+mv "$SETTINGS.tmp" "$SETTINGS"
+check "a saved settings file applies at once" 'wait_for "shortcuts: app.newTab=Alt+Cmd+T app.newChat=Cmd+N app.closeTab=Cmd+W app.nextTab=Ctrl+] .* (file)" 10'
+# The menu shows a symbol key as the character of this Mac's keyboard at that place ("]" can show as "´").
+check "the menu shows the new shortcuts" 'menu_has "app.newTab=Alt+Cmd+T app.newChat=Cmd+N app.closeTab=Cmd+W app.nextTab=Ctrl+" && ! menu_has "app.nextTab=Ctrl+Tab"'
+act test-key:Alt+Cmd+T
+check "the changed shortcut opens a tab" 'wait_starts $((starts + 2))'
+selected="$(grep -c "tab selected: " "$TRACE")"
+act "test-key:Ctrl+]"
+check "the changed next-tab shortcut shows the next tab" 'wait_count "tab selected: " $((selected + 1)) 10'
+# An editor that writes the file in place.
+printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Ctrl+Alt+T"}}' >"$SETTINGS"
+check "a file written in place applies at once" 'wait_for "shortcuts: app.newTab=Ctrl+Alt+T $DEFAULT_SHORTCUTS (file)" 10'
+act test-settings-changed
+check "the settings-changed message of a page reads the file again" 'wait_for "shortcuts: unchanged (page)" 10'
+printf '{not json' >"$SETTINGS"
+check "a damaged settings file gives the defaults without a crash" 'wait_for "settings file is not valid JSON" 10 && wait_for "shortcuts: app.newTab=Cmd+T $DEFAULT_SHORTCUTS (file)" 10 && kill -0 "$APP_PID"'
+act test-key:Cmd+T
+check "Cmd+T opens a tab again" 'wait_starts $((starts + 3))'
+# A chain of collisions: newTab keeps Cmd+N only until newChat goes back to its default Cmd+N.
+printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Cmd+N", "app.newChat": "Cmd+J"}}' >"$SETTINGS"
+check "a chain of collisions gives each action its own shortcut" \
+  'wait_for "app.newChat Cmd+J is used twice" 10 && wait_for "app.newTab Cmd+N is used twice" 10 && wait_for "shortcuts: unchanged (file)" 10'
+# Zeus Editor windows match a symbol key with Shift by its place, as the chat window does (";" with Shift types ":").
+printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Shift+Cmd+;"}}' >"$SETTINGS"
+check "a symbol key shortcut applies" 'wait_for "shortcuts: app.newTab=Shift+Cmd+; $DEFAULT_SHORTCUTS (file)" 10'
+act test-open-editor
+check "a Zeus Editor page opens" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/editor" 10'
+act "test-editor-key:Shift+Cmd+;"
+check "the shortcut opens a tab from a Zeus Editor window" 'wait_starts $((starts + 4))'
+act test-close-editor
+rm -f "$SETTINGS"
+act test-settings
+check "Settings… opens the settings of the chat page in front" 'wait_for "settings opened" 10 && shortcuts_page_has "\"settings\":1"'
+shot 13-shortcuts
+stop_app
+
+echo
+echo "Scenario 5: the account has no access to one private repo"
 start_app noaccess ZEUS_SIM_NO_ACCESS=theo-henry/celonis-pql
 check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 act setup-install
