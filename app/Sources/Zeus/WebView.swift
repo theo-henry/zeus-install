@@ -29,6 +29,8 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         configuration.websiteDataStore = .default()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        // Pop-ups (Zeus Editor pages) get this configuration too, so every Zeus page can use speech to text.
+        configuration.userContentController.addUserScript(SpeechService.availabilityScript)
         return configuration
     }
 
@@ -92,6 +94,11 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         panel.begin { result in completionHandler(result == .OK ? panel.url : nil) }
     }
 
+    /// A new page replaces the page that had speech to text on.
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        SpeechService.shared.cancel(in: webView, reason: "page changed")
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Trace.log("page loaded: \(webView.url?.absoluteString.components(separatedBy: "#").first ?? "-") title=\(webView.title ?? "")")
         onPageLoaded?(webView)
@@ -123,6 +130,7 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        SpeechService.shared.cancel(in: webView, reason: "page process ended")
         webView.reload()
     }
 
@@ -201,6 +209,8 @@ private final class ScriptBridge: NSObject, WKScriptMessageHandler {
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         // Frames inside a page can come from other sites; only the page itself talks to the app.
         guard message.frameInfo.isMainFrame else { return }
+        // Speech messages go to the page that sent them, also from a Zeus Editor pop-up of a closed chat tab.
+        if SpeechService.shared.handle(message.body, from: message.webView) { return }
         handler?.onScriptMessage?(message.body)
     }
 }

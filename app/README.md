@@ -45,6 +45,18 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   A chat page without a globe (an older Zeus Editor) gets a cross-fade.
   This hand-over plays only for the first chat after the app starts; later chats (Cmd+T, **Try again**) come in at once when their page is ready.
   The close banner and the terminal panel stay usable while the loading screen shows.
+- **Speech to text.** The chat and the Zeus Editor pages can turn speech into text with Apple's speech recognition (`Sources/Zeus/Speech.swift`).
+  The recognition runs on the Mac only (`requiresOnDeviceRecognition`), so no audio leaves the Mac.
+  The app asks for the speech recognition and microphone permissions at the first use, not at start.
+  At document start, every Zeus page gets `window.zeusApp.speech = {version: 1}`; the page keeps it when it sets its own `window.zeusApp`.
+  A page posts `{type: "speech-languages"}`, `{type: "speech-start", id, locale}` (a BCP-47 id, or null for the language of the Mac), and `{type: "speech-stop", id}` to `window.webkit.messageHandlers.zeusApp`.
+  The app answers in that page only, with `window.zeusSpeech?.onEvent(event)`:
+  `{type: "languages", locales: [{id, name, onDevice: true}], default}` (only the languages that the Mac recognizes on the Mac),
+  `{type: "state", id, state: "listening" | "stopped"}`, `{type: "partial", id, text}`, `{type: "final", id, text}`,
+  and `{type: "error", id, code: "permission-denied" | "no-on-device" | "unavailable" | "busy" | "failed", message}`.
+  After "listening", a recognition always ends with "stopped"; an error before "listening" is the only answer to that start.
+  One recognition runs at a time: a start while one runs gets "busy".
+  The recognition stops (with its final text) when its tab or Zeus Editor tab goes out of view, and ends at once when its tab, window, or page closes, and when the app quits.
 - **Links.** Pages on 127.0.0.1 stay in the app (pop-ups open in a new app window). Other links open in the default browser.
 
 ## Build
@@ -71,6 +83,7 @@ It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in t
 `ZEUS_APP_TEST_NO_CONFIRM=1` (debug builds) makes the new copy of an update not confirm, so that the old copy rolls back.
 `ZEUS_APP_INSTALLER=/path/to/install.sh` replaces the bundled installer.
 `ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
+`ZEUS_APP_TEST_SPEECH=1` (debug builds) replaces Apple's speech recognition with a simulated recognizer that "hears" "Hello Zeus" (`denied`: no permission).
 `ZEUS_APP_TEST_ID=<id>` (debug builds) makes the test actions reach only this app copy.
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.
@@ -123,7 +136,12 @@ It presses the app's buttons through the debug test actions and checks the trace
 2. One tab has unsent text and one tab is busy: a logout that another app cancels changes nothing, a later quit asks about both tabs,
    and a logout while that question is open stops every session and quits within 12 s without an answer;
    the quit event of a logout while a quit still checks the tabs asks nothing, also after the check, and quits within 12 s.
-3. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
+3. Speech to text with a simulated recognizer (`ZEUS_APP_TEST_SPEECH`, debug builds): the chat page keeps `window.zeusApp.speech` after it sets `window.zeusApp`;
+   the languages and the default come to the page; a start listens, the words come in, and a stop gives the final text, which replaces only the dictated part of the message;
+   a second start is busy; a language without recognition on the Mac gives `no-on-device`; showing another tab stops it; it runs in a Zeus Editor page,
+   another page cannot stop it, and closing the Zeus Editor window, closing the tab, or quitting the app ends it;
+   with Apple's recognizer, the page gets the languages of this Mac, and a language that no Mac knows gives `no-on-device` without a permission question.
+4. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
 permission for the terminal only for the screenshots.

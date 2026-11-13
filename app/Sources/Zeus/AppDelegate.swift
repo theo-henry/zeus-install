@@ -69,6 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     /// A click on the Dock icon while no window is open.
+    /// The microphone stops before the app ends.
+    func applicationWillTerminate(_ notification: Notification) {
+        SpeechService.shared.cancelAll(reason: "app quits")
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if updating {
             UpdateWindow.shared.bringForward()
@@ -181,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     /// The close check takes at most `closeCheckLimit`, so the quit ends within 12 s.
     private func stopAllAndQuit() {
+        SpeechService.shared.cancelAll(reason: "app quits")
         SessionManager.shared.stopAll(timeout: 12 - ChatTab.closeCheckLimit) {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
@@ -329,6 +335,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             // The chat page of the first tab posts "chat-focus", as after "Go to the chat" in Zeus Editor.
             case "test-chat-focus":
                 self.chatTabs.first?.webView.evaluateJavaScript("window.webkit.messageHandlers.zeusApp.postMessage('chat-focus')")
+            // Speech to text: the chat page of the last tab (or with "editor-", the newest Zeus Editor page) posts a
+            // speech message, as the mic button does; "test-speech-page" writes what the page has into the trace.
+            case "test-speech-post", "test-editor-speech-post":
+                let webView = action == "test-speech-post" ? self.chatTabs.last?.webView : EditorWindowController.newestWebView
+                webView?.callAsyncJavaScript("window.webkit.messageHandlers.zeusApp.postMessage(JSON.parse(message))",
+                                             arguments: ["message": argument], in: nil, in: .page)
+            case "test-speech-page", "test-editor-speech-page":
+                let webView = action == "test-speech-page" ? self.chatTabs.last?.webView : EditorWindowController.newestWebView
+                let script = "JSON.stringify({version: window.zeusApp?.speech?.version ?? null, close: typeof window.zeusApp?.closeState, "
+                    + "text: document.querySelector('textarea')?.value ?? null, events: window.speechEvents ?? null})"
+                webView?.evaluateJavaScript(script) { result, error in
+                    Trace.log("speech page: \(result ?? error?.localizedDescription ?? "empty")")
+                }
+            case "test-open-editor":
+                self.chatTabs.last?.webView.evaluateJavaScript("window.open('/editor', '_blank'); void 0")
+            case "test-close-editor":
+                EditorWindowController.newestWebView?.window?.performClose(nil)
             case "test-rename-open": self.chatTabs.last.map { $0.host?.startRename($0) }
             case "test-rename-save": self.chatTabs.last.map { $0.host?.endRename($0, name: argument) }
             case "toggle-menubar": self.toggleMenuBar(nil)

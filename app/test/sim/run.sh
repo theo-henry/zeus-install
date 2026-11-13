@@ -357,7 +357,70 @@ check "the quit event of a logout asks nothing" 'grep -q "quit by macOS" "$TRACE
 check "the quit event of a logout stops the PTY" '[ "$(stops)" = 10 ]'
 
 echo
-echo "Scenario 3: the account has no access to one private repo"
+echo "Scenario 3: speech to text in the chat and in Zeus Editor (simulated recognizer)"
+launch_app speech ZEUS_APP_TEST_SPEECH=1
+check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+# page_has <text>: the chat page (or with "editor-", the Zeus Editor page) writes its state into the trace, and it has this text.
+page_has() {
+  local before
+  before="$(grep -c "speech page: " "$TRACE" || true)"
+  act "test-${2:-}speech-page"
+  wait_count "speech page: " $((before + 1)) 10 >/dev/null && grep "speech page: " "$TRACE" | tail -1 | grep -qF -- "$1"
+}
+check "the chat page can use speech to text, also after it sets window.zeusApp" 'page_has "\"version\":1,\"close\":\"function\""'
+act 'test-speech-post:{"type":"speech-languages"}'
+check "the languages are those on this Mac, with the default" 'sleep 1 && page_has "languages  en-US,fr-FR,nl-NL,de-DE/en-US"'
+act test-draft
+sleep 0.3
+act 'test-speech-post:{"type":"speech-start","id":"s1","locale":"fr-FR"}'
+check "a start listens" 'wait_for "speech event: state s1 listening" 10'
+check "the words come in while the user speaks" 'wait_for "speech event: partial s1 chars=10" 10 && page_has "Test chat turnHello Zeus\""'
+act 'test-speech-post:{"type":"speech-stop","id":"s1"}'
+check "a stop gives the final text, then stopped" 'wait_for "speech event: state s1 stopped" 10'
+check "the text replaces only the dictated part of the message" 'page_has "\"text\":\"Test chat turnHello Zeus.\""'
+check "the page gets the events in order" 'page_has "\"state s1 listening\",\"partial s1 Hello\",\"partial s1 Hello Zeus\",\"final s1 Hello Zeus.\",\"state s1 stopped\""'
+act 'test-speech-post:{"type":"speech-start","id":"s2","locale":null}'
+check "a start with no language uses the default" 'wait_for "speech event: state s2 listening" 10 && grep -q "speech: start s2 locale=default" "$TRACE"'
+act 'test-speech-post:{"type":"speech-start","id":"s3","locale":"en-US"}'
+check "a second start while one runs is busy" 'sleep 0.5 && page_has "error s3 busy" && ! grep -q "speech event: state s3" "$TRACE"'
+act test-cmd-t
+check "showing another tab stops speech to text in the tab that the user leaves" 'wait_for "speech: stop s2 (tab hidden)" 10 && wait_for "speech event: state s2 stopped" 10'
+check "the new tab opens" 'wait_count "state: running(" 2 20 && sleep 2'
+act 'test-speech-post:{"type":"speech-start","id":"s4","locale":"ja-JP"}'
+check "a language without recognition on the Mac gives no-on-device" 'wait_for "speech event: error s4 no-on-device" 10 && sleep 0.5 && ! grep -q "speech event: state s4" "$TRACE"'
+act test-open-editor
+check "a Zeus Editor page opens" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/editor" 10'
+check "the Zeus Editor page can use speech to text" 'page_has "\"version\":1" editor-'
+act 'test-editor-speech-post:{"type":"speech-start","id":"e1","locale":"de-DE"}'
+check "speech to text runs in the Zeus Editor page" 'wait_for "speech event: partial e1 chars=10" 10 && page_has "\"text\":\"Hello Zeus\"" editor-'
+act 'test-speech-post:{"type":"speech-stop","id":"e1"}'
+check "another page cannot stop it" 'sleep 0.5 && ! grep -q "speech: stop e1" "$TRACE"'
+act test-close-editor
+check "closing the Zeus Editor window ends it" 'wait_for "speech: cancel e1 (window closed)" 10'
+act 'test-speech-post:{"type":"speech-start","id":"s5","locale":"nl-NL"}'
+check "speech to text starts again after a cancel" 'wait_for "speech event: state s5 listening" 10'
+act close-chat
+act test-close-anyway
+check "closing the tab ends it" 'wait_for "speech: cancel s5 (tab closed)" 10 && ! grep -q "speech event: final s5" "$TRACE"'
+act test-clear
+sleep 0.5
+act test-open-editor
+check "a Zeus Editor page opens again" 'wait_count "page loaded: http://127.0.0.1:[0-9]*/editor" 2 10'
+act 'test-editor-speech-post:{"type":"speech-start","id":"e2","locale":"en-US"}'
+check "speech to text runs in Zeus Editor before the quit" 'wait_for "speech event: state e2 listening" 10'
+stop_app
+check "quitting the app ends it" 'grep -q "speech: cancel e2 (app quits)" "$TRACE"'
+# Apple's recognizer of this Mac: the language list and a language that no Mac knows need no permission question.
+launch_app speech-apple
+check "the app opens a chat with Apple's speech recognition" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+act 'test-speech-post:{"type":"speech-languages"}'
+check "Apple's recognizer lists the languages of this Mac and a default" 'sleep 3 && page_has "\"languages  "'
+act 'test-speech-post:{"type":"speech-start","id":"a1","locale":"xx-XX"}'
+check "Apple's recognizer gives no-on-device for a language that it does not know" 'wait_for "speech event: error a1 no-on-device" 10'
+stop_app
+
+echo
+echo "Scenario 4: the account has no access to one private repo"
 start_app noaccess ZEUS_SIM_NO_ACCESS=theo-henry/celonis-pql
 check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 act setup-install

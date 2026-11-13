@@ -16,5 +16,5 @@ cp Resources/zeus-logo.svg "$B/Contents/Resources/"
 cp Resources/AppIcon.icns "$B/Contents/Resources/"
 cp Resources/globe.js "$B/Contents/Resources/"
 cp ../install.sh "$B/Contents/Resources/install.sh"
-codesign --force --sign - "$B" 2>/dev/null
+codesign --force --sign - --entitlements Resources/Zeus.entitlements "$B" 2>/dev/null
 echo "$B"

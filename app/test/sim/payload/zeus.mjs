@@ -7,12 +7,23 @@ const record = (event, detail = '') => fs.appendFileSync(`${state}/sessions`, `$
 record('start');
 console.log('Checking for Zeus updates... (simulated)');
 let busy = false;
+// Like the mic of the Zeus chat and Zeus Editor: the dictated text replaces only its own span of the message box.
+const speech = `window.speechEvents=[];let dictationStart=null,dictationLength=0;
+window.zeusSpeech={onEvent(e){
+ window.speechEvents.push([e.type,e.id,e.state||e.code||e.text||(e.locales&&e.locales.map(l=>l.id).join(',')+'/'+e.default)||''].join(' '));
+ const box=document.querySelector('textarea');
+ if(e.type==='state'&&e.state==='listening'){dictationStart=box.value.length;dictationLength=0;}
+ if((e.type==='partial'||e.type==='final')&&dictationStart!==null){box.value=box.value.slice(0,dictationStart)+e.text+box.value.slice(dictationStart+dictationLength);dictationLength=e.text.length;}
+ if(e.type==='state'&&e.state==='stopped')dictationStart=null;
+}};`;
+const editor = `<!doctype html><html lang="en"><head><title>Zeus Editor (simulated)</title></head><body><h1>Zeus Editor</h1><textarea aria-label="Feedback"></textarea><script>${speech}</script></body></html>`;
 const page = `<!doctype html><html lang="en"><head><title>Zeus (simulated)</title><style>
 body{background:#0b2545;color:#f1f6f9;font:16px -apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
 main{width:600px}#globe{width:120px;height:120px;margin:0 auto;border-radius:50%;background:radial-gradient(circle at 40% 35%,#5b8cff,#1a3a64);opacity:0}
 .live #globe{opacity:1}textarea{display:block;width:100%;background:#071d38;color:#f1f6f9;border:1px solid #24477a;padding:16px;margin:20px 0}button{background:#3772ff;color:white;border:0;padding:10px 20px;border-radius:8px}
 header{position:fixed;top:0;left:0;right:0;display:flex;justify-content:flex-end;gap:8px;padding:12px}.pill{background:none;color:#c7dbe6;border:1px solid #24477a;border-radius:999px;padding:4px 11px}.project-menu{display:none}
 </style></head><body><header><nav class="project-menu" role="listbox"><button role="option"><span class="menu-item-label">Solvias</span></button><button role="option"><span class="menu-item-label">Vicat</span></button><button role="option"><span class="menu-item-label">No project</span></button></nav><button class="pill project-pill"><span class="pill-text">No project</span></button></header><main><div id="globe"></div><h1>Zeus chat</h1><p>PTY session ${process.pid}</p><p id="reply">How can I help?</p><textarea id="prompt" aria-label="Message"></textarea><button id="send">Send</button></main><script>
+${speech}
 let pending=false;
 // Like the chat page of zeus-editor: the app moves its loading globe to this globe (rect), then shows the page.
 window.zeusGlobe={
@@ -45,7 +56,7 @@ const server = http.createServer((req, res) => {
  if(req.url === '/turn') {
   busy=true;record('busy');let text='';req.on('data',chunk=>text+=chunk);req.on('end',()=>setTimeout(()=>{busy=false;record('reply',text);res.end('Reply: '+text);},3000));return;
  }
- res.writeHead(200,{'content-type':'text/html;charset=utf-8'});res.end(html);
+ res.writeHead(200,{'content-type':'text/html;charset=utf-8'});res.end(req.url === '/editor' ? editor : html);
 });
 // Delay only the fixture to permit startup screenshots. The app adds no wait.
 setTimeout(()=>server.listen(0,'127.0.0.1',()=>{

@@ -147,6 +147,8 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     func select(_ tab: ChatTab) {
         guard tabs.contains(where: { $0 === tab }) else { return }
         let changed = selectedTab !== tab
+        // Speech to text stops in the tab that the user leaves; its page keeps the text.
+        if changed, let previous = selectedTab { SpeechService.shared.stop(in: previous.webView, reason: "tab hidden") }
         selectedTab = tab
         for other in tabs { other.view.isHidden = other !== tab }
         window?.title = tab.tabName.title
