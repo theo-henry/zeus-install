@@ -27,6 +27,10 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The chat page tells the app its project with `window.webkit.messageHandlers.zeusApp.postMessage({type: "project", name})` (`name` is null without a project);
   for chat pages that do not send it, the app reads the project button of the chat.
   Cmd+J shows or hides the live terminal of the tab, for login prompts, slash commands, or debugging.
+- **Keyboard.** Typing and pasting (Cmd+V or Edit > Paste) go to the part of the tab that the user clicked last: the chat page or the terminal.
+  Cmd+J gives the keyboard to the terminal it shows; the terminal header then says "typing and pasting go here".
+  A click in the chat page gives the keyboard back to the chat, also the click that only brings the window to the front, which WebKit does not give to the page.
+  A tab that shows again gives the keyboard to the part that had it, and an open terminal does not take it only because it is open.
 - **Go to the chat.** When the consultant clicks **Go to the chat** in Zeus Editor, the chat page posts `"chat-focus"` to `window.webkit.messageHandlers.zeusApp`.
   The app then shows the tab of that chat, brings its window and the app to the front, and puts the keyboard in the chat page.
 - **Safe close.** Closing a tab asks the chat (`window.zeusApp.closeState()`) first.
@@ -85,6 +89,8 @@ It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in t
 `ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
 `ZEUS_APP_TEST_SPEECH=1` (debug builds) replaces Apple's speech recognition with a simulated recognizer that "hears" "Hello Zeus" (`denied`: no permission).
 `ZEUS_APP_TEST_ID=<id>` (debug builds) makes the test actions reach only this app copy.
+`ZEUS_APP_TEST_BACKGROUND=1` (debug builds) keeps the app behind the other apps, so that a test does not take the screen.
+Its pages keep running and drawing while other windows cover them.
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.
 The web pages can be inspected with Safari's Develop menu.
@@ -130,10 +136,11 @@ It checks that each plugin install, update, and marketplace add uses `--scope us
 app/test/sim/run.sh [screenshot-folder]
 ```
 
-The test runs the app and the bundled installer with `HOME` set to an empty temporary folder, and with
+The test runs the app (behind the other apps) and the bundled installer with `HOME` set to an empty temporary folder, and with
 simulated tools first on `PATH` (`app/test/sim/stubs` and `payload`): xcode-select, the Anaconda and Node.js
 downloads, conda, gh, npm, claude, and a `zeus` that serves a simple chat page. Nothing is downloaded, and the
 real home folder, Claude Code, GitHub login, and app settings are not used (the app settings are restored).
+The paste checks use the pasteboard, then put back what the user had on it.
 It presses the app's buttons through the debug test actions and checks the trace:
 
 1. A new Mac: the check finds 12 steps to do; all 13 steps install, with the Anaconda license, the GitHub
@@ -142,6 +149,8 @@ It presses the app's buttons through the debug test actions and checks the trace
    Cmd+T tabs start separate sessions and come in without the hand-over; a tab takes the name of the project picked in its chat,
    keeps a name given with Rename, and gets the project name again after an empty name;
    `"chat-focus"` from the chat page of a tab that is not selected shows that tab with the keyboard in its chat page; Cmd+J shows the terminal and its input reaches that session;
+   with the terminal open, a click in the chat box takes the keyboard, and a one-line and a multi-line paste go into the chat box, not into the terminal;
+   after a click in the terminal, a paste reaches its session; a tab that shows again gives the keyboard back to the part that had it;
    a close while Zeus works waits for the turn; closing one tab keeps the others; a chat that cannot answer the close check
    (older editor plugin) waits 3 s, then **Close anyway** closes it; **Close anyway** also stops a busy tab; quitting stops every session.
 2. One tab has unsent text and one tab is busy: a logout that another app cancels changes nothing, a later quit asks about both tabs,

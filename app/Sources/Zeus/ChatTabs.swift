@@ -148,7 +148,10 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         guard tabs.contains(where: { $0 === tab }) else { return }
         let changed = selectedTab !== tab
         // Speech to text stops in the tab that the user leaves; its page keeps the text.
-        if changed, let previous = selectedTab { SpeechService.shared.stop(in: previous.webView, reason: "tab hidden") }
+        if changed, let previous = selectedTab {
+            SpeechService.shared.stop(in: previous.webView, reason: "tab hidden")
+            previous.rememberKeyboard()
+        }
         selectedTab = tab
         for other in tabs { other.view.isHidden = other !== tab }
         window?.title = tab.tabName.title
@@ -166,7 +169,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         guard tabs.contains(where: { $0 === tab }), let window else { return }
         select(tab)
         if window.isMiniaturized { window.deminiaturize(nil) }
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activateZeus()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(tab.webView)
         let inPage = (window.firstResponder as? NSView)?.isDescendant(of: tab.webView) ?? false
@@ -239,6 +242,17 @@ final class ChatTabWindow: NSWindow {
             return (tabs?.tabs.count ?? 0) > 1
         }
         return super.validateMenuItem(menuItem)
+    }
+
+    /// A click in the chat page or in the terminal gives that part of the tab the keyboard before the click goes on.
+    /// The click that only brings an inactive window to the front does not reach the page (WebKit does not take
+    /// the first click), so without this the keyboard stays in the terminal, and Cmd+V in the chat box pastes there.
+    override func sendEvent(_ event: NSEvent) {
+        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type),
+           let hit = contentView?.superview?.hitTest(event.locationInWindow) {
+            tabs?.selectedTab?.giveKeyboard(forClickOn: hit)
+        }
+        super.sendEvent(event)
     }
 
     /// The web page must not take Control-Tab before the menu does.
@@ -559,6 +573,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         ])
         self.field = field
         updateAppearance()
+        tab.rememberKeyboard()
         window?.makeFirstResponder(field)
         field.currentEditor()?.selectAll(nil)
     }

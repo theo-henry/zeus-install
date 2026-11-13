@@ -115,6 +115,19 @@ wait_count() {
 
 stops() { grep -c " stop " "$STATE/sessions" 2>/dev/null || true; }
 
+# keyboard_has <text>: the selected tab writes where its keyboard is (chat or terminal) and its message box text
+# into the trace, and the line has this text.
+keyboard_has() {
+  local before
+  before="$(grep -c "test keyboard: " "$TRACE" || true)"
+  act test-keyboard
+  wait_count "test keyboard: " $((before + 1)) 10 >/dev/null && grep "test keyboard: " "$TRACE" | tail -1 | grep -qF -- "$1"
+}
+
+# pty_got <text>: the simulated zeus of a tab got this text as terminal input. Its terminal gives it a line only at
+# the line end, so the text must be followed by one.
+pty_got() { grep -q "input [0-9a-f]*$(printf %s "$1" | xxd -p | tr -d '\n')" "$STATE/sessions"; }
+
 # wait_starts <count>: waits until that many simulated zeus sessions have started.
 wait_starts() {
   local waited=0
@@ -143,7 +156,8 @@ launch_app() {
   shift
   TRACE="$WORK/$name/trace.log"
   mkdir -p "$WORK/$name"
-  env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" \
+  # ZEUS_APP_TEST_BACKGROUND: the app stays behind the other apps, so the test does not take the screen.
+  env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" ZEUS_APP_TEST_BACKGROUND=1 \
     ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_REAL_NODE="$REAL_NODE" \
     ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" "$@" \
     "$EXE" >"$WORK/$name/app.out" 2>&1 &
@@ -256,6 +270,35 @@ act test-terminal-input
 sleep 1
 check "xterm input reaches the live PTY" 'grep -q "input 7465726d696e616c2d746573740a" "$STATE/sessions"'
 shot 8-terminal-tabs
+# A paste goes where the user clicked. The test app is behind the other apps, so each click here is the click that
+# only brings the window to the front, which the page does not get: that click must still move the keyboard.
+check "Cmd+J gives the keyboard to the terminal" 'keyboard_has " terminal message="'
+act "test-pasteboard:Paste line one\nPaste line two"
+act test-click-chat
+check "a click in the chat box takes the keyboard from the open terminal" 'wait_for "keyboard: .* chat (click)" 10'
+act test-paste
+check "a multi-line paste goes into the chat box" 'sleep 0.5 && keyboard_has " chat message=\"Paste line one\nPaste line two\""'
+check "the paste in the chat box does not reach the terminal" 'sleep 0.5 && ! pty_got "Paste line"'
+act test-clear
+act "test-pasteboard:One line paste"
+act test-paste
+check "a one-line paste goes into the chat box" 'sleep 0.5 && keyboard_has " chat message=\"One line paste\""'
+act test-clear
+act "test-pasteboard:Terminal paste\n"
+act test-click-terminal
+check "a click in the terminal gives it the keyboard" 'wait_for "keyboard: .* terminal (click)" 10'
+act test-paste
+check "a paste in the terminal reaches its PTY, not the chat box" 'sleep 1 && pty_got "Terminal paste" && keyboard_has " terminal message=\"\""'
+act test-pasteboard-restore
+# Another tab, then back: the keyboard goes back to the part that had it, not to the terminal only because it is open.
+act test-next-tab
+act test-next-tab
+check "a tab that shows again gives the keyboard back to its terminal" 'keyboard_has " terminal message="'
+act test-click-chat
+check "the click in the chat box moves the keyboard back" 'wait_count "keyboard: .* chat (click)" 2 10'
+act test-next-tab
+act test-next-tab
+check "a tab that shows again with its terminal open gives the keyboard back to its chat" 'keyboard_has " chat message="'
 act test-draft
 sleep 0.3
 act test-send

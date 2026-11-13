@@ -5,9 +5,12 @@
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#071d38;color:#f1f6f9}
 header{height:32px;box-sizing:border-box;padding:8px 14px;font:12px -apple-system,sans-serif;color:#a9bdd5;border-top:1px solid #1a3a64}
+header.typing{color:#f1f6f9;border-top-color:#3772ff}
+#typing{display:none;color:#5b8cff}
+header.typing #typing{display:inline}
 #terminal{height:calc(100% - 32px);padding:0 12px;box-sizing:border-box}
 </style><script src="xterm.js"></script><script src="addon-fit.js"></script></head>
-<body><header>Terminal <span style="float:right">Cmd+J to hide</span></header><div id="terminal" aria-label="Zeus session terminal"></div>
+<body><header>Terminal<span id="typing"> · typing and pasting go here, click the chat to type there</span> <span style="float:right">Cmd+J to hide</span></header><div id="terminal" aria-label="Zeus session terminal"></div>
 <script>
 const send = body => window.webkit.messageHandlers.terminal.postMessage(body);
 const term = window.term = new Terminal({cols:110,rows:30,fontFamily:'Menlo,monospace',fontSize:12,scrollback:3000,screenReaderMode:true,theme:{background:'#071d38',foreground:'#f1f6f9',cursor:'#5b8cff',selectionBackground:'#24477a'}});
@@ -16,6 +19,12 @@ term.open(document.getElementById('terminal'));
 term.onResize(({rows,cols})=>send({rows,cols}));
 term.onData(input => send({input}));
 term.attachCustomKeyEventHandler(event => !event.metaKey);
+// The header says when the keyboard is in the terminal, so that text does not go here by surprise.
+const header = document.querySelector('header');
+const showTyping = () => header.classList.toggle('typing', document.hasFocus() && document.activeElement === term.textarea);
+for (const name of ['focus', 'blur']) window.addEventListener(name, showTyping);
+term.textarea.addEventListener('focus', showTyping);
+term.textarea.addEventListener('blur', showTyping);
 window.writeBytes = base64 => term.write(Uint8Array.from(atob(base64), c => c.charCodeAt(0)));
 window.fitTerminal = () => {
   const box = document.getElementById('terminal');

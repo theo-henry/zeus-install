@@ -51,7 +51,10 @@ final class TerminalPanel: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             pending.removeAll()
             Trace.log("terminal ready: \(session?.pid ?? 0)")
         }
-        if let input = body["input"] as? String { session?.write(input) }
+        if let input = body["input"] as? String {
+            Trace.log("terminal input: \(session?.pid ?? 0) chars=\(input.count)")
+            session?.write(input)
+        }
         if let rows = body["rows"] as? Int, let cols = body["cols"] as? Int,
            (2...500).contains(rows), (2...500).contains(cols) {
             session?.resize(rows: UInt16(rows), cols: UInt16(cols))

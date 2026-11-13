@@ -22,6 +22,8 @@ final class ChatTab: NSObject {
     private static var greeted = false
 
     private var terminal: TerminalPanel!
+    /// The terminal had the keyboard when the tab last went out of view (or the rename field took the keyboard).
+    private var keyboardWasInTerminal = false
     private let closeBanner = NSStackView()
     private let closeLabel = NSTextField(labelWithString: "")
     private let closeSpinner = NSProgressIndicator()
@@ -220,6 +222,7 @@ final class ChatTab: NSObject {
 
     @objc func toggleTerminal(_ sender: Any? = nil) {
         terminal.webView.isHidden.toggle()
+        keyboardWasInTerminal = !terminal.webView.isHidden
         if !terminal.webView.isHidden { terminal.focus() }
         else { view.window?.makeFirstResponder(webView) }
         Trace.log("terminal visible: \(session.pid) \(!terminal.webView.isHidden)")
@@ -227,8 +230,68 @@ final class ChatTab: NSObject {
 
     func testTerminalInput() { terminal.webView.evaluateJavaScript("term.input('terminal-test\\r', true)") }
 
-    /// The view that gets the keyboard when the tab shows.
-    var focusView: NSView { terminal.webView.isHidden ? webView : terminal.webView }
+    #if DEBUG
+    /// Test actions: a mouse click in the message box of the chat page or in the terminal, as the user clicks,
+    /// and the part of the tab that has the keyboard.
+    func testClick(terminal inTerminal: Bool) {
+        let target: WKWebView = inTerminal ? terminal.webView : webView
+        let script = "JSON.stringify(document.querySelector(\(inTerminal ? "'#terminal'" : "'textarea'"))?.getBoundingClientRect() ?? null)"
+        target.evaluateJavaScript(script) { [weak self] result, _ in
+            guard let self, let rect = Self.rect(from: result), let window = target.window else {
+                Trace.log("test click: nothing to click")
+                return
+            }
+            let zoom = target.pageZoom * target.magnification
+            let local = NSPoint(x: rect.midX * zoom, y: target.isFlipped ? rect.midY * zoom : target.bounds.height - rect.midY * zoom)
+            let point = target.convert(local, to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                                     timestamp: ProcessInfo.processInfo.systemUptime,
+                                                     windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                     clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0) else { continue }
+                window.sendEvent(event)
+            }
+            let hit = window.contentView?.superview?.hitTest(point)
+            let hitName = hit.map { $0.isDescendant(of: self.terminal.webView) ? "terminal" : $0.isDescendant(of: self.webView) ? "chat" : String(describing: type(of: $0)) } ?? "none"
+            Trace.log("test click: \(inTerminal ? "terminal" : "chat") hit=\(hitName) keyboard=\(self.keyboardOwner)")
+        }
+    }
+
+    var keyboardOwner: String {
+        guard let responder = view.window?.firstResponder as? NSView else { return "none" }
+        if keyboardIsInTerminal { return "terminal" }
+        if responder.isDescendant(of: webView) { return "chat" }
+        return String(describing: type(of: responder))
+    }
+    #endif
+
+    /// The view that gets the keyboard when the tab shows: the part of the tab that had it before.
+    /// The terminal gets it only when the user opened it or clicked in it, never only because it is open.
+    var focusView: NSView { terminal.webView.isHidden || !keyboardWasInTerminal ? webView : terminal.webView }
+
+    /// The terminal has the keyboard: typing and pasting go to Claude Code's input box.
+    var keyboardIsInTerminal: Bool {
+        (view.window?.firstResponder as? NSView)?.isDescendant(of: terminal.webView) ?? false
+    }
+
+    /// Called before the tab goes out of view, or before another view takes the keyboard for a short time.
+    func rememberKeyboard() { keyboardWasInTerminal = !terminal.webView.isHidden && keyboardIsInTerminal }
+
+    /// A click in the chat page or in the terminal: that part gets the keyboard, also for a click that the page does not get.
+    func giveKeyboard(forClickOn view: NSView) {
+        guard let window = view.window else { return }
+        let target: WKWebView
+        if view.isDescendant(of: terminal.webView) {
+            target = terminal.webView
+        } else if view.isDescendant(of: webView) {
+            target = webView
+        } else {
+            return
+        }
+        if (window.firstResponder as? NSView)?.isDescendant(of: target) == true { return }
+        if target === terminal.webView { terminal.focus() } else { window.makeFirstResponder(webView) }
+        Trace.log("keyboard: \(session.pid) \(target === webView ? "chat" : "terminal") (click)")
+    }
 
     /// Closes the tab at once when its session has ended, else after the safe-close check.
     func requestClose() {
