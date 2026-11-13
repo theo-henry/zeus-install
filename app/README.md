@@ -59,6 +59,38 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The recognition stops (with its final text) when its tab or Zeus Editor tab goes out of view, and ends at once when its tab, window, or page closes, and when the app quits.
 - **Links.** Pages on 127.0.0.1 stay in the app (pop-ups open in a new app window). Other links open in the default browser.
 
+## Developer Settings
+
+**Zeus > Developer > Developer Settings…** opens a small window in the Zeus theme. Each setting applies at once to every open window, except blind build mode, which applies to sessions that start after the change.
+
+- **Show Claude host switch** (off). The right end of the tab strip gets an **Apolix | EU** switch for the selected tab. The host belongs to the tab: each tab has its own session on its own host, and the switch, the EU pill, and the cost always show the selected tab.
+  - **Apolix** is the Claude Code subscription login, as before: the session gets `ZEUS_CLAUDE_HOST=apolix` and nothing else changes.
+  - **EU** is Claude on Google Cloud Vertex AI in the EU. The session gets the variables of the `claude-eu` alias of your shell profile
+    (`CLAUDE_CODE_USE_VERTEX`, `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, the model variables), plus `ZEUS_CLAUDE_HOST=eu` and
+    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. It starts without `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
+    Bedrock and Foundry variables, and `VERTEX_REGION_*` overrides, also when the alias sets one. The app refuses an alias whose region is not `eu` or `europe-*`.
+  - Claude Code cannot change host while it runs. A click on the switch stops the session of the tab and starts a new one on the other host in the same tab (a running chat is asked about first).
+    The loading screen covers the old chat page before its session stops. The chats stay in the chat history; a chat that ran on EU continues only on EU.
+  - Before every EU start, the app runs `gcloud auth application-default print-access-token`. When that fails, the tab shows the reason and **Try again**. It never starts on Apolix instead. The token is not kept or logged.
+  - An EU tab shows a green **EU** pill in the title bar, also when the switch is hidden. With the switch shown, a new tab starts on the host picked last; with the switch hidden, on Apolix.
+- **Show session cost in EU windows** (on) and **Show session cost in Apolix windows** (off). The title bar shows the cost of the tab's session, such as `≈ €1.84`, with the chat that runs now and the tokens in the tooltip.
+  The chat page posts `cost:<JSON>` to `window.webkit.messageHandlers.zeusApp` on connect and after each reply (zeus-editor, `docs/chat.md`, "Session cost"); the app shows a report only when its `host` is the tab's host.
+  The EU figure is an estimate from Google Cloud list prices; the Apolix figure is the value at API list prices, not a charge on the subscription.
+- **Blind build mode** (off). Every session that the app starts, on both hosts, gets `ZEUS_BLIND_MODE=1`; with the setting off, the variable is absent (an inherited one is removed). Zeus enforces what it means: sessions outside the EU see no row values and cannot read raw data files.
+
+### The EU handoff when a tab switches from EU to Apolix
+
+Before the EU session stops, the app (not Claude) asks the workspace's Zeus which projects need a handoff: `python3 <workspace>/scripts/zeus.py --workspace <workspace> handoff pending --json`, in the workspace, without the variables of a Claude Code session.
+With none, the switch goes on as above. Otherwise the tab shows **Handing off data securely** on the loading screen while Zeus runs `handoff build <project> --json` and `handoff scan <project> --json` (off the main thread, with time limits),
+and shows each step as Zeus starts it (its `{"stage", "label"}` progress lines on stderr), each for a moment, then ticks them off; a blocked review step shows as failed. Then a summary sheet shows what goes over (counts), the scan result, and any findings (masked previews from Zeus), with:
+
+- **Release and continue on Apolix**: `handoff release <project> <hash> --json`, then the Apolix session starts. Disabled while the scan has findings or after an error.
+- **Open review page**: the HTML review page of the scan.
+- **Continue without handoff**: Apolix starts without a release.
+- **Stay on EU**: the EU session keeps running.
+
+An error of Zeus shows in the sheet with its fix; it never starts Apolix by itself and never blocks a later switch to EU.
+
 ## Build
 
 Needs only the Xcode Command Line Tools (Swift 5.9 or later). Full Xcode is not necessary.
@@ -85,6 +117,10 @@ It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in t
 `ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
 `ZEUS_APP_TEST_SPEECH=1` (debug builds) replaces Apple's speech recognition with a simulated recognizer that "hears" "Hello Zeus" (`denied`: no permission).
 `ZEUS_APP_TEST_ID=<id>` (debug builds) makes the test actions reach only this app copy.
+`ZEUS_APP_WORKSPACE=/path/to/zeus` replaces the Zeus workspace (`~/Code/zeus`): sessions start there, and the handoff runs its `scripts/zeus.py`.
+`ZEUS_APP_ZEUS_COMMAND=/path/to/zeus` replaces the zeus command. The app passes its environment on to `zeus`, so `ZEUS_EDITOR_PORT` and `ZEUS_EDITOR_STATE_DIR` give a development Zeus Editor of its own.
+`ZEUS_APP_EU_ENV="NAME=value NAME=value"` replaces the `claude-eu` alias, `ZEUS_APP_GCLOUD=/path/to/gcloud` replaces `gcloud`, and `ZEUS_APP_PYTHON` replaces `python3` for the handoff.
+`ZEUS_APP_TEST_NO_SWITCH_QUESTION=1` and `ZEUS_APP_TEST_NO_OPEN=1` (debug builds) skip the switch question and the opening of the review page in tests.
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.
 The web pages can be inspected with Safari's Develop menu.
@@ -153,6 +189,13 @@ It presses the app's buttons through the debug test actions and checks the trace
    another page cannot stop it, and closing the Zeus Editor window, closing the tab, or quitting the app ends it;
    with Apple's recognizer, the page gets the languages of this Mac, and a language that no Mac knows gives `no-on-device` without a permission question.
 4. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
+5. Developer Settings and the host switch: a tab starts on Apolix; the cost on connect shows only when its setting is on; the switch to EU checks the Google Cloud sign-in, stops the Apolix session,
+   and starts `zeus` with the EU variables and without keys, proxies, or region overrides; blind build mode reaches new sessions only; the cost of each report reaches the title bar;
+   the host bar follows the selected tab; without a sign-in the EU start is refused and nothing starts on Apolix; **Try again** starts on EU after the sign-in.
+6. The EU handoff with a simulated `scripts/zeus.py` (`payload/handoff-zeus.py`): a clean scan ticks off its stages in under 3 s and releases before the EU session stops;
+   a scan with findings disables Release and **Stay on EU** keeps EU; a failed build or pending check asks, and **Continue without handoff** starts Apolix without a release; with no EU work the step is skipped.
+
+`ZEUS_SIM_SCENARIOS="5 6"` runs only the named scenarios (2 and 3 run with 1).
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
 permission for the terminal only for the screenshots.

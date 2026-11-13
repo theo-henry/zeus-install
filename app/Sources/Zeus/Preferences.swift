@@ -13,6 +13,49 @@ enum Preferences {
         get { defaults.bool(forKey: "showMenuBar") }
         set { defaults.set(newValue, forKey: "showMenuBar") }
     }
+
+    // MARK: Developer Settings
+
+    /// Posted when a developer setting changes, so that open windows follow it at once.
+    static let developerSettingsChanged = Notification.Name("ZeusDeveloperSettingsChanged")
+
+    /// Shows the Apolix | EU switch in the title bar of each chat window.
+    static var developerHostSwitch: Bool {
+        get { defaults.bool(forKey: "developerHostSwitch") }
+        set { defaults.set(newValue, forKey: "developerHostSwitch"); changed() }
+    }
+
+    /// The host that the consultant chose last; new tabs start on it while the switch shows.
+    static var lastHost: ClaudeHost {
+        get { defaults.string(forKey: "lastHost").flatMap(ClaudeHost.init(rawValue:)) ?? .apolix }
+        set { defaults.set(newValue.rawValue, forKey: "lastHost") }
+    }
+
+    /// Shows the session cost in the title bar of EU tabs. On until the consultant turns it off.
+    static var showCostEU: Bool {
+        get { defaults.object(forKey: "showCostEU") == nil ? true : defaults.bool(forKey: "showCostEU") }
+        set { defaults.set(newValue, forKey: "showCostEU"); changed() }
+    }
+
+    /// Shows the API-equivalent session cost in the title bar of Apolix tabs.
+    static var showCostApolix: Bool {
+        get { defaults.bool(forKey: "showCostApolix") }
+        set { defaults.set(newValue, forKey: "showCostApolix"); changed() }
+    }
+
+    static func showCost(on host: ClaudeHost) -> Bool {
+        host == .eu ? showCostEU : showCostApolix
+    }
+
+    /// Blind build mode: every session that the app starts gets ZEUS_BLIND_MODE=1. Applies to new sessions.
+    static var blindMode: Bool {
+        get { defaults.bool(forKey: "blindMode") }
+        set { defaults.set(newValue, forKey: "blindMode"); changed() }
+    }
+
+    private static func changed() {
+        NotificationCenter.default.post(name: developerSettingsChanged, object: nil)
+    }
 }
 
 /// Keeps the app in the Dock: adds it to the Dock's list of kept apps, then restarts the Dock.

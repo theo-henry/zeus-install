@@ -41,8 +41,10 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             formatter.timeStyle = .short
             formatter.dateStyle = .none
             for session in sessions {
-                let title = session.chatURL == nil ? "Starting… (since \(formatter.string(from: session.startedAt)))"
-                    : "Chat started at \(formatter.string(from: session.startedAt))"
+                // An EU session says so, as the EU pill in its tab does.
+                let host = session.host == .eu ? " on EU" : ""
+                let title = session.chatURL == nil ? "Starting\(host)… (since \(formatter.string(from: session.startedAt)))"
+                    : "Chat\(host) started at \(formatter.string(from: session.startedAt))"
                 let entry = NSMenuItem(title: title, action: nil, keyEquivalent: "")
                 let submenu = NSMenu()
                 let open = submenu.addItem(withTitle: "Open", action: #selector(openSession(_:)), keyEquivalent: "")

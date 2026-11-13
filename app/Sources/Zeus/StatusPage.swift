@@ -34,16 +34,27 @@ enum StatusPage {
     function send(m){ window.webkit.messageHandlers.zeusApp.postMessage(m); }
     """
 
-    static func failed(message: String, log: String) -> String {
-        """
+    /// An empty page in the colour of the loading screen, for the moment between two sessions of a tab.
+    static let blank = "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;height:100%;background:#0b2545}</style></head><body></body></html>"
+
+    /// The page of a session that did not start. A failed EU start says that nothing started on Apolix,
+    /// and has no setup button: the Zeus setup does not repair the Google Cloud sign-in.
+    static func failed(message: String, log: String, host: ClaudeHost = .apolix) -> String {
+        let title = host == .eu ? "Zeus did not start on EU" : "Zeus did not start"
+        let note = host == .eu
+            ? "<p>Nothing started on Apolix instead. To work on Apolix, pick it with the host switch in the title bar.</p>"
+            : ""
+        let setup = host == .eu ? "" : "<button onclick=\"send('setup')\">Run the Zeus setup</button>"
+        return """
         <!doctype html><html><head><meta charset="utf-8"><style>\(style)</style><script>\(script)</script></head>
         <body><main>
-          <h1 class="bad">Zeus did not start</h1>
+          <h1 class="bad">\(title)</h1>
           <p>\(escape(message))</p>
+          \(note)
           <pre id="log">\(escape(log.isEmpty ? "(no output)" : log))</pre>
           <div class="actions">
             <button class="primary" onclick="send('retry')">Try again</button>
-            <button onclick="send('setup')">Run the Zeus setup</button>
+            \(setup)
             <button onclick="send('copy-log')">Copy the output</button>
           </div>
         </main>

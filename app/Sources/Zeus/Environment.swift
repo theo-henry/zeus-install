@@ -4,7 +4,9 @@ enum Paths {
     /// HOME first, so that a test can run the app against a separate home folder.
     static let home = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
         ?? FileManager.default.homeDirectoryForCurrentUser.path
-    static let zeusDir = home + "/Code/zeus"
+    /// The Zeus workspace. ZEUS_APP_WORKSPACE replaces it (for development and tests).
+    static let zeusDir = ProcessInfo.processInfo.environment["ZEUS_APP_WORKSPACE"].flatMap { $0.isEmpty ? nil : $0 }
+        ?? home + "/Code/zeus"
     /// ZEUS_APP_ZEUS_COMMAND replaces the zeus command (for tests).
     static let zeusCommand = ProcessInfo.processInfo.environment["ZEUS_APP_ZEUS_COMMAND"] ?? home + "/.local/bin/zeus"
     static let logDir = home + "/Library/Logs/zeus-install"
@@ -55,10 +57,14 @@ enum ShellEnvironment {
     /// Forgets the PATH, so that the next command sees tools that the installer just added.
     static func reset() { cachedPath = nil }
 
+    /// The user's login shell, when it is zsh or bash; else zsh.
+    static var loginShell: String {
+        ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
+    }
+
     private static func readLoginPath() -> String? {
-        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: shell)
+        process.executableURL = URL(fileURLWithPath: loginShell)
         process.arguments = ["-ilc", "printf '__ZEUS_PATH__%s__ZEUS_PATH__' \"$PATH\""]
         let output = Pipe()
         process.standardOutput = output
@@ -85,7 +91,25 @@ enum ShellEnvironment {
         env["COLORTERM"] = "truecolor"
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         env["ZEUS_APP"] = "1"
+        // Blind build mode is the app's setting only: an inherited value never reaches a session.
+        env.removeValue(forKey: BlindMode.variable)
         for (key, value) in extra { env[key] = value }
         return env
     }
+
+    /// The environment of a Zeus session on a host: `make()`, the host label, and blind build mode when it is on.
+    /// `base` is the EU environment for an EU session (EUHost.environment).
+    static func session(host: ClaudeHost, base: [String: String]? = nil) -> [String: String] {
+        var env = base ?? make()
+        env.removeValue(forKey: BlindMode.variable)
+        env["ZEUS_CLAUDE_HOST"] = host.rawValue
+        if Preferences.blindMode { env[BlindMode.variable] = "1" }
+        return env
+    }
+}
+
+/// Blind build mode (Developer Settings): sessions outside the EU see no row values of client data.
+/// Zeus enforces it; the app only passes the setting to each session that it starts.
+enum BlindMode {
+    static let variable = "ZEUS_BLIND_MODE"
 }

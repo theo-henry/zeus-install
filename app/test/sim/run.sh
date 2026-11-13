@@ -8,6 +8,7 @@
 #
 # Usage: app/test/sim/run.sh [screenshot-folder]
 # With a folder, it saves a screenshot of each app window state there (the app's windows only).
+# ZEUS_SIM_SCENARIOS="5 6" runs only the named scenarios (default: all; 2 and 3 run with 1, on its simulated Mac).
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
 # shellcheck disable=SC2016
@@ -27,6 +28,8 @@ mkdir -p "$BIN"
 [ -n "$SHOTS" ] && mkdir -p "$SHOTS"
 
 FAILURES=0
+SCENARIOS=" ${ZEUS_SIM_SCENARIOS:-1 4 5 6} "
+runs() { case "$SCENARIOS" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
@@ -57,7 +60,19 @@ do { _ = try event.sendEvent(options: [.noReply], timeout: 5) } catch { print("l
 SWIFT
 swiftc -O -o "$BIN/act" "$WORK/act.swift" 2>/dev/null
 swiftc -O -o "$BIN/logout" "$WORK/logout.swift" 2>/dev/null
+# The frame of the app's largest window with its sheets, for screenshots of a window with a sheet: "x,y,w,h".
+cat >"$WORK/frame.swift" <<'SWIFT'
+import CoreGraphics
+let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+let pid = Int(CommandLine.arguments[1]) ?? -1
+let frames = list.filter { ($0[kCGWindowOwnerPID as String] as? Int) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }
+    .compactMap { $0[kCGWindowBounds as String] as! CFDictionary? }.compactMap { CGRect(dictionaryRepresentation: $0) }
+if let largest = frames.max(by: { $0.width * $0.height < $1.width * $1.height }) {
+    print("\(Int(largest.minX)),\(Int(largest.minY)),\(Int(largest.width)),\(Int(largest.height))")
+}
+SWIFT
 swiftc -O -o "$BIN/windows" "$WORK/windows.swift" 2>/dev/null
+swiftc -O -o "$BIN/frame" "$WORK/frame.swift" 2>/dev/null
 
 echo "Building the development app"
 APP="$("$APP_DIR/dev-bundle.sh" 2>/dev/null | tail -1)"
@@ -87,6 +102,15 @@ shot() {
   [ -n "$id" ] && screencapture -x -o -l "$id" "$SHOTS/$1.png"
 }
 
+# shot_frame <name>: the app's largest window with what lies on it (a sheet), as on the screen.
+shot_frame() {
+  [ -n "$SHOTS" ] || return 0
+  sleep 0.8
+  local frame
+  frame="$("$BIN/frame" "$APP_PID")"
+  [ -n "$frame" ] && screencapture -x -R"$frame" "$SHOTS/$1.png"
+}
+
 # wait_for <trace pattern> [seconds]
 wait_for() {
   local pattern="$1" limit="${2:-60}" waited=0
@@ -103,7 +127,7 @@ wait_for() {
 # wait_count <trace pattern> <count> [seconds]
 wait_count() {
   local pattern="$1" count="$2" limit="${3:-60}" waited=0
-  until [ "$(grep -c -- "$pattern" "$TRACE" 2>/dev/null || true)" -ge "$count" ]; do
+  until [ "$( (grep -c -- "$pattern" "$TRACE" 2>/dev/null || true) | head -1)" -ge "$count" ] 2>/dev/null; do
     sleep 0.5
     waited=$((waited + 1))
     if [ "$waited" -ge $((limit * 2)) ]; then
@@ -113,7 +137,7 @@ wait_count() {
   done
 }
 
-stops() { grep -c " stop " "$STATE/sessions" 2>/dev/null || true; }
+stops() { local n; n="$(grep -c " stop " "$STATE/sessions" 2>/dev/null)" || true; echo "${n:-0}"; }
 
 # wait_starts <count>: waits until that many simulated zeus sessions have started.
 wait_starts() {
@@ -159,6 +183,7 @@ stop_app() {
   if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-$(basename "$(dirname "$TRACE")").log"; fi
 }
 
+if runs 1; then
 echo
 echo "Scenario 1: a new Mac, full setup, chat, close"
 start_app new ZEUS_SIM_START_DELAY=2500
@@ -419,6 +444,9 @@ act 'test-speech-post:{"type":"speech-start","id":"a1","locale":"xx-XX"}'
 check "Apple's recognizer gives no-on-device for a language that it does not know" 'wait_for "speech event: error a1 no-on-device" 10'
 stop_app
 
+fi
+
+if runs 4; then
 echo
 echo "Scenario 4: the account has no access to one private repo"
 start_app noaccess ZEUS_SIM_NO_ACCESS=theo-henry/celonis-pql
@@ -431,6 +459,203 @@ check "the setup stops with an error" 'wait_for "setup ended: check=false code=1
 shot 7-no-access
 check "nothing after step 5 is installed" '[ ! -d "$SANDBOX/.local/node" ] && [ ! -d "$SANDBOX/Code/zeus" ]'
 stop_app
+fi
+
+# prepare_mac <name>: a Mac where the setup is done: the zeus command, a workspace with a simulated scripts/zeus.py,
+# a claude-eu alias in the shell profile, and a simulated gcloud that signs in unless the state has "gcloud-fail".
+prepare_mac() {
+  SANDBOX="$WORK/$1/home"
+  STATE="$WORK/$1/state"
+  mkdir -p "$SANDBOX/.local/bin" "$SANDBOX/Code/zeus/scripts" "$STATE" "$WORK/$1/tools"
+  printf 'export PATH="%s:/usr/bin:/bin:/usr/sbin:/sbin"\n' "$SIM_DIR/stubs" >"$SANDBOX/.zprofile"
+  # The alias also names a proxy, which the app must drop.
+  cat >"$SANDBOX/.zshrc" <<'ZSHRC'
+alias claude-eu='CLAUDE_CODE_USE_VERTEX=1 CLOUD_ML_REGION=eu ANTHROPIC_VERTEX_PROJECT_ID=sim-project ANTHROPIC_MODEL=claude-sonnet-5-5 ANTHROPIC_BASE_URL=http://alias.invalid claude'
+ZSHRC
+  cp "$SANDBOX/.zshrc" "$SANDBOX/.bashrc"
+  cat >"$SANDBOX/.local/bin/zeus" <<'ZEUS'
+#!/bin/bash
+exec "$ZEUS_SIM_REAL_NODE" "$ZEUS_SIM_PAYLOAD/zeus.mjs" "$@"
+ZEUS
+  cat >"$WORK/$1/tools/gcloud" <<'GCLOUD'
+#!/bin/bash
+echo "gcloud $*" >>"$ZEUS_SIM_STATE/gcloud-calls"
+if [ -f "$ZEUS_SIM_STATE/gcloud-fail" ]; then
+  echo "ERROR: (gcloud.auth.application-default.print-access-token) Your default credentials were not found." >&2
+  exit 1
+fi
+echo "ya29.simulated-token-that-the-app-must-never-keep"
+GCLOUD
+  chmod +x "$SANDBOX/.local/bin/zeus" "$WORK/$1/tools/gcloud"
+  cp "$SIM_DIR/payload/handoff-zeus.py" "$SANDBOX/Code/zeus/scripts/zeus.py"
+  defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
+  defaults write "$BUNDLE_ID" setupDone -bool true
+  GCLOUD_SIM="$WORK/$1/tools/gcloud"
+}
+
+# The n-th start of zeus has this text (zeus-starts.jsonl of the simulated zeus).
+start_has() { sed -n "${1}p" "$STATE/zeus-starts.jsonl" 2>/dev/null | grep -q -- "$2"; }
+starts() { wc -l <"$STATE/zeus-starts.jsonl" 2>/dev/null | tr -d ' ' || echo 0; }
+# The last line of the host bar in the trace has this text.
+bar_has() { grep "host bar: " "$TRACE" | tail -1 | grep -qF -- "$1"; }
+wait_bar() { # wait_bar <text> [seconds]
+  local waited=0
+  until bar_has "$1"; do
+    sleep 0.5; waited=$((waited + 1))
+    if [ "$waited" -ge $(( ${2:-15} * 2 )) ]; then echo "    (timed out waiting for the host bar: $1; last: $(grep "host bar: " "$TRACE" | tail -1))"; return 1; fi
+  done
+}
+# Provider variables that the app inherits and must not pass to an EU session.
+INHERITED=(ANTHROPIC_API_KEY=sim-key ANTHROPIC_AUTH_TOKEN=sim-token ANTHROPIC_BASE_URL=http://proxy.invalid
+  AWS_BEARER_TOKEN_BEDROCK=sim-bedrock VERTEX_REGION_CLAUDE_OPUS_5_5=us-east5 CLAUDE_CODE_USE_VERTEX=1 CLOUD_ML_REGION=us-east5
+  ZEUS_BLIND_MODE=inherited)
+
+if runs 5; then
+echo
+echo "Scenario 5: Developer Settings, the Claude host switch of a tab, the EU pill, the session cost, blind build mode"
+prepare_mac host
+echo none >"$STATE/handoff-mode"
+launch_app host ZEUS_APP_GCLOUD="$GCLOUD_SIM" ZEUS_APP_TEST_NO_SWITCH_QUESTION=1 "${INHERITED[@]}"
+check "a new tab starts on Apolix while the host switch is off" 'wait_count "state: running(" 1 30'
+check "the Apolix session has the host name and no Vertex AI switch, as before" \
+  'start_has 1 "\"host\":\"apolix\"" && start_has 1 "\"vertex\":null"'
+check "an inherited ZEUS_BLIND_MODE never reaches a session" 'start_has 1 "\"blind\":null"'
+check "no Google Cloud check runs for Apolix" '[ ! -f "$STATE/gcloud-calls" ]'
+wait_count "page loaded: http://127.0.0.1" 1 20 >/dev/null
+act test-retina
+check "the cost of the chat page reaches the app on connect" 'wait_for "cost: ≈ \$0.42 on apolix shown=false" 10'
+check "the Apolix cost is hidden by default, and so are the switch and the pill" 'wait_bar "apolix switch=false pill=false cost=-"'
+act dev-settings-show
+sleep 1.5
+shot 20-developer-settings
+act dev-settings-close
+act "dev-setting:costApolix=on"
+check "the Apolix cost shows at once when its setting turns on" 'wait_bar "apolix switch=false pill=false cost=≈ \$0.42"'
+act "dev-setting:switch=on"
+check "the host switch shows at once when its setting turns on" 'wait_bar "apolix switch=true pill=false"'
+shot_frame 21-apolix-titlebar
+act "dev-setting:blind=on"
+act switch-host:eu
+check "the switch to EU checks the Google Cloud sign-in first" 'wait_for "EU preflight passed" 30'
+check "a new session starts on EU in the same tab" 'wait_count "state: running(" 2 30'
+check "the Apolix session of the tab stopped with SIGTERM" 'wait_for "replaced by a session on eu" 5 && sleep 1 && [ "$(stops)" = 1 ]'
+check "the EU session gets the alias variables and the host name" \
+  'start_has 2 "\"host\":\"eu\"" && start_has 2 "\"vertex\":\"1\"" && start_has 2 "\"region\":\"eu\"" && start_has 2 "\"project\":\"sim-project\"" && start_has 2 "\"model\":\"claude-sonnet-5-5\""'
+check "the EU session has no API key, token, base URL, Bedrock key, or region override" \
+  'start_has 2 "\"apiKey\":null,\"authToken\":null,\"baseUrl\":null,\"bedrock\":null,\"regionOverride\":null"'
+check "the EU session turns off nonessential traffic" 'start_has 2 "\"quiet\":\"1\""'
+check "blind build mode reaches the new session" 'start_has 2 "\"blind\":\"1\""'
+check "the access token is in no trace or output of the app" '! grep -rq "ya29" "$TRACE" "$WORK/host/app.out"'
+check "the window count stays one" '[ "$("$BIN/windows" "$APP_PID" | wc -l | tr -d " ")" = 1 ]'
+check "the EU tab shows the EU pill and the switch" 'wait_bar "eu switch=true pill=true"'
+wait_count "page loaded: http://127.0.0.1" 2 20 >/dev/null
+sleep 1
+act 'test-cost:{"host":"eu","currency":"EUR","total":1.84,"chat":0.42,"calls":3,"tokens":{"input":10,"cache_read":20,"cache_write_5m":5,"cache_write_1h":0,"output":7},"usd_per_eur":1.11}'
+check "a cost report updates the title bar" 'wait_for "cost: ≈ €1.84 on eu shown=true" 10 && wait_bar "eu switch=true pill=true cost=≈ €1.84"'
+act 'test-cost:{"host":"apolix","currency":"USD","total":9.99}'
+sleep 1
+check "a cost report for another host is not shown" '! grep -q "cost: ≈ \$9.99" "$TRACE"'
+shot_frame 22-eu-titlebar-dark
+act test-light:on
+shot_frame 23-eu-titlebar-light
+act test-light:off
+act "dev-setting:costEU=off"
+check "the EU cost hides at once when its setting turns off" 'wait_bar "eu switch=true pill=true cost=-"'
+act "dev-setting:costEU=on"
+act "dev-setting:blind=off"
+act test-cmd-t
+check "a new tab starts on the host picked last" 'wait_count "state: running(" 3 30 && start_has 3 "\"host\":\"eu\""'
+check "blind build mode off: the new session has no ZEUS_BLIND_MODE" 'start_has 3 "\"blind\":null"'
+act switch-host:apolix
+check "EU to Apolix without EU work to hand off asks Zeus and skips the handoff step" 'wait_for "handoff: none pending" 20'
+check "the Apolix session starts in the new tab" 'wait_count "state: running(" 4 30 && start_has 4 "\"host\":\"apolix\""'
+check "the host bar follows the selected tab" 'wait_bar "apolix switch=true pill=false"'
+act test-select-first
+check "the first tab shows its EU pill again" 'wait_bar "eu switch=true pill=true"'
+touch "$STATE/gcloud-fail"
+act switch-host:apolix
+check "the first tab switches to Apolix" 'wait_count "state: running(" 5 30'
+act switch-host:eu
+check "without a Google Cloud sign-in the EU start is refused" 'wait_for "EU start refused" 30'
+check "the tab shows the failure" 'wait_for "state: failed(" 10'
+sleep 2
+check "nothing starts on Apolix instead" '[ "$(starts)" = 5 ]'
+shot_frame 24-eu-refused
+rm -f "$STATE/gcloud-fail"
+act "test-retry"
+check "Try again starts on EU again after the sign-in" 'wait_count "EU preflight passed" 3 30 && wait_count "state: running(" 6 30 && start_has 6 "\"host\":\"eu\""'
+check "the app remembers EU for the next tab" '[ "$(defaults read "$BUNDLE_ID" lastHost 2>/dev/null)" = eu ]'
+stop_app
+check "every session stopped when the app quit" '[ "$(stops)" = 6 ]'
+fi
+
+if runs 6; then
+echo
+echo "Scenario 6: the EU handoff when a tab switches from EU to Apolix"
+prepare_mac handoff
+defaults write "$BUNDLE_ID" developerHostSwitch -bool true
+defaults write "$BUNDLE_ID" lastHost eu
+echo clean >"$STATE/handoff-mode"
+launch_app handoff ZEUS_APP_GCLOUD="$GCLOUD_SIM" ZEUS_APP_TEST_NO_SWITCH_QUESTION=1 ZEUS_APP_TEST_NO_OPEN=1 ZEUS_SIM_HANDOFF_DELAY=2.5
+check "the tab starts on EU" 'wait_count "state: running(" 1 30 && start_has 1 "\"host\":\"eu\""'
+wait_count "page loaded: http://127.0.0.1" 1 20 >/dev/null
+act test-retina
+sleep 2
+act switch-host:apolix
+check "the switch asks Zeus which projects need a handoff" 'wait_for "handoff: pending solvias" 20'
+check "Zeus runs in the workspace, outside any Claude Code session" 'grep -q "handoff pending --json cwd=.*/handoff/home/Code/zeus workspace=.*/handoff/home/Code/zeus claude=- session=- blind=-" "$STATE/handoff-calls"'
+sleep 1.6
+shot 30-handoff-step
+check "the stages come in live from the progress lines of Zeus" 'wait_for "handoff: stage started: Removing row values" 15'
+check "the stages of the scan tick off in order" 'wait_for "handoff: stage 5/5 done: Writing the review page" 15 && grep "handoff: stage [0-9]/5 done" "$TRACE" | sed "s/.*done: //" | tr "\n" "|" | grep -q "^Collecting EU work|Removing row values|Aggregating to structure|Scanning for sensitive values|Writing the review page|$"'
+check "the stages take less than 3 s" 'wait_for "handoff: stages shown in" 5 && awk "/handoff: stages shown in/ {exit !(\$6 < 3)}" "$TRACE"'
+check "a clean scan offers the release" 'wait_for "handoff: summary projects=1 clean=true findings=0 error=false release=true" 10'
+check "the EU session still runs during the handoff" '[ "$(stops)" = 0 ] && [ "$(starts)" = 1 ]'
+shot_frame 31-handoff-summary-clean
+act test-handoff:review
+check "Open review page opens the page of the scan" 'wait_for "handoff: review page 1" 5'
+act test-handoff:release
+check "Release runs the release with the handoff hash" 'wait_for "handoff: released solvias" 20 && grep -q "handoff release solvias $(printf "a%.0s" {1..64}) --json" "$STATE/handoff-calls"'
+check "then the Apolix session starts" 'wait_count "state: running(" 2 30 && start_has 2 "\"host\":\"apolix\""'
+check "the release comes before the EU session stops" 'grep -n " handoff release\| stop " "$STATE/sessions" | head -1 | grep -q "handoff release"'
+
+act switch-host:eu
+check "the switch back to EU has no handoff step" 'wait_count "state: running(" 3 30 && start_has 3 "\"host\":\"eu\"" && [ "$(grep -c "handoff: pending check" "$TRACE")" = 1 ]'
+wait_count "page loaded: http://127.0.0.1" 3 20 >/dev/null
+sleep 1.5
+echo findings >"$STATE/handoff-mode"
+act switch-host:apolix
+check "a scan with findings shows them and disables Release" 'wait_for "handoff: summary projects=1 clean=false findings=2 error=false release=false" 20'
+check "the blocked review stage shows as failed" 'grep -q "handoff: stage 5/5 failed: Blocked: 2 finding(s) to resolve" "$TRACE"'
+shot_frame 32-handoff-summary-findings
+act test-handoff:release
+check "Release does nothing while the scan has findings" 'wait_for "handoff: release is disabled" 5 && [ "$(grep -c "handoff release" "$STATE/handoff-calls")" = 1 ]'
+act test-handoff:stay
+check "Stay on EU keeps the EU session" 'wait_for "handoff: outcome stay" 5 && sleep 1 && [ "$(starts)" = 3 ] && [ "$(stops)" = 2 ]'
+check "the switch is free again after Stay on EU" 'wait_bar "eu switch=true pill=true"'
+
+echo error >"$STATE/handoff-mode"
+act switch-host:apolix
+check "a failed build shows the error and no Release" 'wait_for "handoff: summary projects=0 clean=true findings=0 error=true release=false" 20'
+sleep 0.5
+check "a failed handoff starts nothing by itself" '[ "$(starts)" = 3 ]'
+shot_frame 33-handoff-error
+act test-handoff:continue
+check "Continue without handoff starts Apolix without a release" 'wait_count "state: running(" 4 30 && start_has 4 "\"host\":\"apolix\"" && [ "$(grep -c "handoff release" "$STATE/handoff-calls")" = 1 ]'
+act switch-host:eu
+check "after a failed handoff, the switch back to EU works" 'wait_count "state: running(" 5 30 && start_has 5 "\"host\":\"eu\""'
+wait_count "page loaded: http://127.0.0.1" 5 20 >/dev/null
+sleep 1.5
+echo pending-error >"$STATE/handoff-mode"
+act switch-host:apolix
+check "a failed pending check asks the consultant" 'wait_count "handoff: summary projects=0 clean=true findings=0 error=true release=false" 2 20 && grep -q "handoff: pending failed: The project records cannot be read." "$TRACE"'
+act test-handoff:stay
+check "Stay on EU after a failed check keeps EU" 'wait_count "handoff: outcome stay" 2 5 && sleep 1 && [ "$(starts)" = 5 ]'
+echo none >"$STATE/handoff-mode"
+act switch-host:apolix
+check "with no EU work to hand off, the switch skips the step" 'wait_for "handoff: none pending" 20 && wait_count "state: running(" 6 30 && start_has 6 "\"host\":\"apolix\""'
+stop_app
+fi
 
 echo
 if [ "$FAILURES" -eq 0 ]; then

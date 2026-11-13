@@ -196,10 +196,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     @objc func newChat(_ sender: Any?) {
         guard !updating else { return }
+        if let session = startSession(host: .forNewTab) { show(session) }
+    }
+
+    /// Starts a session on a host. When `zeus` or the workspace is missing, it says so and offers the setup.
+    func startSession(host: ClaudeHost) -> ZeusSession? {
         do {
-            let session = try SessionManager.shared.start()
-            Trace.log("session \(session.pid) started")
-            show(session)
+            let session = try SessionManager.shared.start(host: host)
+            Trace.log("session \(session.pid) started on \(host.rawValue)")
+            return session
         } catch {
             Trace.log("session not started: \(error.localizedDescription)")
             let alert = NSAlert()
@@ -209,6 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             alert.addButton(withTitle: "Cancel")
             NSApp.activate(ignoringOtherApps: true)
             if alert.runModal() == .alertFirstButtonReturn { showSetup(nil) }
+            return nil
         }
     }
 
@@ -221,10 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         let tab = ChatTab(session: session)
         tab.onClosed = { [weak self] closed in self?.chatTabs.removeAll { $0 === closed } }
-        tab.onRetry = { [weak self, weak tab] in
-            tab?.requestClose()
-            self?.newChat(nil)
-        }
+        tab.startSession = { [weak self] host in self?.startSession(host: host) }
         tab.onRunSetup = { [weak self, weak tab] in
             tab?.requestClose()
             self?.showSetup(nil)
@@ -355,6 +358,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             case "test-rename-open": self.chatTabs.last.map { $0.host?.startRename($0) }
             case "test-rename-save": self.chatTabs.last.map { $0.host?.endRename($0, name: argument) }
             case "toggle-menubar": self.toggleMenuBar(nil)
+            // Developer Settings: "dev-setting:switch=on", "costEU", "costApolix", "blind".
+            case "dev-setting":
+                let pair = argument.split(separator: "=").map(String.init)
+                guard pair.count == 2 else { break }
+                let on = pair[1] == "on"
+                switch pair[0] {
+                case "switch": Preferences.developerHostSwitch = on
+                case "costEU": Preferences.showCostEU = on
+                case "costApolix": Preferences.showCostApolix = on
+                case "blind": Preferences.blindMode = on
+                default: break
+                }
+                Trace.log("developer setting: \(pair[0])=\(on)")
+            case "dev-settings-show": DeveloperSettingsWindow.show()
+            case "dev-settings-close": DeveloperSettingsWindow.close()
+            // The host switch of the selected tab, as a click on it does.
+            case "switch-host": self.chatWindows.last?.selectedTab?.requestSwitch(to: argument == "eu" ? .eu : .apolix)
+            case "test-handoff": self.chatWindows.last?.selectedTab?.runningHandoff?.testPress(argument)
+            case "test-select-first": self.chatTabs.first.map { $0.host?.select($0) }
+            // "Try again" on the failure page of the selected tab.
+            case "test-retry":
+                self.chatWindows.last?.selectedTab?.webView.evaluateJavaScript("window.webkit.messageHandlers.zeusApp.postMessage('retry')")
+            // A cost report from the chat page of the last tab, as zeus-editor posts it.
+            case "test-cost":
+                self.chatWindows.last?.selectedTab?.webView.callAsyncJavaScript("window.webkit.messageHandlers.zeusApp.postMessage('cost:' + json)",
+                                                               arguments: ["json": argument], in: nil, in: .page)
+            // For screenshots: the chat window on the sharpest screen, at a fixed size.
+            case "test-retina":
+                if let window = self.chatWindows.last?.window,
+                   let screen = NSScreen.screens.max(by: { $0.backingScaleFactor < $1.backingScaleFactor }) {
+                    let size = NSSize(width: 1100, height: 720)
+                    let area = screen.visibleFrame
+                    window.setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2,
+                                           width: size.width, height: size.height), display: true)
+                }
+            // The title bar in the light appearance, for screenshots.
+            case "test-light":
+                let window = self.chatTabs.last?.host?.window
+                window?.appearance = NSAppearance(named: argument == "off" ? .darkAqua : .aqua)
+                window?.backgroundColor = argument == "off" ? LoaderPage.background
+                    : NSColor(srgbRed: 241/255, green: 246/255, blue: 249/255, alpha: 1)
             // Not from inside this main-queue block: quitting waits for callbacks on the main queue.
             case "quit": NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
             case "test-power-off":
@@ -370,6 +414,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc private func toggleMenuBar(_ sender: Any?) {
         Preferences.showMenuBar.toggle()
         statusMenu.update()
+    }
+
+    @objc private func showDeveloperSettings(_ sender: Any?) {
+        DeveloperSettingsWindow.show()
     }
 
     @objc private func keepInDock(_ sender: Any?) {
@@ -433,6 +481,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         app.addItem(withTitle: "Zeus Setup…", action: #selector(showSetup(_:)), keyEquivalent: ",")
         app.addItem(withTitle: "Show in Menu Bar", action: #selector(toggleMenuBar(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Keep in Dock", action: #selector(keepInDock(_:)), keyEquivalent: "")
+        let developer = NSMenu(title: "Developer")
+        developer.addItem(withTitle: "Developer Settings…", action: #selector(showDeveloperSettings(_:)), keyEquivalent: "")
+        app.addItem(submenu: developer)
         app.addItem(.separator())
         app.addItem(withTitle: "Hide Zeus", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let others = app.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")

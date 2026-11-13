@@ -23,8 +23,15 @@ final class LoaderOverlay: NSObject, WKNavigationDelegate {
         view.loadHTMLString(LoaderPage.html(status: status), baseURL: nil)
     }
 
+    /// The handoff calls that came before the page had loaded.
+    private var waiting: [String] = []
+    private var loaded = false
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         setStatus(status)
+        loaded = true
+        for call in waiting { run("zeusLoader.\(call)") }
+        waiting.removeAll()
     }
 
     /// The time that is left until the loading screen may go away.
@@ -38,6 +45,33 @@ final class LoaderOverlay: NSObject, WKNavigationDelegate {
     /// Moves the globe to `rect` (in the page's coordinates, the same as the chat page's), over about 0.65 s.
     func moveGlobe(to rect: CGRect) {
         run("zeusLoader.handOff({x:\(rect.minX),y:\(rect.minY),width:\(rect.width),height:\(rect.height)})")
+    }
+
+    // MARK: The EU handoff step
+
+    /// Turns the loading screen into the handoff step: a smaller globe, a title, a subtitle, and a list of stages.
+    func beginHandoff(title: String, subtitle: String) {
+        handoffCall("handoff(\(LoaderPage.quote(title)), \(LoaderPage.quote(subtitle)))")
+    }
+
+    /// Empties the list of stages. A group title (a project name) can head the stages that follow.
+    func clearStages(group: String? = nil) {
+        handoffCall("stages([], \(group.map(LoaderPage.quote) ?? "null"))")
+    }
+
+    /// Adds one stage at the end of the list, waiting; its index is the count of stages added before it.
+    func addStage(_ label: String) {
+        handoffCall("add(\(LoaderPage.quote(label)))")
+    }
+
+    /// One stage: "active", "done", or "failed", with a new label when Zeus renames it (a blocked review).
+    func markStage(_ index: Int, _ state: String, label: String? = nil) {
+        handoffCall("mark(\(index), \(LoaderPage.quote(state)), \(label.map(LoaderPage.quote) ?? "null"))")
+    }
+
+    /// The handoff calls run in order, also those that come before the page has loaded.
+    private func handoffCall(_ call: String) {
+        if loaded { run("zeusLoader.\(call)") } else { waiting.append(call) }
     }
 
     /// Fades the loading screen out as a whole. Used when the chat page has no globe to hand over to.
@@ -81,6 +115,7 @@ enum LoaderPage {
     static func html(status: String) -> String {
         """
         <!doctype html><html><head><meta charset="utf-8"><style>
+        \(Brand.fontCSS)
         html, body { margin:0; height:100%; overflow:hidden; background:transparent;
                      font:14px -apple-system, BlinkMacSystemFont, sans-serif; }
         #bg { position:fixed; inset:0; background:#0b2545; transition:opacity .5s ease-out; }
@@ -91,6 +126,27 @@ enum LoaderPage {
         @keyframes arrive { from { opacity:0; transform:scale(.84); } }
         .zeus-globe { position:absolute; inset:0; width:100%; height:100%;
                       background:radial-gradient(circle, rgba(60,130,255,.3) 0%, rgba(40,90,220,.1) 30%, rgba(0,0,0,0) 55%); }
+        #handoff { position:fixed; left:16px; right:16px; text-align:center; color:#f1f6f9; opacity:0;
+                   transition:opacity .35s ease-out; font-family:"Object Sans", -apple-system, sans-serif; }
+        #handoff.on { opacity:1; }
+        #handoff h1 { font-size:20px; font-weight:600; margin:0 0 6px; letter-spacing:.005em; }
+        #handoff p { margin:0 0 22px; color:#a9bdd5; font-size:14px; }
+        #stages { list-style:none; margin:0 auto; padding:0; display:inline-flex; flex-direction:column; gap:10px; text-align:left; min-width:260px; }
+        #stages .group { color:#8ea4c2; font-size:11px; letter-spacing:.08em; text-transform:uppercase; margin-top:4px; }
+        #stages li.stage { display:flex; align-items:center; gap:10px; color:#6f87a6; font-size:14px;
+                           opacity:0; transform:translateY(4px); transition:opacity .3s ease-out, transform .3s ease-out, color .2s; }
+        #stages li.stage.shown { opacity:1; transform:none; }
+        #stages li.active { color:#f1f6f9; }
+        #stages li.done { color:#c7dbe6; }
+        #stages li.failed { color:#ff6b72; }
+        .mark { width:16px; height:16px; flex:none; border-radius:50%; border:1.5px solid #34598e; box-sizing:border-box; position:relative; }
+        li.active .mark { border-color:#24477a; border-top-color:#5b8cff; animation:spin .8s linear infinite; }
+        li.done .mark { border:none; background:#8ee3c8; }
+        li.done .mark::after { content:""; position:absolute; left:5.5px; top:2.5px; width:4px; height:8px; border:solid #0b2545;
+                               border-width:0 2px 2px 0; transform:rotate(45deg); }
+        li.failed .mark { border:none; background:#ff6b72; }
+        li.failed .mark::after { content:"!"; position:absolute; inset:0; text-align:center; font:700 11px/16px -apple-system, sans-serif; color:#0b2545; }
+        @keyframes spin { to { transform:rotate(360deg); } }
         #status { position:fixed; left:0; right:0; text-align:center; color:#9fb4cc; letter-spacing:.02em;
                   transition:opacity .22s ease-out; animation:arrive-text .6s ease-out .35s both; }
         @keyframes arrive-text { from { opacity:0; } }
@@ -99,21 +155,32 @@ enum LoaderPage {
         <div id="bg"></div><div id="ambient"></div>
         <div id="globe"><div id="inner"></div></div>
         <div id="status" role="status"></div>
+        <div id="handoff" role="status" aria-live="polite"><h1 id="ho-title"></h1><p id="ho-sub"></p><ol id="stages"></ol></div>
         <script>\(globeScript)</script>
         <script>
         const box = document.getElementById("globe"), statusLine = document.getElementById("status");
         statusLine.textContent = \(quote(status));
         const globe = typeof createZeusGlobe === "function" ? createZeusGlobe() : null;
         if (globe) { document.getElementById("inner").append(globe.canvas); globe.setEnergy(0.55); globe.start(); }
-        let place = null, moving = false;
+        let place = null, moving = false, handing = false;
+        const panel = document.getElementById("handoff"), list = document.getElementById("stages");
         // The globe itself takes 54% of its canvas: here 40% of the smaller side of the window.
+        // In the handoff step it is smaller and higher, with the title and the stages below it.
         function layout() {
           if (moving) return;
-          const side = Math.min(innerWidth, innerHeight), size = Math.round(side * 0.75);
-          place = { x: (innerWidth - size) / 2, y: (innerHeight - size) / 2 - side * 0.04, size };
+          const side = Math.min(innerWidth, innerHeight);
+          if (handing) {
+            const size = Math.round(Math.min(side * 0.5, 340)), block = size * 0.86 + 260;
+            const top = Math.max(8, (innerHeight - block) / 2 - size * 0.1);
+            place = { x: (innerWidth - size) / 2, y: top, size };
+            panel.style.top = (top + size * 0.86) + "px";
+          } else {
+            const size = Math.round(side * 0.75);
+            place = { x: (innerWidth - size) / 2, y: (innerHeight - size) / 2 - side * 0.04, size };
+          }
           box.style.left = place.x + "px"; box.style.top = place.y + "px";
-          box.style.width = box.style.height = size + "px";
-          statusLine.style.top = (place.y + size * 0.97 + 6) + "px";   // Below the longest protrusion.
+          box.style.width = box.style.height = place.size + "px";
+          statusLine.style.top = (place.y + place.size * 0.97 + 6) + "px";   // Below the longest protrusion.
         }
         addEventListener("resize", layout); layout();
         window.zeusLoader = {
@@ -132,6 +199,36 @@ enum LoaderPage {
             if (globe) { globe.setEnergy(0.12); globe.setCalm(true); }
             box.style.transition = "transform .65s cubic-bezier(.2,.8,.2,1)";
             box.style.transform = `translate(${rect.x - place.x}px, ${rect.y - place.y}px) scale(${rect.width / place.size})`;
+          },
+          handoff(title, subtitle) {
+            handing = true;
+            statusLine.style.opacity = 0;
+            document.getElementById("ho-title").textContent = title;
+            document.getElementById("ho-sub").textContent = subtitle;
+            box.style.transition = "left .5s cubic-bezier(.2,.8,.2,1), top .5s cubic-bezier(.2,.8,.2,1), width .5s cubic-bezier(.2,.8,.2,1), height .5s cubic-bezier(.2,.8,.2,1)";
+            layout();
+            if (globe) globe.setEnergy(0.8);
+            panel.classList.add("on");
+          },
+          stages(labels, group) {
+            list.textContent = "";
+            if (group) { const head = document.createElement("li"); head.className = "group"; head.textContent = group; list.append(head); }
+            labels.forEach((label) => this.add(label));
+          },
+          add(label) {
+            const item = document.createElement("li");
+            item.className = "stage"; item.dataset.index = list.querySelectorAll("li.stage").length;
+            const mark = document.createElement("span"); mark.className = "mark";
+            const text = document.createElement("span"); text.className = "label"; text.textContent = label;
+            item.append(mark, text); list.append(item);
+          },
+          mark(index, state, label) {
+            const item = list.querySelector(`li.stage[data-index="${index}"]`);
+            if (!item) return;
+            if (label) item.querySelector(".label").textContent = label;
+            requestAnimationFrame(() => item.classList.add("shown"));
+            item.classList.remove("active", "done", "failed");
+            item.classList.add(state);
           },
           dissolve() {
             moving = true;
