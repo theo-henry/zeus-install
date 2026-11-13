@@ -439,6 +439,44 @@ install_content_cli() {
 }
 
 # Step 9 - Clone the zeus repo.
+# Brings an existing ~/Code/zeus clone up to date with the reviewed updater from origin/main
+# (.claude/hooks/zeus_update.py --now): a fast-forward only, local work is never discarded, and when
+# it cannot update it gives one step. An older origin/main without that updater keeps the clone as it is;
+# the Zeus session start then updates it.
+update_zeus() {
+  local updater="$WORK_DIR/zeus_update.py" result outcome message step
+  if ! git -C "$ZEUS_DIR" fetch --quiet origin main 2>/dev/null ||
+    ! git -C "$ZEUS_DIR" show origin/main:.claude/hooks/zeus_update.py >"$updater" 2>/dev/null ||
+    ! grep -q '^def now_cli' "$updater"; then
+    info "Already cloned in ~/Code/zeus. Zeus updates itself when a Zeus session starts."
+    record "skipped" "Zeus repo (~/Code/zeus)"
+    return
+  fi
+  result="$(python3 "$updater" --now --root "$ZEUS_DIR" 2>/dev/null | tail -n 1)"
+  outcome="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+  case "$outcome" in
+    current)
+      info "Already cloned in ~/Code/zeus, and up to date."
+      record "skipped" "Zeus repo (~/Code/zeus, up to date)"
+      ;;
+    updated)
+      info "Updated ~/Code/zeus to the reviewed version."
+      record "done" "Zeus repo (~/Code/zeus, updated)"
+      ;;
+    *)
+      message="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("message",""))' 2>/dev/null || true)"
+      step="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("step",""))' 2>/dev/null || true)"
+      if [ -n "$message" ]; then
+        info "$message"
+      else
+        info "Zeus in ~/Code/zeus could not update itself. Nothing was changed or discarded."
+        info "To update: ${step:-run \`git pull --ff-only\` in ~/Code/zeus}."
+      fi
+      record "skipped" "Zeus repo (~/Code/zeus, not updated)"
+      ;;
+  esac
+}
+
 clone_zeus() {
   step 9 "Zeus repo"
   if [ -d "$ZEUS_DIR/.git" ]; then
@@ -446,8 +484,7 @@ clone_zeus() {
     remote="$(git -C "$ZEUS_DIR" remote get-url origin 2>/dev/null || true)"
     case "$remote" in
       *"$ZEUS_REPO"|*"$ZEUS_REPO.git")
-        info "Already cloned in ~/Code/zeus."
-        record "skipped" "Zeus repo (~/Code/zeus)"
+        update_zeus
         return
         ;;
     esac

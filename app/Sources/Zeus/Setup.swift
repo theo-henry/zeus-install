@@ -31,7 +31,7 @@ final class SetupModel: ObservableObject {
         Step(id: 6, name: "Node.js", note: ""),
         Step(id: 7, name: "Claude Code", note: ""),
         Step(id: 8, name: "Celonis content-cli", note: ""),
-        Step(id: 9, name: "Zeus workspace", note: "Copied to ~/Code/zeus."),
+        Step(id: 9, name: "Zeus workspace", note: "Copied to ~/Code/zeus, or updated there."),
         Step(id: 10, name: "Zeus Editor plugin", note: "Installed or updated."),
         Step(id: 11, name: "The zeus command", note: ""),
         Step(id: 12, name: "Zeus skill plugins", note: "YAML builder, OCPM, and PQL."),
