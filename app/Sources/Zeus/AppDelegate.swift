@@ -68,12 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             || !FileManager.default.fileExists(atPath: Paths.zeusDir)
     }
 
-    /// A click on the Dock icon while no window is open.
     /// The microphone stops before the app ends.
     func applicationWillTerminate(_ notification: Notification) {
         SpeechService.shared.cancelAll(reason: "app quits")
     }
 
+    /// A click on the Dock icon while no window is open.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if updating {
             UpdateWindow.shared.bringForward()

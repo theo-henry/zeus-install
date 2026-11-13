@@ -270,15 +270,20 @@ final class AppleSpeechEngine: SpeechEngine {
     private var lastText = ""
     private var stopping = false
 
+    /// The languages that this Mac can recognize on the Mac.
+    private static func onDeviceLocales() -> [String] {
+        let ids = SFSpeechRecognizer.supportedLocales()
+            .map { bcp47($0.identifier) }
+            .filter { SFSpeechRecognizer(locale: Locale(identifier: $0))?.supportsOnDeviceRecognition == true }
+        return Set(ids).sorted()
+    }
+
     func languages(completion: @escaping (SpeechLanguages) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            // Only the languages that this Mac can recognize on the Mac.
-            let ids = SFSpeechRecognizer.supportedLocales()
-                .map { Self.bcp47($0.identifier) }
-                .filter { SFSpeechRecognizer(locale: Locale(identifier: $0))?.supportsOnDeviceRecognition == true }
-            let languages = Set(ids).map { SpeechLanguages.Language(id: $0, name: Self.displayName($0)) }
+            let ids = Self.onDeviceLocales()
+            let languages = ids.map { SpeechLanguages.Language(id: $0, name: Self.displayName($0)) }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            let result = SpeechLanguages(locales: languages, defaultID: Self.defaultLocale(among: languages.map(\.id)))
+            let result = SpeechLanguages(locales: languages, defaultID: Self.defaultLocale(among: ids))
             DispatchQueue.main.async { completion(result) }
         }
     }
@@ -290,14 +295,8 @@ final class AppleSpeechEngine: SpeechEngine {
         self.onEvent = onEvent
         stopping = false
         lastText = ""
-        DispatchQueue.global(qos: .userInitiated).async {
-            let id: String
-            if let locale {
-                id = Self.bcp47(locale)
-            } else {
-                let ids = SFSpeechRecognizer.supportedLocales().map { Self.bcp47($0.identifier) }
-                id = Self.defaultLocale(among: ids)
-            }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let id = locale.map(Self.bcp47) ?? Self.defaultLocale(among: Self.onDeviceLocales())
             let recognizer = SFSpeechRecognizer(locale: Locale(identifier: id))
             let onDevice = recognizer?.supportsOnDeviceRecognition == true
             DispatchQueue.main.async { [weak self] in
