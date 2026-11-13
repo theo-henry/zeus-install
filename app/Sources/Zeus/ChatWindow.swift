@@ -18,6 +18,12 @@ final class ChatTab: NSObject {
     /// An opaque cover over the old page during a host switch. Not alphaValue 0: WebKit stops painting a
     /// transparent web view and may not paint again when it becomes visible (a blank tab after the switch).
     private var curtain: NSView?
+
+    /// The same page without the fragment: the chat page removes its token (#k=…) from its address as it loads.
+    static func samePage(_ a: URL?, _ b: URL?) -> Bool {
+        func strip(_ url: URL?) -> String? { url.map { $0.absoluteString.components(separatedBy: "#")[0] } }
+        return a != nil && strip(a) == strip(b)
+    }
     /// The content of the tab: the close banner, the page, and the terminal.
     let view = NSStackView()
     /// The window that shows the tab.
@@ -81,7 +87,7 @@ final class ChatTab: NSObject {
         handler.onScriptMessage = { [weak self] message in self?.handle(message) }
         handler.onPageLoaded = { [weak self] webView in
             guard let self else { return }
-            if self.pageHidden, (self.shownURL != nil && webView.url == self.shownURL) || self.isFailed {
+            if self.pageHidden, (self.shownURL != nil && Self.samePage(webView.url, self.shownURL)) || self.isFailed {
                 self.pageHidden = false
                 self.curtain?.removeFromSuperview()
                 self.curtain = nil
