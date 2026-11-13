@@ -161,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         Front.show(window)
         Front.activate()
         quitQuestionWindow = window
-        alert.beginSheetModal(for: window) { [weak self] response in
+        Front.beginSheet(alert, for: window) { [weak self] response in
             guard let self, self.checkingQuit else { return }
             self.quitQuestionWindow = nil
             if response == .alertSecondButtonReturn {

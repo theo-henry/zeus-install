@@ -31,14 +31,35 @@ enum Front {
     static func show(_ window: NSWindow?) {
         guard let window else { return }
         if background {
-            // In front of the other Zeus windows, as without the switch, but behind the windows of other apps.
-            if let top = NSApp.orderedWindows.first(where: { $0 !== window && $0.isVisible }) {
-                window.order(.above, relativeTo: top.windowNumber)
-            } else {
-                window.orderBack(nil)
-            }
+            putBack(window, among: NSApp.orderedWindows)
         } else {
             window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    /// AppKit puts a window above the windows of other apps when a sheet begins or ends on it,
+    /// also when the app is not active. In the background, the window goes back after each.
+    static func beginSheet(_ alert: NSAlert, for window: NSWindow,
+                           completion: @escaping (NSApplication.ModalResponse) -> Void) {
+        guard background else {
+            alert.beginSheetModal(for: window, completionHandler: completion)
+            return
+        }
+        // Without the sheet: the sheet is not yet marked as a sheet when beginSheetModal returns.
+        let windows = NSApp.orderedWindows
+        alert.beginSheetModal(for: window) { response in
+            putBack(window, among: windows)
+            completion(response)
+        }
+        putBack(window, among: windows)
+    }
+
+    /// In front of the other Zeus windows, as without the switch, but behind the windows of other apps.
+    private static func putBack(_ window: NSWindow, among windows: [NSWindow]) {
+        if let top = windows.first(where: { $0 !== window && $0.isVisible }) {
+            window.order(.above, relativeTo: top.windowNumber)
+        } else {
+            window.orderBack(nil)
         }
     }
 }
