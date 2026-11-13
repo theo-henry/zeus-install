@@ -249,13 +249,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 action = parts[1]
             }
             Trace.log("test action: \(action.prefix(60))")
-            if action.hasPrefix("js:") {   // Runs a script in the newest chat page.
-                let view = self.chatWindows.last?.webView
-                view?.evaluateJavaScript(String(action.dropFirst(3))) { result, error in
-                    Trace.log("js result: \(result.map { "\($0)" } ?? error?.localizedDescription ?? "nil")")
-                }
-                return
-            }
             let model = self.setupWindow?.model
             switch action {
             case "setup-install": model?.install()

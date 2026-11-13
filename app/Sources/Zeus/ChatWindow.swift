@@ -112,7 +112,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
             shownURL = nil
             window?.title = "Zeus"
             webView.loadHTMLString(StatusPage.failed(message: message, log: session.log.text), baseURL: nil)
-            loader?.remove(over: 0.25)
+            if let loader { dismiss(loader, over: 0.25) }
             loader = nil
         case .ended:
             // Claude Code ended (for example /exit in the chat). The window has nothing left to show.
@@ -140,6 +140,14 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         handingOver = false
     }
 
+    /// Removes the loading screen. When it had the keyboard focus, the chat page gets it.
+    private func dismiss(_ loader: LoaderOverlay, over duration: TimeInterval) {
+        loader.remove(over: duration) { [weak self] in
+            guard let self, let window = self.window, window.firstResponder === window else { return }
+            window.makeFirstResponder(self.webView)
+        }
+    }
+
     private func updateLoaderStatus() {
         guard shownURL == nil, let loader else { return }
         let updating = session.log.lines.suffix(30).contains { $0.range(of: "updat", options: .caseInsensitive) != nil }
@@ -157,7 +165,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
             Trace.log("hand-over: at once")
             self.loader = nil
             webView.evaluateJavaScript("window.zeusGlobe && (window.zeusGlobe.enter(), window.zeusGlobe.reveal())")
-            loader.remove(over: 0.15)
+            dismiss(loader, over: 0.15)
             return
         }
         Self.greeted = true
@@ -175,13 +183,13 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
                     self.webView.evaluateJavaScript(enter)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.68) { [weak self] in
                         self?.webView.evaluateJavaScript(reveal)
-                        loader.remove(over: 0.18)
+                        self?.dismiss(loader, over: 0.18)
                     }
                 } else {
                     Trace.log("hand-over: cross-fade")
                     self.webView.evaluateJavaScript("\(enter); \(reveal)")
                     loader.dissolve()
-                    loader.remove(over: 0.4)
+                    self.dismiss(loader, over: 0.4)
                 }
             }
         }

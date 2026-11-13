@@ -24,7 +24,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   When macOS logs out, restarts, or shuts down, the app asks nothing and closes an open quit question; without a question, the quit ends within 12 s.
   If the app crashes, its hidden terminal closes and `zeus` stops as after a closed Terminal window.
 - **Theme.** The setup window, the loading screen, and the status pages use the Zeus chat theme.
-  While `zeus` starts, the chat page shows the Zeus globe with one line of status text, such as "Checking for updates…".
+  While `zeus` starts, the loading screen shows the Zeus globe with one line of status text, such as "Checking for updates…".
   When the chat page is ready, the globe moves to the place of the chat page's own globe while the chat comes in behind it.
   A chat page without a globe (an older Zeus Editor) gets a cross-fade.
   This hand-over plays only for the first chat after the app starts; later chats (Cmd+T, **Try again**) come in at once when their page is ready.
