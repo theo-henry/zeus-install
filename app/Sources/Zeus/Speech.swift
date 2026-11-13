@@ -20,26 +20,8 @@ import WebKit
 final class SpeechService {
     static let shared = SpeechService()
 
-    /// Runs at document start in every Zeus page. A page that replaces `window.zeusApp` (for its close check)
-    /// keeps `speech`: the property gives back the page's object with `speech` added.
-    static let availabilityScript = WKUserScript(source: """
-        (() => {
-          const speech = Object.freeze({ version: 1 });
-          const withSpeech = (value) => {
-            if (value === null || typeof value !== "object" || value.speech === speech) return value;
-            if (Object.isExtensible(value)) return Object.assign(value, { speech });
-            const wrapped = Object.create(value, { speech: { value: speech, enumerable: true } });
-            return Object.isFrozen(value) ? Object.freeze(wrapped) : wrapped;
-          };
-          let current = withSpeech(Object.assign(window.zeusApp || {}, { speech }));
-          Object.defineProperty(window, "zeusApp", {
-            configurable: true,
-            enumerable: true,
-            get: () => current,
-            set: (value) => { current = withSpeech(value); },
-          });
-        })();
-        """, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    /// The page bridge: `window.zeusApp.speech` (see `WebViewHandler.pageBridgeScript`).
+    static let pageInfo: [String: Any] = ["version": 1]
 
     private let engine: SpeechEngine
     private var current: Recognition?

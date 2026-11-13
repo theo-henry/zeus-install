@@ -255,12 +255,19 @@ final class ChatTabWindow: NSWindow {
         super.sendEvent(event)
     }
 
-    /// The web page must not take Control-Tab before the menu does.
+    /// The web page must not take the shortcuts of the app actions (such as Control-Tab) before the menu does.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if event.keyCode == 48, modifiers == .control || modifiers == [.control, .shift] {
-            tabs?.selectTab(offset: modifiers.contains(.shift) ? -1 : 1)
+        switch ShortcutSettings.shared.action(for: event) {
+        case .nextTab?:
+            tabs?.selectTab(offset: 1)
             return true
+        case .prevTab?:
+            tabs?.selectTab(offset: -1)
+            return true
+        case let action?:
+            if (NSApp.delegate as? AppDelegate)?.perform(action) == true { return true }
+        case nil:
+            break
         }
         return super.performKeyEquivalent(with: event)
     }
