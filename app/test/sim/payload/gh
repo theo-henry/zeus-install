@@ -1,6 +1,11 @@
 #!/bin/bash
-# Simulated GitHub CLI. ZEUS_SIM_NO_ACCESS=<repo> makes the access check fail for that repo.
+# Simulated GitHub CLI. ZEUS_SIM_NO_ACCESS=<repo> makes the access check and the release calls fail for that repo.
+# Releases: $ZEUS_SIM_STATE/releases.json is the answer of the releases API (filtered with --jq by the real jq),
+# and $ZEUS_SIM_STATE/releases/<tag>/ holds the assets of each release. "release create" keeps the assets in
+# $ZEUS_SIM_STATE/created/<tag>/. Each call is logged in $ZEUS_SIM_STATE/gh.log. Nothing reaches GitHub.
 S="$ZEUS_SIM_STATE"
+printf '%s\n' "$*" >>"$S/gh.log"
+no_access() { [ -n "${ZEUS_SIM_NO_ACCESS:-}" ] && [ "$1" = "$ZEUS_SIM_NO_ACCESS" ]; }
 case "${1:-} ${2:-}" in
   "auth status")
     if [ -f "$S/gh-login" ]; then echo "Logged in to github.com account sim-user"; exit 0; fi
@@ -25,9 +30,42 @@ case "${1:-} ${2:-}" in
     git -C "$4" remote add origin "https://github.com/$3.git"
     echo "Cloning into '$4'... (simulated)"
     ;;
+  api\ repos/*/releases*)
+    repo="${2#repos/}"
+    repo="${repo%/releases*}"
+    if no_access "$repo" || [ ! -f "$S/releases.json" ]; then echo "HTTP 404: Not Found" >&2; exit 1; fi
+    filter="."
+    [ "${3:-}" = "--jq" ] && filter="$4"
+    jq=/usr/bin/jq
+    [ -x "$jq" ] || jq=jq
+    "$jq" -r "$filter" "$S/releases.json"
+    ;;
   api\ repos/*)
-    if [ -n "${ZEUS_SIM_NO_ACCESS:-}" ] && [ "$2" = "repos/$ZEUS_SIM_NO_ACCESS" ]; then exit 1; fi
+    if no_access "${2#repos/}"; then exit 1; fi
     exit 0
+    ;;
+  "release download")
+    tag="$3" repo="" dir="."
+    shift 3
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -R) repo="$2"; shift ;;
+        -D) dir="$2"; shift ;;
+      esac
+      shift
+    done
+    if no_access "$repo" || [ ! -d "$S/releases/$tag" ]; then echo "release not found" >&2; exit 1; fi
+    mkdir -p "$dir"
+    cp "$S/releases/$tag/"* "$dir/"
+    ;;
+  "release create")
+    # Keeps the assets in $ZEUS_SIM_STATE/created/<tag>/. No release is made.
+    tag="$3"
+    shift 3
+    mkdir -p "$S/created/$tag"
+    for arg in "$@"; do
+      if [ -f "$arg" ]; then cp "$arg" "$S/created/$tag/"; fi
+    done
     ;;
   *) exit 0 ;;
 esac

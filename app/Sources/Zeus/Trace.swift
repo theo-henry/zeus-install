@@ -4,8 +4,9 @@ import Foundation
 enum Trace {
     private static let file: FileHandle? = {
         guard let path = ProcessInfo.processInfo.environment["ZEUS_APP_TRACE"], !path.isEmpty else { return nil }
-        FileManager.default.createFile(atPath: path, contents: nil)
-        return FileHandle(forWritingAtPath: path)
+        // Appends, so that the new copy of an updated app writes after the old copy into the same file.
+        let descriptor = open(path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+        return descriptor < 0 ? nil : FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }()
 
     static func log(_ message: @autoclosure () -> String) {
