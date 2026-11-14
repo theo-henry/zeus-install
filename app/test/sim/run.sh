@@ -73,6 +73,8 @@ APP_PID=""
 cleanup() {
   [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
   defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
+  # defaults delete can leave the empty settings file of the domain.
+  rm -f "$HOME/Library/Preferences/$PREFS_DOMAIN.plist"
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -534,10 +536,13 @@ printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Shift+Cmd+;"}}' >"$SE
 check "a symbol key shortcut applies" 'wait_for "shortcuts: app.newTab=Shift+Cmd+; $DEFAULT_SHORTCUTS (file)" 10'
 act test-open-editor
 check "a Zeus Editor page opens" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/editor" 10'
+hand_overs="$(grep -c "hand-over: " "$TRACE" || true)"
 act "test-editor-key:Shift+Cmd+;"
 check "the shortcut opens a tab from a Zeus Editor window" 'wait_starts $((starts + 4))'
 act test-close-editor
 rm -f "$SETTINGS"
+# Settings… goes to the chat page of the tab in front, so the new tab shows its chat page first.
+wait_count "hand-over: " $((hand_overs + 1)) 30 >/dev/null
 act test-settings
 check "Settings… opens the settings of the chat page in front" 'wait_for "settings opened" 10 && shortcuts_page_has "\"settings\":1"'
 shot 13-shortcuts

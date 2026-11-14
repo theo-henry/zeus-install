@@ -1,0 +1,2 @@
+# The app tests launch real app copies and take about 25-30 minutes on a busy Mac.
+test_agent_timeout: "60m"

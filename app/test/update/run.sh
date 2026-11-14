@@ -48,6 +48,17 @@ TOTAL_LIMIT="${ZEUS_UPDATE_TEST_LIMIT:-3600}"
 TRACES="${ZEUS_UPDATE_TEST_TRACES:-}"
 [ -n "$TRACES" ] && mkdir -p "$TRACES"
 CASE_WATCHDOG=""
+# stop_watchdog <pid>: stops a time limit and its sleep. A left sleep keeps the output of the test open, so a pipe
+# after the test (run.sh | tee) would wait until the sleep ends.
+# The time limit stops first, so that it does not go on to its action when its sleep ends.
+stop_watchdog() {
+  [ -n "$1" ] || return 0
+  local sleeps
+  sleeps="$(pgrep -P "$1" 2>/dev/null || true)"
+  kill "$1" 2>/dev/null || true
+  # shellcheck disable=SC2086
+  [ -z "$sleeps" ] || kill $sleeps 2>/dev/null || true
+}
 # stop_copies <folder pattern>: stops the app copies there, also an app copy that does not quit.
 stop_copies() {
   pkill -f "$1/Zeus.app/Contents/MacOS/Zeus" 2>/dev/null || true
@@ -55,16 +66,18 @@ stop_copies() {
   pkill -9 -f "$1/Zeus.app/Contents/MacOS/Zeus" 2>/dev/null || true
 }
 cleanup() {
-  [ -n "$CASE_WATCHDOG" ] && kill "$CASE_WATCHDOG" 2>/dev/null
-  [ -n "${TOTAL_WATCHDOG:-}" ] && kill "$TOTAL_WATCHDOG" 2>/dev/null
+  stop_watchdog "$CASE_WATCHDOG"
+  stop_watchdog "${TOTAL_WATCHDOG:-}"
   stop_copies "$WORK/.*"
   defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
+  # defaults delete can leave the empty settings file of the domain.
+  rm -f "$HOME/Library/Preferences/$PREFS_DOMAIN.plist"
   rm -rf "$WORK"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
 # The whole test never runs longer than TOTAL_LIMIT.
-( sleep "$TOTAL_LIMIT"; echo "  (the test took longer than ${TOTAL_LIMIT}s and stops)" >&2; kill -TERM $$ ) &
+( sleep "$TOTAL_LIMIT" >/dev/null 2>&1; echo "  (the test took longer than ${TOTAL_LIMIT}s and stops)" >&2; kill -TERM $$ ) &
 TOTAL_WATCHDOG=$!
 
 wants() { case " $PARTS " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -246,8 +259,8 @@ SWIFT
     SUPPORT="$SANDBOX/Library/Application Support/Zeus"
     mkdir -p "$SANDBOX/.local/bin" "$STATE" "$SUPPORT"
     # Each case stops all its app copies after CASE_LIMIT seconds; quit_all then reports the case as failed.
-    [ -n "$CASE_WATCHDOG" ] && kill "$CASE_WATCHDOG" 2>/dev/null
-    ( sleep "$CASE_LIMIT"; touch "$WORK/$1/timed-out"; stop_copies "$APPS" ) &
+    stop_watchdog "$CASE_WATCHDOG"
+    ( sleep "$CASE_LIMIT" >/dev/null 2>&1; touch "$WORK/$1/timed-out"; stop_copies "$APPS" ) &
     CASE_WATCHDOG=$!
     printf 'export PATH="%s:/usr/bin:/bin:/usr/sbin:/sbin"\n' "$SIM_DIR/stubs" >"$SANDBOX/.zprofile"
     cp "$SIM_DIR/payload/gh" "$SANDBOX/.local/bin/gh"
@@ -279,7 +292,7 @@ SWIFT
     while [ "$(copies)" != 0 ] && [ "$waited" -lt 120 ]; do sleep 0.5; waited=$((waited + 1)); done
     if [ "$(copies)" = 0 ]; then pass "the app quits"; else fail "the app quits"; stop_copies "$APPS"; fi
     if [ -e "$WORK/$NAME/timed-out" ]; then fail "the case $NAME ends within ${CASE_LIMIT}s"; fi
-    [ -n "$CASE_WATCHDOG" ] && kill "$CASE_WATCHDOG" 2>/dev/null
+    stop_watchdog "$CASE_WATCHDOG"
     CASE_WATCHDOG=""
     if [ -n "$TRACES" ]; then
       cp "$TRACE" "$TRACES/$NAME.trace" 2>/dev/null || true
