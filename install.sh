@@ -496,7 +496,7 @@ claude_update_method() {
       prefix="${resolved%%/lib/node_modules/@anthropic-ai/claude-code/*}"
       npm="$prefix/bin/npm"
       [ -x "$npm" ] || npm="npm"
-      CLAUDE_UPDATE=("$npm" install -g --prefix "$prefix" --no-fund --no-audit "@anthropic-ai/claude-code@latest")
+      CLAUDE_UPDATE=("$npm" install -g --prefix "$prefix" --allow-scripts=@anthropic-ai/claude-code --no-fund --no-audit "@anthropic-ai/claude-code@latest")
       CLAUDE_METHOD="npm"
       ;;
     *)
@@ -517,6 +517,10 @@ update_claude() {
   info "Claude Code ${before:-(unknown version)} is installed. Updating it with $CLAUDE_METHOD."
   run_with_timeout "$seconds" "${CLAUDE_UPDATE[@]}" </dev/null >"$LOG_DIR/claude-update.log" 2>&1 || status=$?
   after="$(claude_version "$command")"
+  if [ "$status" -eq 0 ] && [ -n "$before" ] && [ -z "$after" ]; then
+    status=1
+    info "Warning: Claude Code does not run after the update."
+  fi
   if [ "$status" -ne 0 ]; then
     if [ "$status" -eq 124 ]; then
       info "Warning: the update of Claude Code did not finish in $seconds seconds, so it was stopped."

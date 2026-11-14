@@ -152,7 +152,7 @@ printf '\nnpm install: npm updates it in the same folder\n'
 setup npm-old npm 2.0.10 2.1.5 ok
 run_step
 check "the step ran npm install -g with the prefix of the installed Claude Code" \
-  'grep -qx "npm install -g --prefix $WORK/npm-old/npm-global --no-fund --no-audit @anthropic-ai/claude-code@latest" "$CALLS"'
+  'grep -qx "npm install -g --prefix $WORK/npm-old/npm-global --allow-scripts=@anthropic-ai/claude-code --no-fund --no-audit @anthropic-ai/claude-code@latest" "$CALLS"'
 check "the step did not run claude update (no change of the install method)" '! grep -qx "claude update" "$CALLS"'
 check "the summary shows the old and the new version" 'grep -q "SUMMARY: done      Claude Code (updated from 2.0.10 to 2.1.5)" "$OUT"'
 check "no sudo" 'no_sudo'
