@@ -155,6 +155,20 @@ At project scope, Claude Code writes the tracked `.claude/settings.json` of the 
 The test runs the plugin steps of `install.sh` and the commands in its next steps against a simulated `claude` in a Zeus folder.
 It checks that each plugin install, update, and marketplace add uses `--scope user` and that `.claude/settings.json` does not change.
 
+## Test the Claude Code update
+
+```bash
+app/test/claude-update/run.sh
+```
+
+Step 7 of `install.sh` updates an installed Claude Code with the method that installed it.
+The test runs step 7 against a simulated `claude`, `npm`, `brew`, and `sudo` in a temporary home folder, so the real Claude Code of this Mac does not change.
+It checks the native install (`claude update`), an npm install (`npm install -g` in the same prefix), and a Homebrew install (`brew upgrade --cask claude-code`).
+It checks that the summary shows the old and the new version, or "up to date".
+It checks that a failed update, an npm folder that needs `sudo`, and an update that does not finish in the time limit give a warning, never use `sudo`, and let the installer continue.
+It checks that the time limit also stops the child processes of the update.
+It also checks the `@@zeus` lines of step 7 in app mode.
+
 ## Test on a simulated new Mac
 
 ```bash

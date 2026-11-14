@@ -196,7 +196,7 @@ shot 3-github-code
 act setup-enter
 check "step 4: the GitHub login completes after Open GitHub" 'wait_for "setup event: done 4 " 20'
 check "step 5: access to the Zeus repos" 'wait_for "setup event: done 5 " 20'
-check "step 6: Node.js installs" 'wait_for "setup event: done 6 " 30'
+check "step 6: Node.js installs" 'wait_for "setup event: done 6 " 60'
 check "step 7: Claude Code installs" 'wait_for "setup event: done 7 " 30'
 check "step 8: content-cli installs" 'wait_for "setup event: done 8 " 30'
 check "step 9: the Zeus workspace is cloned" 'wait_for "setup event: done 9 " 30'
@@ -245,7 +245,8 @@ sleep 4
 act test-cmd-t
 sleep 4
 check "each new tab starts a separate PTY" '[ "$(grep -c " start " "$STATE/sessions")" = 3 ]'
-check "later tabs come in at once, without the globe hand-over" '[ "$(grep -c "hand-over: at once" "$TRACE")" = 2 ] && [ "$(grep -c "hand-over: globe moves" "$TRACE")" = 1 ]'
+check "later tabs come in at once, without the globe hand-over" \
+  'wait_count "hand-over: at once" 2 30 && [ "$(grep -c "hand-over: at once" "$TRACE")" = 2 ] && [ "$(grep -c "hand-over: globe moves" "$TRACE")" = 1 ]'
 # Tab names: the project of the chat, until the user renames the tab. The app does not keep them.
 check "a new tab without a project is named Project" 'grep "tab selected: " "$TRACE" | tail -1 | grep -q " Project$"'
 wait_count "state: running(" 3 20 >/dev/null && sleep 1

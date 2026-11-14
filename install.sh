@@ -1,7 +1,7 @@
 #!/bin/bash
 # Zeus installer for macOS.
 # Installs the tools that Zeus needs and clones the private zeus repo.
-# Each step is skipped when it is already done, so you can run it again safely.
+# Each step is skipped when it is already done, so you can run it again safely. An installed Claude Code is updated.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/theo-henry/zeus-install/main/install.sh | bash
@@ -16,6 +16,7 @@
 #   ZEUS_APP_OPEN_ENV="NAME ..."             gives these environment variables (such as HOME) to the Zeus app that the
 #                                             installer opens (for tests). ZEUS_APP_TEST_BACKGROUND=1 opens it behind
 #                                             the other apps.
+#   ZEUS_INSTALL_CLAUDE_UPDATE_TIMEOUT=300    stops the update of an installed Claude Code after this many seconds.
 #   ZEUS_INSTALL_APP=1                        app mode, used by Zeus.app. It adds two steps (the Zeus skill plugins and
 #                                             the Claude login) and prints machine-readable lines that start with
 #                                             "@@zeus " so that the app can show a checklist. Terminal use is unchanged.
@@ -408,12 +409,143 @@ install_node() {
   record "done" "Node.js ($NODE_VERSION)"
 }
 
-# Step 7 - Claude Code.
+# Prints the real path of file $1: each symbolic link is followed, also on macOS versions without readlink -f.
+real_path() {
+  local path="$1" link dir real hops=0
+  while link="$(readlink "$path" 2>/dev/null)" && [ "$hops" -lt 40 ]; do
+    case "$link" in
+      /*) path="$link" ;;
+      *) path="$(dirname "$path")/$link" ;;
+    esac
+    hops=$((hops + 1))
+  done
+  dir="$(dirname "$path")"
+  if real="$(cd "$dir" 2>/dev/null && pwd -P)"; then dir="$real"; fi
+  printf '%s/%s' "$dir" "$(basename "$path")"
+}
+
+# Prints the process IDs of the process tree under $1 (children first, then $1).
+process_tree() {
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null || true); do
+    process_tree "$child"
+  done
+  printf '%s\n' "$1"
+}
+
+# run_with_timeout <seconds> <command...>: runs the command; after <seconds>, it stops the command and all its
+# child processes and returns 124. macOS has no timeout command.
+run_with_timeout() {
+  local seconds="$1" pid watcher target expired status=0
+  shift
+  expired="$(mktemp "${TMPDIR:-/tmp}/zeus-timeout.XXXXXX")"
+  rm -f "$expired"
+  "$@" &
+  pid=$!
+  (
+    sleep "$seconds" &
+    wait $! || exit 0
+    : >"$expired"
+    for target in $(process_tree "$pid"); do kill -TERM "$target" 2>/dev/null || true; done
+    sleep 2
+    for target in $(process_tree "$pid"); do kill -KILL "$target" 2>/dev/null || true; done
+  ) 2>/dev/null &
+  watcher=$!
+  wait "$pid" || status=$?
+  if [ -e "$expired" ]; then
+    # The watcher stops the remaining child processes, then ends.
+    wait "$watcher" 2>/dev/null || true
+    rm -f "$expired"
+    return 124
+  fi
+  # Stops the watcher and its sleep, so that no process stays after the command.
+  for target in $(process_tree "$watcher"); do kill -TERM "$target" 2>/dev/null || true; done
+  wait "$watcher" 2>/dev/null || true
+  rm -f "$expired"
+  return "$status"
+}
+
+# Prints the version of the claude command $1, such as 2.1.3, or nothing.
+claude_version() {
+  local output
+  output="$(run_with_timeout 30 "$1" --version </dev/null 2>/dev/null || true)"
+  printf '%s' "$output" | head -n 1 | grep -oE '^[0-9]+(\.[0-9]+)+' || true
+}
+
+# Sets CLAUDE_UPDATE (a command) and CLAUDE_METHOD (a name for the user) to update the Claude Code of the claude
+# command $1 with the method that installed it. The method comes from the real path of the command:
+#   Homebrew   .../Caskroom/<cask>/...                                 brew upgrade --cask <cask>
+#   npm        <prefix>/lib/node_modules/@anthropic-ai/claude-code/... npm install -g in the same prefix
+#   other      the native install (~/.local/share/claude) and the local npm install (~/.claude/local)
+#              claude update, which updates them in their own folder
+CLAUDE_UPDATE=()
+CLAUDE_METHOD=""
+claude_update_method() {
+  local command="$1" resolved prefix cask brew npm
+  resolved="$(real_path "$command")"
+  case "$resolved" in
+    */Caskroom/*/*)
+      cask="${resolved#*/Caskroom/}"
+      cask="${cask%%/*}"
+      brew="${resolved%%/Caskroom/*}/bin/brew"
+      [ -x "$brew" ] || brew="brew"
+      CLAUDE_UPDATE=("$brew" upgrade --cask "$cask")
+      CLAUDE_METHOD="Homebrew"
+      ;;
+    */lib/node_modules/@anthropic-ai/claude-code/*)
+      prefix="${resolved%%/lib/node_modules/@anthropic-ai/claude-code/*}"
+      npm="$prefix/bin/npm"
+      [ -x "$npm" ] || npm="npm"
+      CLAUDE_UPDATE=("$npm" install -g --prefix "$prefix" --allow-scripts=@anthropic-ai/claude-code --no-fund --no-audit "@anthropic-ai/claude-code@latest")
+      CLAUDE_METHOD="npm"
+      ;;
+    *)
+      CLAUDE_UPDATE=("$command" update)
+      CLAUDE_METHOD="claude update"
+      ;;
+  esac
+}
+
+# Updates an installed Claude Code to the newest version, with the method that installed it. It does not use
+# sudo. A failed update does not stop the installer: Zeus works with the installed version.
+update_claude() {
+  local command before after status=0
+  local seconds="${ZEUS_INSTALL_CLAUDE_UPDATE_TIMEOUT:-300}"
+  command="$(command -v claude 2>/dev/null || printf '%s' "$LOCAL_BIN/claude")"
+  before="$(claude_version "$command")"
+  claude_update_method "$command"
+  info "Claude Code ${before:-(unknown version)} is installed. Updating it with $CLAUDE_METHOD."
+  run_with_timeout "$seconds" "${CLAUDE_UPDATE[@]}" </dev/null >"$LOG_DIR/claude-update.log" 2>&1 || status=$?
+  after="$(claude_version "$command")"
+  if [ "$status" -eq 0 ] && [ -n "$before" ] && [ -z "$after" ]; then
+    status=1
+    info "Warning: Claude Code does not run after the update."
+  fi
+  if [ "$status" -ne 0 ]; then
+    if [ "$status" -eq 124 ]; then
+      info "Warning: the update of Claude Code did not finish in $seconds seconds, so it was stopped."
+    elif grep -q 'EACCES' "$LOG_DIR/claude-update.log"; then
+      info "Warning: Claude Code could not be updated without sudo. Do not use sudo; ask $ZEUS_OWNER for help."
+    else
+      info "Warning: Claude Code could not be updated."
+    fi
+    info "Zeus works with the installed version ${after:-${before:-(unknown)}}. See the log: $LOG_DIR/claude-update.log"
+    info "To update it later, run: ${CLAUDE_UPDATE[*]}"
+    record "skipped" "Claude Code (${after:-${before:-unknown version}}, not updated)"
+  elif [ -n "$after" ] && [ "$after" != "$before" ]; then
+    info "Updated Claude Code from ${before:-an unknown version} to $after."
+    record "done" "Claude Code (updated from ${before:-an unknown version} to $after)"
+  else
+    info "Claude Code is up to date (${after:-unknown version})."
+    record "skipped" "Claude Code (up to date, ${after:-unknown version})"
+  fi
+}
+
+# Step 7 - Claude Code. An installed Claude Code is updated.
 install_claude() {
   step 7 "Claude Code"
   if command -v claude >/dev/null 2>&1 || [ -x "$LOCAL_BIN/claude" ]; then
-    info "Already installed."
-    record "skipped" "Claude Code"
+    update_claude
     return
   fi
   curl -fsSL https://claude.ai/install.sh -o "$WORK_DIR/claude-install.sh" ||
@@ -1142,5 +1274,6 @@ main() {
 }
 
 # main is called on the last line, so bash has read the full script before it runs.
-# ZEUS_INSTALL_SOURCED=1 loads the functions only, for the tests (app/test/plugin-scope/run.sh).
+# ZEUS_INSTALL_SOURCED=1 loads the functions only, for the tests (app/test/plugin-scope/run.sh and
+# app/test/claude-update/run.sh).
 if [ "${ZEUS_INSTALL_SOURCED:-}" != "1" ]; then main "$@"; fi
