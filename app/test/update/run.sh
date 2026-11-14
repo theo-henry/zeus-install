@@ -502,10 +502,14 @@ if wants upgrade; then
     CASE_WATCHDOG=""
   }
   # No old copy and no update.json are left.
-  no_update_files() { [ ! -e "$SUPPORT/update.json" ] && [ -z "$(ls -A "$TEMP" 2>/dev/null)" ]; }
+  # The removal ends a little after the app's own confirmation or the end of the install line, so wait up to 20 s.
+  settled() { local waited=0; until "$@"; do sleep 0.5; waited=$((waited + 1)); [ "$waited" -lt 40 ] || return 1; done; }
+  no_update_files() { settled no_update_files_now; }
+  no_update_files_now() { [ ! -e "$SUPPORT/update.json" ] && [ -z "$(ls -A "$TEMP" 2>/dev/null)" ]; }
   # After a roll back, the old app keeps update.json with "rolledBack" for 120 s on purpose (Updater.lateStartWindow).
   # No old copy is left, and update.json is absent or only that mark.
-  no_update_files_after_rollback() {
+  no_update_files_after_rollback() { settled no_update_files_after_rollback_now; }
+  no_update_files_after_rollback_now() {
     [ -z "$(ls -A "$TEMP" 2>/dev/null)" ] && { [ ! -e "$SUPPORT/update.json" ] || grep -q '"rolledBack":true' "$SUPPORT/update.json"; }
   }
 
