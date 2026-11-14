@@ -1,8 +1,10 @@
 # Per-repo no-mistakes settings.
 # .github/workflows/ci.yml runs the same test command, so the pipeline and CI check the same things.
 commands:
-  # The tests that need no app window in front: the PTY, the plugin scope of install.sh, and install-app.sh
-  # on a simulated new Mac. GitHub and the downloads are simulated; the real home folder is not used.
-  test: 'app/test/pty/run.sh && app/test/plugin-scope/run.sh && app/test/update/run.sh install'
+  # The PTY, the plugin scope of install.sh, install-app.sh on a simulated new Mac, the app's self-update, the update of
+  # an installed app, and the app on a simulated new Mac. The app windows stay behind the other apps.
+  # GitHub and the downloads are simulated; the real home folder is not used. app/release.sh (update part "release")
+  # builds for two architectures and is left out.
+  test: 'app/test/pty/run.sh && app/test/plugin-scope/run.sh && app/test/update/run.sh install app upgrade && app/test/sim/run.sh'
 # The app tests launch real app copies and take about 25-30 minutes on a busy Mac.
 test_agent_timeout: "60m"

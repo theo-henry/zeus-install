@@ -67,6 +67,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   Cmd+, (Settings), and the fixed items of the app menu (Alt+Cmd+H, Cmd+Z, Shift+Cmd+Z, Cmd+X, Cmd+C, Cmd+V, Cmd+A, Cmd+R, Cmd+0, Cmd+=, Shift+Cmd+=, Cmd+-, Ctrl+Cmd+F).
   At document start, every Zeus page gets `window.zeusApp.shortcuts = {version: 1, appActions: [<ids>]}`, so that the settings pop-up shows the app shortcuts in the app only.
   **Zeus > Settings…** (Cmd+,) calls `window.zeusApp.openSettings?.()` in the page in front; **Zeus Setup…** has no shortcut.
+  In a tab that still shows its loading screen, Settings… opens when the chat page has loaded.
 - **Go to the chat.** When the consultant clicks **Go to the chat** in Zeus Editor, the chat page posts `"chat-focus"` to `window.webkit.messageHandlers.zeusApp`.
   The app then shows the tab of that chat, brings its window and the app to the front, and puts the keyboard in the chat page.
 - **Safe close.** Closing a tab asks the chat (`window.zeusApp.closeState()`) first.
@@ -234,7 +235,7 @@ It presses the app's buttons through the debug test actions and checks the trace
    a shortcut without Cmd or Ctrl, and a shortcut of two actions (also after a chain of collisions), and shows the shortcuts in the menu; the chat page has `window.zeusApp.shortcuts`;
    the old shortcut does nothing and the new one opens a tab; a file saved with a rename, a file written in place, and `{type: "settings-changed"}`
    apply at once; a damaged file gives the defaults without a crash; a symbol key shortcut with Shift works in a Zeus Editor window;
-   Settings… calls `openSettings` in the chat page.
+   Settings… calls `openSettings` in the chat page, also when it comes while a new tab still loads its chat page.
 5. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording

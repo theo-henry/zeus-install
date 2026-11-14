@@ -28,6 +28,16 @@ enum Front {
         unsafeBitCast(method_getImplementation(method), to: Setter.self)(webView, selector, false)
     }
 
+    /// The window is out of view: other windows cover it, it is minimized, or another tab of its window shows.
+    /// In the background, the windows of other apps cover the test windows, so only a minimized window or
+    /// another tab counts, as for a window in front.
+    static func isOutOfView(_ window: NSWindow) -> Bool {
+        guard background else { return !window.occlusionState.contains(.visible) }
+        if window.isMiniaturized { return true }
+        if let selected = window.tabGroup?.selectedWindow, selected !== window { return true }
+        return false
+    }
+
     static func show(_ window: NSWindow?) {
         guard let window else { return }
         if background {

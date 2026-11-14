@@ -43,7 +43,12 @@ export ZEUS_APP_TEST_BACKGROUND=1
 
 FAILURES=0
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
-fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+# A failed check shows the end of the app's trace, so that a CI log tells what the app did.
+fail() {
+  printf '  \033[31mFAIL\033[0m %s\n' "$1"
+  FAILURES=$((FAILURES + 1))
+  if [ -n "${TRACE:-}" ] && [ -f "$TRACE" ]; then tail -n 25 "$TRACE" | sed 's/^/    | /'; fi
+}
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 
 CASE_LIMIT="${ZEUS_UPDATE_TEST_CASE_LIMIT:-300}"
@@ -471,6 +476,15 @@ if wants upgrade; then
     wait "$pid" || status=$?
     return "$status"
   }
+  # ended <pid> [seconds]: waits until the process has ended (a process that ended but was not waited for counts).
+  ended() {
+    local waited=0 limit="${2:-10}"
+    while ps -o stat= -p "$1" 2>/dev/null | grep -qv Z; do
+      [ "$waited" -lt $((limit * 2)) ] || return 1
+      sleep 0.5
+      waited=$((waited + 1))
+    done
+  }
   # The inode of the app binary: a move keeps it, so the same inode is the same app bundle.
   app_inode() { stat -f %i "$APPS/Zeus.app/Contents/MacOS/Zeus" 2>/dev/null; }
   # Quits every copy of this case's app with the quit of the install line (quit_zeus_app in install.sh).
@@ -502,7 +516,8 @@ if wants upgrade; then
   check "it shows the installed and the newest version" \
     'grep -q "is version 1.0.0; the newest version is 1.1.0" "$OUT" && grep -q "The Zeus app is updated from 1.0.0 to 1.1.0." "$OUT"'
   check "it says that the projects, chats, and settings did not change" 'grep -q "Your projects, chats, and settings did not change." "$OUT"'
-  check "the open app closes with its own quit (not killed)" 'old_status=0; wait "$OLD_PID" || old_status=$?; [ "$old_status" = 0 ]'
+  check "the open app closes with its own quit (not killed)" \
+    'ended "$OLD_PID" 10 && old_status=0 && { wait "$OLD_PID" || old_status=$?; } && [ "$old_status" = 0 ]'
   check "the new app starts and confirms its start" 'wait_for "update: confirmed 1.0.0 -> 1.1.0" 10 && grep -q "launched: version=1.1.0" "$TRACE"'
   check "the app in Applications is version 1.1.0 with a valid signature" \
     '[ "$(app_version "$APPS/Zeus.app")" = 1.1.0 ] && codesign --verify --strict "$APPS/Zeus.app"'

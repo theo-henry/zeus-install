@@ -601,10 +601,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc private func openSettings(_ sender: Any?) {
         if let tab = keyChatTab {
             tab.host?.bringToFront(tab)
+            tab.openSettings()
         } else if let webView = keyWebView {
             webView.window?.makeFirstResponder(webView)
+            webView.evaluateJavaScript(ChatTab.openSettingsScript)
         }
-        keyWebView?.evaluateJavaScript("window.zeusApp?.openSettings?.(); void 0")
         Trace.log("settings opened")
     }
 
