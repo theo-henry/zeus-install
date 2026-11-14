@@ -43,7 +43,12 @@ export ZEUS_APP_TEST_BACKGROUND=1
 
 FAILURES=0
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
-fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+# A failed check shows the end of the app's trace, so that a CI log tells what the app did.
+fail() {
+  printf '  \033[31mFAIL\033[0m %s\n' "$1"
+  FAILURES=$((FAILURES + 1))
+  if [ -n "${TRACE:-}" ] && [ -f "$TRACE" ]; then tail -n 25 "$TRACE" | sed 's/^/    | /'; fi
+}
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 
 CASE_LIMIT="${ZEUS_UPDATE_TEST_CASE_LIMIT:-300}"
@@ -274,7 +279,7 @@ SWIFT
     defaults write "$PREFS_DOMAIN" showMenuBar -bool false
   }
   launch() {
-    env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
+    env HOME="$SANDBOX" SHELL=/bin/zsh ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
       ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" "$@" \
       "$APPS/Zeus.app/Contents/MacOS/Zeus" >"$WORK/$NAME/app.out" 2>&1 &
     APP_PID=$!
@@ -314,7 +319,7 @@ SWIFT
   late_copy_quits() {
     local before late_pid waited=0
     before="$(grep -c "update: current=" "$TRACE" || true)"
-    env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
+    env HOME="$SANDBOX" SHELL=/bin/zsh ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
       ZEUS_APP_TEST_NO_CONFIRM=1 "$APPS/Zeus.app/Contents/MacOS/Zeus" >"$WORK/$NAME/late.out" 2>&1 &
     late_pid=$!
     while kill -0 "$late_pid" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
@@ -450,16 +455,16 @@ if wants upgrade; then
   }
   # A checksum of every user data file, with its path.
   user_data() {
-    (cd "$SANDBOX" && find Code .claude "Library/Application Support/Zeus" "Library/Saved Application State" -type f -print0 |
+    (cd "$SANDBOX" && find Code .claude "Library/Application Support/Zeus" "Library/Saved Application State" -type f ! -name update.json -print0 |
       sort -z | xargs -0 shasum -a 256)
   }
   # The one-line install, stopped after 5 minutes. The app that it opens gets the test environment.
   install_line() {
-    env HOME="$SANDBOX" TMPDIR="$TEMP" PATH="$SIM_DIR/stubs:/usr/bin:/bin:/usr/sbin:/sbin" \
+    env HOME="$SANDBOX" SHELL=/bin/zsh TMPDIR="$TEMP" PATH="$SIM_DIR/stubs:/usr/bin:/bin:/usr/sbin:/sbin" \
       ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" \
       ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" ZEUS_INSTALL_ACCEPT_ANACONDA_LICENSE=yes ZEUS_APP_TRACE="$TRACE" \
       ZEUS_INSTALL_URL="file://$REPO_DIR/install.sh" ZEUS_APP_DIR="$APPS" \
-      ZEUS_APP_OPEN_ENV="HOME ZEUS_APP_TRACE ZEUS_APP_TEST_ID ZEUS_APP_DEFAULTS_SUITE ZEUS_APP_TEST_BACKGROUND ZEUS_SIM_STATE ZEUS_SIM_PAYLOAD ZEUS_SIM_INSTALLER ZEUS_INSTALL_SYSTEM_CONDA_DIRS ZEUS_APP_NO_UPDATE ZEUS_APP_TEST_NO_CONFIRM" \
+      ZEUS_APP_OPEN_ENV="HOME SHELL ZEUS_APP_TRACE ZEUS_APP_TEST_ID ZEUS_APP_DEFAULTS_SUITE ZEUS_APP_TEST_BACKGROUND ZEUS_SIM_STATE ZEUS_SIM_PAYLOAD ZEUS_SIM_INSTALLER ZEUS_INSTALL_SYSTEM_CONDA_DIRS ZEUS_APP_NO_UPDATE ZEUS_APP_TEST_NO_CONFIRM" \
       "$@" bash "$REPO_DIR/install-app.sh" >"$OUT" 2>&1 &
     local pid=$! status=0 waited=0
     while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 600 ]; do sleep 0.5; waited=$((waited + 1)); done
@@ -470,6 +475,15 @@ if wants upgrade; then
     fi
     wait "$pid" || status=$?
     return "$status"
+  }
+  # ended <pid> [seconds]: waits until the process has ended (a process that ended but was not waited for counts).
+  ended() {
+    local waited=0 limit="${2:-10}"
+    while ps -o stat= -p "$1" 2>/dev/null | grep -qv Z; do
+      [ "$waited" -lt $((limit * 2)) ] || return 1
+      sleep 0.5
+      waited=$((waited + 1))
+    done
   }
   # The inode of the app binary: a move keeps it, so the same inode is the same app bundle.
   app_inode() { stat -f %i "$APPS/Zeus.app/Contents/MacOS/Zeus" 2>/dev/null; }
@@ -488,7 +502,16 @@ if wants upgrade; then
     CASE_WATCHDOG=""
   }
   # No old copy and no update.json are left.
-  no_update_files() { [ ! -e "$SUPPORT/update.json" ] && [ -z "$(ls -A "$TEMP" 2>/dev/null)" ]; }
+  # The removal ends a little after the app's own confirmation or the end of the install line, so wait up to 20 s.
+  settled() { local waited=0; until "$@"; do sleep 0.5; waited=$((waited + 1)); [ "$waited" -lt 40 ] || return 1; done; }
+  no_update_files() { settled no_update_files_now; }
+  no_update_files_now() { [ ! -e "$SUPPORT/update.json" ] && [ -z "$(ls -A "$TEMP" 2>/dev/null)" ]; }
+  # After a roll back, the old app keeps update.json with "rolledBack" for 120 s on purpose (Updater.lateStartWindow).
+  # No old copy is left, and update.json is absent or only that mark.
+  no_update_files_after_rollback() { settled no_update_files_after_rollback_now; }
+  no_update_files_after_rollback_now() {
+    [ -z "$(ls -A "$TEMP" 2>/dev/null)" ] && { [ ! -e "$SUPPORT/update.json" ] || grep -q '"rolledBack":true' "$SUPPORT/update.json"; }
+  }
 
   upgrade_case upgrade 1.0.0
   releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false"
@@ -502,7 +525,8 @@ if wants upgrade; then
   check "it shows the installed and the newest version" \
     'grep -q "is version 1.0.0; the newest version is 1.1.0" "$OUT" && grep -q "The Zeus app is updated from 1.0.0 to 1.1.0." "$OUT"'
   check "it says that the projects, chats, and settings did not change" 'grep -q "Your projects, chats, and settings did not change." "$OUT"'
-  check "the open app closes with its own quit (not killed)" 'old_status=0; wait "$OLD_PID" || old_status=$?; [ "$old_status" = 0 ]'
+  check "the open app closes with its own quit (not killed)" \
+    'ended "$OLD_PID" 10 && old_status=0 && { wait "$OLD_PID" || old_status=$?; } && [ "$old_status" = 0 ]'
   check "the new app starts and confirms its start" 'wait_for "update: confirmed 1.0.0 -> 1.1.0" 10 && grep -q "launched: version=1.1.0" "$TRACE"'
   check "the app in Applications is version 1.1.0 with a valid signature" \
     '[ "$(app_version "$APPS/Zeus.app")" = 1.1.0 ] && codesign --verify --strict "$APPS/Zeus.app"'
@@ -539,7 +563,7 @@ if wants upgrade; then
   check "it says that the old app is back" 'grep -q "The Zeus app 1.1.0 did not start, so your Zeus app 1.0.0 is back." "$OUT"'
   check "the app in Applications is the old app again (version 1.0.0, same bundle, valid signature)" \
     '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && [ "$(app_inode)" = "$INODE" ] && codesign --verify --strict "$APPS/Zeus.app"'
-  check "no old copy and no update.json are left" 'no_update_files'
+  check "no old copy is left, and update.json is absent or only the roll back mark" 'no_update_files_after_rollback'
   check "it opens the old app" 'wait_for "launched: version=1.0.0" 60'
   check "every user data file is unchanged" '[ -n "$BEFORE" ] && [ "$(user_data)" = "$BEFORE" ]'
   quit_opened
@@ -556,7 +580,7 @@ if wants upgrade; then
   check "it says that the old app is back" 'grep -q "The Zeus app 1.1.0 did not start, so your Zeus app 1.0.0 is back." "$OUT"'
   check "the app in Applications is the old app again (version 1.0.0, same bundle, valid signature)" \
     '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && [ "$(app_inode)" = "$INODE" ] && codesign --verify --strict "$APPS/Zeus.app"'
-  check "no old copy and no update.json are left" 'no_update_files'
+  check "no old copy is left, and update.json is absent or only the roll back mark" 'no_update_files_after_rollback'
   check "the new app is stopped and the old app opens" 'wait_for "launched: version=1.0.0" 60 && [ "$(copies)" = 1 ]'
   check "every user data file is unchanged" '[ -n "$BEFORE" ] && [ "$(user_data)" = "$BEFORE" ]'
   quit_opened

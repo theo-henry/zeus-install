@@ -32,8 +32,19 @@ mkdir -p "$BIN"
 
 FAILURES=0
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
-fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+# A failed check shows the end of the app's trace, so that a CI log tells what the app did.
+fail() {
+  printf '  \033[31mFAIL\033[0m %s\n' "$1"
+  FAILURES=$((FAILURES + 1))
+  if [ -n "${TRACE:-}" ] && [ -f "$TRACE" ]; then tail -n 25 "$TRACE" | sed 's/^/    | /'; fi
+}
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
+# need is a check that the later checks depend on: when it fails, the test stops at once (cleanup runs), so that
+# every later check does not wait out its own limit.
+need() {
+  check "$@"
+  if [ "$FAILURES" -gt 0 ]; then echo "  Stopping: the setup of this scenario failed, so the later checks cannot pass."; exit 1; fi
+}
 
 # Helpers: send a test action to the app, and list the app's windows.
 cat >"$WORK/act.swift" <<'SWIFT'
@@ -78,6 +89,7 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT
+trap 'exit 1' INT TERM
 
 # Sends a test action to this test's copy of the app only.
 act() { "$BIN/act" "@$APP_PID $1"; }
@@ -122,6 +134,16 @@ wait_count() {
 
 stops() { grep -c " stop " "$STATE/sessions" 2>/dev/null || true; }
 
+# wait_stops <count> [seconds]: waits until that many simulated zeus sessions have stopped.
+wait_stops() {
+  local waited=0 limit="${2:-20}"
+  until [ "$(stops)" -ge "$1" ]; do
+    sleep 0.5
+    waited=$((waited + 1))
+    [ "$waited" -lt $((limit * 2)) ] || return 1
+  done
+}
+
 # keyboard_has <text>: the selected tab writes where its keyboard is (chat or terminal) and its message box text
 # into the trace, and the line has this text.
 keyboard_has() {
@@ -134,6 +156,14 @@ keyboard_has() {
 # pty_got <text>: the simulated zeus of a tab got this text as terminal input. Its terminal is in raw mode, as the
 # terminal of zeus: the text comes in at once, without a line end.
 pty_got() { grep -q "input [0-9a-f]*$(printf %s "$1" | xxd -p | tr -d '\n')" "$STATE/sessions"; }
+
+# newest_page_loaded [seconds]: waits until the chat page of the newest session has loaded. A test action that runs
+# in a chat page (a draft, a project pick, a Zeus Editor link) is lost while the page still loads.
+newest_page_loaded() {
+  local pid
+  pid="$(grep -o "session [0-9]* started" "$TRACE" | tail -1 | awk '{print $2}')"
+  [ -n "$pid" ] && wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/$pid" "${1:-20}"
+}
 
 # wait_starts <count>: waits until that many simulated zeus sessions have started.
 wait_starts() {
@@ -164,7 +194,7 @@ launch_app() {
   TRACE="$WORK/$name/trace.log"
   mkdir -p "$WORK/$name"
   # ZEUS_APP_TEST_BACKGROUND: the app stays behind the other apps, so the test does not take the screen.
-  env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" ZEUS_APP_TEST_BACKGROUND=1 \
+  env HOME="$SANDBOX" SHELL=/bin/zsh ZEUS_APP_TRACE="$TRACE" ZEUS_APP_TEST_BACKGROUND=1 \
     ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_REAL_NODE="$REAL_NODE" \
     ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" "$@" \
     "$EXE" >"$WORK/$name/app.out" 2>&1 &
@@ -183,9 +213,9 @@ stop_app() {
 echo
 echo "Scenario 1: a new Mac, full setup, chat, close"
 start_app new ZEUS_SIM_START_DELAY=2500
-check "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
+need "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
-check "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
+need "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
 shot 1-check
 
 act setup-install
@@ -245,16 +275,15 @@ check "clearing the draft completes the pending close" 'wait_for "state: ended" 
 check "zeus got SIGTERM" '[ "$(cat "$STATE/zeus-stopped" 2>/dev/null)" = SIGTERM ]'
 
 # New tabs must own different PTYs; terminal input must reach only the selected PTY.
+# Each simulated zeus takes 2.5 s to start (ZEUS_SIM_START_DELAY), and longer on a busy Mac: the checks wait for it.
 act test-cmd-t
-sleep 4
+wait_count "hand-over: at once" 1 30 >/dev/null || true
 act test-cmd-t
-sleep 4
-check "each new tab starts a separate PTY" '[ "$(grep -c " start " "$STATE/sessions")" = 3 ]'
-check "later tabs come in at once, without the globe hand-over" \
-  'wait_count "hand-over: at once" 2 30 && [ "$(grep -c "hand-over: at once" "$TRACE")" = 2 ] && [ "$(grep -c "hand-over: globe moves" "$TRACE")" = 1 ]'
+check "each new tab starts a separate PTY" 'wait_starts 3 && [ "$(grep -c " start " "$STATE/sessions")" = 3 ]'
+check "later tabs come in at once, without the globe hand-over" 'wait_count "hand-over: at once" 2 30 && [ "$(grep -c "hand-over: at once" "$TRACE")" = 2 ] && [ "$(grep -c "hand-over: globe moves" "$TRACE")" = 1 ]'
 # Tab names: the project of the chat, until the user renames the tab. The app does not keep them.
 check "a new tab without a project is named Project" 'grep "tab selected: " "$TRACE" | tail -1 | grep -q " Project$"'
-wait_count "state: running(" 3 20 >/dev/null && sleep 1
+newest_page_loaded >/dev/null && sleep 1 || true
 act test-pick-project:Solvias
 check "a project picked in the chat names the tab" 'wait_for "tab name: Solvias project=Solvias custom=-" 10'
 act test-rename-open
@@ -318,15 +347,14 @@ shot 9-busy-close
 check "the chat turn completes before its PTY stops" 'wait_for "state: ended" 20 && sleep 4 && grep -q "reply Test chat turn" "$STATE/sessions"'
 check "closing one tab preserves the other PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 2 ]'
 act close-chat
-sleep 2
-check "an idle tab closes its PTY" '[ "$(grep -c " stop " "$STATE/sessions")" = 3 ]'
+check "an idle tab closes its PTY" 'wait_stops 3 && [ "$(stops)" = 3 ]'
 
 # A chat that cannot answer the close check (an editor plugin older than the app) must not block the close forever.
 touch "$STATE/no-close-state"
 act test-cmd-t
 check "a tab with an older editor plugin starts" 'wait_starts 4'
 rm -f "$STATE/no-close-state"
-check "its chat page opens" 'wait_count "state: running(" 4 20 && sleep 2'
+check "its chat page opens" 'wait_count "state: running(" 4 20 && newest_page_loaded && sleep 1'
 act close-chat
 sleep 1.5
 check "an unanswered close check first waits and keeps the PTY" '! grep -q "close deferred: .* unavailable" "$TRACE" && [ "$(stops)" = 3 ]'
@@ -339,7 +367,7 @@ check "Close anyway closes the tab that cannot answer" 'wait_count "state: ended
 
 # Close anyway must also override a busy chat.
 act test-cmd-t
-check "a new tab opens after Close anyway" 'wait_count "state: running(" 5 20 && sleep 2'
+check "a new tab opens after Close anyway" 'wait_count "state: running(" 5 20 && newest_page_loaded && sleep 1'
 act test-draft
 sleep 0.3
 act test-send
@@ -351,9 +379,9 @@ act test-close-anyway
 check "Close anyway stops a busy tab before its turn ends" 'wait_count "state: ended" 5 10 && [ "$(stops)" = 5 ] && [ "$(grep -c " reply " "$STATE/sessions")" = 1 ]'
 
 act test-cmd-t
-sleep 4
+wait_starts 6 && newest_page_loaded >/dev/null || true
 act test-cmd-t
-sleep 4
+wait_starts 7 && newest_page_loaded >/dev/null || true
 stop_app
 check "quit stops every remaining PTY" '[ "$(stops)" = 7 ]'
 
@@ -364,7 +392,7 @@ launch_app logout
 check "the app opens a chat at once after the setup" 'wait_for "page loaded: http://127.0.0.1" 30'
 act test-draft
 act test-cmd-t
-check "a second tab opens" 'wait_count "state: running(" 2 20 && sleep 2'
+check "a second tab opens" 'wait_count "state: running(" 2 20 && newest_page_loaded && sleep 1'
 act test-draft
 sleep 0.3
 act test-send
@@ -473,7 +501,7 @@ act 'test-speech-post:{"type":"speech-start","id":"s3","locale":"en-US"}'
 check "a second start while one runs is busy" 'sleep 0.5 && page_has "error s3 busy" && ! grep -q "speech event: state s3" "$TRACE"'
 act test-cmd-t
 check "showing another tab stops speech to text in the tab that the user leaves" 'wait_for "speech: stop s2 (tab hidden)" 10 && wait_for "speech event: state s2 stopped" 10'
-check "the new tab opens" 'wait_count "state: running(" 2 20 && sleep 2'
+check "the new tab opens" 'wait_count "state: running(" 2 20 && newest_page_loaded && sleep 1'
 act 'test-speech-post:{"type":"speech-start","id":"s4","locale":"ja-JP"}'
 check "a language without recognition on the Mac gives no-on-device" 'wait_for "speech event: error s4 no-on-device" 10 && sleep 0.5 && ! grep -q "speech event: state s4" "$TRACE"'
 act test-open-editor
@@ -543,7 +571,7 @@ starts="$(grep -c " start " "$STATE/sessions")"
 act test-key:Cmd+T
 check "the old shortcut Cmd+T does not open a tab" 'sleep 3 && [ "$(grep -c " start " "$STATE/sessions")" = "$starts" ]'
 act test-key:Shift+Cmd+K
-check "the new shortcut Shift+Cmd+K opens a tab" 'wait_starts $((starts + 1)) && wait_count "state: running(" 2 20 && sleep 2'
+check "the new shortcut Shift+Cmd+K opens a tab" 'wait_starts $((starts + 1)) && wait_count "state: running(" 2 20 && newest_page_loaded && sleep 1'
 act test-key:Cmd+J
 check "Cmd+J still shows the terminal" 'wait_for "terminal visible: .* true" 10'
 act test-key:Ctrl+Shift+Tab
@@ -555,7 +583,7 @@ check "a saved settings file applies at once" 'wait_for "shortcuts: app.newTab=A
 # The menu shows a symbol key as the character of this Mac's keyboard at that place ("]" can show as "´").
 check "the menu shows the new shortcuts" 'menu_has "app.newTab=Alt+Cmd+T app.newChat=Cmd+N app.closeTab=Cmd+W app.nextTab=Ctrl+" && ! menu_has "app.nextTab=Ctrl+Tab"'
 act test-key:Alt+Cmd+T
-check "the changed shortcut opens a tab" 'wait_starts $((starts + 2))'
+check "the changed shortcut opens a tab" 'wait_starts $((starts + 2)) && newest_page_loaded'
 selected="$(grep -c "tab selected: " "$TRACE")"
 act "test-key:Ctrl+]"
 check "the changed next-tab shortcut shows the next tab" 'wait_count "tab selected: " $((selected + 1)) 10'
@@ -567,7 +595,7 @@ check "the settings-changed message of a page reads the file again" 'wait_for "s
 printf '{not json' >"$SETTINGS"
 check "a damaged settings file gives the defaults without a crash" 'wait_for "settings file is not valid JSON" 10 && wait_for "shortcuts: app.newTab=Cmd+T $DEFAULT_SHORTCUTS (file)" 10 && kill -0 "$APP_PID"'
 act test-key:Cmd+T
-check "Cmd+T opens a tab again" 'wait_starts $((starts + 3))'
+check "Cmd+T opens a tab again" 'wait_starts $((starts + 3)) && newest_page_loaded'
 # A chain of collisions: newTab keeps Cmd+N only until newChat goes back to its default Cmd+N.
 printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Cmd+N", "app.newChat": "Cmd+J"}}' >"$SETTINGS"
 check "a chain of collisions gives each action its own shortcut" \
@@ -577,15 +605,21 @@ printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Shift+Cmd+;"}}' >"$SE
 check "a symbol key shortcut applies" 'wait_for "shortcuts: app.newTab=Shift+Cmd+; $DEFAULT_SHORTCUTS (file)" 10'
 act test-open-editor
 check "a Zeus Editor page opens" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/editor" 10'
+# Settings… at once after the new tab opens, while the tab still shows its loading screen: no chat page has loaded yet.
 hand_overs="$(grep -c "hand-over: " "$TRACE" || true)"
 act "test-editor-key:Shift+Cmd+;"
-check "the shortcut opens a tab from a Zeus Editor window" 'wait_starts $((starts + 4))'
 act test-close-editor
+act test-settings
+check "the shortcut opens a tab from a Zeus Editor window" 'wait_starts $((starts + 4))'
+new_tab="$(grep "session [0-9]* started" "$TRACE" | tail -1 | awk '{print $3}')"
+check "Settings… while the new tab loads waits for its chat page" 'wait_for "settings: waiting for the chat page of $new_tab" 10'
+check "Settings… then opens the settings of the chat page in front, once" \
+  'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/$new_tab" 20 && shortcuts_page_has "\"settings\":1"'
 rm -f "$SETTINGS"
 # Settings… goes to the chat page of the tab in front, so the new tab shows its chat page first.
 wait_count "hand-over: " $((hand_overs + 1)) 30 >/dev/null
 act test-settings
-check "Settings… opens the settings of the chat page in front" 'wait_for "settings opened" 10 && shortcuts_page_has "\"settings\":1"'
+check "Settings… opens the settings of a loaded chat page at once" 'wait_count "settings opened" 2 10 && shortcuts_page_has "\"settings\":2"'
 shot 13-shortcuts
 stop_app
 

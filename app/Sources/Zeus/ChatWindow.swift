@@ -20,6 +20,10 @@ final class ChatTab: NSObject {
     /// The globe hand-over plays once per app run, for the first chat. Later chats (Cmd+T, a retry)
     /// come in at once when their page is ready: the user does not wait for the animation again.
     private static var greeted = false
+    /// The chat page of `shownURL` has loaded.
+    private var pageLoaded = false
+    /// Settings… came while the chat page was not loaded yet: the settings open when it has loaded.
+    private var settingsWanted = false
 
     private var terminal: TerminalPanel!
     /// The terminal had the keyboard when the tab last went out of view (or the rename field took the keyboard).
@@ -86,6 +90,11 @@ final class ChatTab: NSObject {
             if self.host?.selectedTab === self { WebViewHandler.matchTitleBar(of: webView.window, to: webView) }
             guard self.shownURL != nil, webView.url == self.shownURL else { return }
             self.restoreDraft()
+            self.pageLoaded = true
+            if self.settingsWanted {
+                self.settingsWanted = false
+                self.openSettings()
+            }
             // After the first chat, the page comes in as soon as it is loaded.
             guard !Self.greeted else { self.handOver(); return }
             // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.
@@ -103,6 +112,7 @@ final class ChatTab: NSObject {
         switch session.state {
         case .starting:
             shownURL = nil
+            pageLoaded = false
             showLoader()
         case let .running(url):
             guard shownURL != url else { return }
@@ -119,10 +129,13 @@ final class ChatTab: NSObject {
                 break
             }
             shownURL = url
+            pageLoaded = false
             loader?.setStatus("Opening the chat…")
             webView.load(URLRequest(url: url))   // Behind the loading screen, until the hand-over.
         case let .failed(message):
             shownURL = nil
+            pageLoaded = false
+            settingsWanted = false
             webView.loadHTMLString(StatusPage.failed(message: message, log: session.log.text), baseURL: nil)
             if let loader { dismiss(loader, over: 0.25) }
             loader = nil
@@ -388,6 +401,19 @@ final class ChatTab: NSObject {
             Trace.log("restore: \(pid) message box text back=\((try? result.get()) as? Bool ?? false)")
         }
     }
+
+    /// Settings… (Cmd+,): opens the settings pop-up of the chat page. A tab that still starts or loads its chat
+    /// page opens it when the page has loaded, so that the shortcut is not lost behind the loading screen.
+    func openSettings() {
+        guard shownURL != nil, pageLoaded, !webView.isLoading else {
+            settingsWanted = true
+            Trace.log("settings: waiting for the chat page of \(session.pid)")
+            return
+        }
+        webView.evaluateJavaScript(Self.openSettingsScript)
+    }
+
+    static let openSettingsScript = "window.zeusApp?.openSettings?.(); void 0"
 
     @objc func toggleTerminal(_ sender: Any? = nil) {
         terminal.webView.isHidden.toggle()
@@ -691,7 +717,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     /// Speech to text stops when the page goes out of view: another tab of the window shows, or the window is minimized.
     func windowDidChangeOcclusionState(_ notification: Notification) {
-        guard let window, !window.occlusionState.contains(.visible) else { return }
+        guard let window, Front.isOutOfView(window) else { return }
         SpeechService.shared.stop(in: webView, reason: "window hidden")
     }
 
