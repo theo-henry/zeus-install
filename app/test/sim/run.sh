@@ -87,7 +87,11 @@ shot() {
   sleep 0.8
   local id
   id="$("$BIN/windows" "$APP_PID" | head -1 | awk '{print $1}')"
-  [ -n "$id" ] && screencapture -x -o -l "$id" "$SHOTS/$1.png"
+  # A screenshot is evidence, not a check: a failed capture must not end the test.
+  if [ -z "$id" ] || ! screencapture -x -o -l "$id" "$SHOTS/$1.png"; then
+    echo "    (screenshot $1 not saved)"
+  fi
+  return 0
 }
 
 # wait_for <trace pattern> [seconds]
