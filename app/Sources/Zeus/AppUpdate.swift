@@ -185,6 +185,10 @@ final class AppUpdate {
         sendProgress()
         Trace.log("app update: installing \(update.version)")
         app.endTabsForUpdate(to: update.version) { restore in
+            guard let restore else {
+                self.waitForIdleTabs(update)
+                return
+            }
             Updater.install(update) { relaunching in
                 guard !relaunching else { return }
                 // The new copy did not start or confirm: this copy runs on and opens the same tabs again.

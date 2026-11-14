@@ -50,6 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         case .unconfirmed:
             return
+        case .late:
+            NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+            return
         case .normal:
             TabRestore.remove()
         }
@@ -287,15 +290,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
-    /// Keeps the tabs for the new copy (`TabRestore`), shows the loading screen in the place of the front chat window,
-    /// and ends every session. Calls `completion` with the kept tabs when the sessions have ended.
-    func endTabsForUpdate(to version: String, completion: @escaping (TabRestore) -> Void) {
+    /// Shows the loading screen in the place of the front chat window and hides the chat windows, so that no message
+    /// can start a turn; then keeps the tabs for the new copy (`TabRestore`) and ends every session.
+    /// Calls `completion` with the kept tabs when the sessions have ended, or with nil (and shows the chat windows
+    /// again) when a tab started to work before the windows were hidden: the update then waits again.
+    func endTabsForUpdate(to version: String, completion: @escaping (TabRestore?) -> Void) {
         updating = true
-        setupWindow?.window?.close()
-        setupWindow = nil
         // The front chat window first, so that it is the window that the loading screen replaces.
         let ordered = NSApp.orderedWindows.compactMap { $0.windowController as? ChatWindowController }
         let windows = ordered + chatWindows.filter { window in !ordered.contains { $0 === window } }
+        UpdateWindow.shared.show(status: "Installing Zeus \(version)…", frame: windows.first?.window?.frame)
+        windows.forEach { $0.window?.orderOut(nil) }
+        // A message sent just before the windows were hidden can have started a turn.
+        busyTabCount { [weak self] busy in
+            guard let self else { return }
+            guard busy == 0 else {
+                Trace.log("update: \(busy) tabs work again; the update waits")
+                self.updating = false
+                windows.forEach { Front.show($0.window) }
+                UpdateWindow.shared.close()
+                completion(nil)
+                return
+            }
+            self.keepAndEndTabs(windows, version: version, completion: completion)
+        }
+    }
+
+    private func keepAndEndTabs(_ windows: [ChatWindowController], version: String, completion: @escaping (TabRestore?) -> Void) {
+        setupWindow?.window?.close()
+        setupWindow = nil
         var kept = windows.map { TabRestore.Window(frame: NSStringFromRect($0.window?.frame ?? .zero), tabs: []) }
         let group = DispatchGroup()
         for (index, window) in windows.enumerated() {
@@ -317,7 +340,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 Trace.log("restore: not written: \(error.localizedDescription)")
             }
             Trace.log("update: ending \(restore.tabCount) tabs for \(version)")
-            UpdateWindow.shared.show(status: "Installing Zeus \(version)…", frame: windows.first?.window?.frame)
             SpeechService.shared.cancelAll(reason: "app updates")
             for tab in self.chatTabs { tab.closeForUpdate() }
             SessionManager.shared.waitUntilEnded(timeout: 12) {

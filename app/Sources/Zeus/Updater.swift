@@ -43,7 +43,14 @@ enum Updater {
         /// placeholder without a process (pid -1) while the new copy still starts.
         var newPID: Int32?
         var confirmed = false
+        /// The old copy rolled back the update and runs on. A copy that starts while the old copy runs is a late start
+        /// of the new copy (macOS can start it after the roll back, from the app path that holds the old app again),
+        /// and quits at once. Without this, that copy would update again at launch.
+        var rolledBack: Bool?
     }
+
+    /// The time that the old copy keeps the roll back mark after a roll back.
+    static let lateStartWindow: TimeInterval = 120
 
     private static var pendingURL: URL { URL(fileURLWithPath: Paths.appSupport + "/update.json") }
 
@@ -67,6 +74,8 @@ enum Updater {
         /// The new version of an update that does not confirm (ZEUS_APP_TEST_NO_CONFIRM, debug builds):
         /// it starts nothing and waits until the old copy stops it.
         case unconfirmed
+        /// A late start of the new copy after a roll back: it quits at once.
+        case late
     }
 
     /// Called first at launch.
@@ -74,6 +83,14 @@ enum Updater {
         guard let pending = readPending() else { return .normal }
         let bundlePath = Bundle.main.bundleURL.standardizedFileURL.path
         let oldCopyRuns = kill(pending.waitingPID, 0) == 0
+        if pending.rolledBack == true {
+            if oldCopyRuns, pending.waitingPID != getpid() {
+                Trace.log("update: a late copy of the rolled back update to \(pending.to) quits")
+                return .late
+            }
+            removePending()
+            return .normal
+        }
         if pending.to == currentVersion, pending.appPath == bundlePath {
             var pending = pending
             pending.newPID = getpid()
@@ -296,6 +313,13 @@ enum Updater {
                 Trace.log("update: roll back failed (errno \(errno)); the new app stays")
             }
             finish(why)
+            // A new copy that macOS still starts now must not run (see `Pending.rolledBack`).
+            var mark = pending
+            mark.rolledBack = true
+            try? writePending(mark)
+            DispatchQueue.main.asyncAfter(deadline: .now() + lateStartWindow) {
+                if let current = readPending(), current.rolledBack == true, current.waitingPID == getpid() { removePending() }
+            }
         }
 
         let configuration = NSWorkspace.OpenConfiguration()

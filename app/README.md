@@ -10,6 +10,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   When that version is higher, the loading screen shows "Downloading Zeus X.Y.Z…", the app downloads `Zeus.zip` and `Zeus.zip.sha256` (`gh release download`), and checks the checksum, the zip, the bundle identifier, the version, and the signature.
   Then it swaps the new app into the place of the running app in one rename (`renamex_np` with `RENAME_SWAP`), opens the new copy, and waits up to 20 s for the new copy to confirm in `~/Library/Application Support/Zeus/update.json`.
   After the confirmation, it removes the old copy and quits; without it, it stops the new copy, swaps the old app back, and starts as before.
+  For 2 minutes after a roll back, `update.json` marks the roll back: a new copy that macOS starts late (under a high load) quits at once and does not update again.
   Offline, without `gh`, without access, or with any error, the app starts its current version and shows nothing.
   Development versions (such as `0.0.0-dev`), a read-only app folder, and `ZEUS_APP_NO_UPDATE=1` turn the check off.
 - **Update from the settings.** **Check for updates** and **Update now** in the settings of the chat and Zeus Editor pages ask the app about the app (`Sources/Zeus/AppUpdate.swift`).
@@ -20,7 +21,9 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   `error` is `no-gh`, `unreachable` (no answer from GitHub, or no access), `no-release`, `development` (a development build), or `cannot-update` (a read-only app folder, or `ZEUS_APP_NO_UPDATE=1`), and `message` says it in words.
   A page posts `{type: "app-update-apply"}` for **Update now**. The app downloads and checks the newest release as at launch, while the user keeps working.
   Then it waits until Zeus works in no tab (a turn, a question or permission prompt in a turn, a message on its way, or a start).
-  Then it keeps each tab, shows the loading screen with "Installing Zeus X.Y.Z…" in the place of the front chat window, ends every session, swaps the app, and opens the new copy.
+  Then it shows the loading screen with "Installing Zeus X.Y.Z…" in the place of the front chat window and hides the chat windows, so that no message can start a turn.
+  When a tab started to work just before, the chat windows come back and the update waits again.
+  Otherwise it keeps each tab, ends every session, swaps the app, and opens the new copy.
   The new copy opens the same tabs in the same windows: each tab starts `zeus` again, restarts its Claude Code session with `--resume` through the control socket of the launch
   (`{op: "restart", resume: <session id>}`, zeus-editor `packages/launcher/control.js`), and then shows the chat.
   The tab keeps its project, its name, its open terminal, the unsent text of the message box (`#zeus-message`), and the unsent text of the terminal (typed back without Enter).
@@ -146,6 +149,8 @@ app/test/update/run.sh [release] [install] [app] [settings]
 ```
 
 GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is made, and nothing is downloaded.
+Each app case stops all its app copies and fails after `ZEUS_UPDATE_TEST_CASE_LIMIT` seconds (default 300), and the whole test stops after `ZEUS_UPDATE_TEST_LIMIT` seconds (default 3600).
+`ZEUS_UPDATE_TEST_CASES="settings-rollback"` runs only those cases of the `settings` part, and `ZEUS_UPDATE_TEST_TRACES=<folder>` keeps the trace of each app case.
 
 1. `release`: `app/release.sh` in a temporary copy of this repo stops for a working tree with changes, a commit that is not the newest main commit,
    a wrong or a too low version, and an existing tag; otherwise it builds the app for both architectures and makes the next `app-v` release with a valid zip and checksum.
@@ -153,7 +158,7 @@ GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is mad
    with access, it installs the newest `app-v` release (not drafts, pre-releases, or other tags), and it stops for a wrong checksum or version, or without an app release.
 3. `app`: the app updates itself from 1.0.0 to 1.1.0, restarts in the new version, and keeps the user state;
    it starts its current version when it is up to date, without access, or when the download is damaged or is not Zeus;
-   when the new copy does not confirm, the old copy is put back.
+   when the new copy does not confirm, the old copy is put back, and a late start of the new copy quits at once.
 4. `settings`: with a simulated `zeus` (`app/test/sim/payload/zeus.mjs`, with a launch record and a control socket), a chat page asks
    **Check for updates**: no update, then a new release with its notes (not drafts), and no answer from GitHub.
    **Update now** with three tabs (a project with a tab name, unsent text, and a busy turn with an open terminal and unsent terminal text)
