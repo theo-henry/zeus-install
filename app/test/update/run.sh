@@ -279,7 +279,7 @@ SWIFT
     defaults write "$PREFS_DOMAIN" showMenuBar -bool false
   }
   launch() {
-    env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
+    env HOME="$SANDBOX" SHELL=/bin/zsh ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
       ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" "$@" \
       "$APPS/Zeus.app/Contents/MacOS/Zeus" >"$WORK/$NAME/app.out" 2>&1 &
     APP_PID=$!
@@ -319,7 +319,7 @@ SWIFT
   late_copy_quits() {
     local before late_pid waited=0
     before="$(grep -c "update: current=" "$TRACE" || true)"
-    env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
+    env HOME="$SANDBOX" SHELL=/bin/zsh ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
       ZEUS_APP_TEST_NO_CONFIRM=1 "$APPS/Zeus.app/Contents/MacOS/Zeus" >"$WORK/$NAME/late.out" 2>&1 &
     late_pid=$!
     while kill -0 "$late_pid" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
@@ -460,11 +460,11 @@ if wants upgrade; then
   }
   # The one-line install, stopped after 5 minutes. The app that it opens gets the test environment.
   install_line() {
-    env HOME="$SANDBOX" TMPDIR="$TEMP" PATH="$SIM_DIR/stubs:/usr/bin:/bin:/usr/sbin:/sbin" \
+    env HOME="$SANDBOX" SHELL=/bin/zsh TMPDIR="$TEMP" PATH="$SIM_DIR/stubs:/usr/bin:/bin:/usr/sbin:/sbin" \
       ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" \
       ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" ZEUS_INSTALL_ACCEPT_ANACONDA_LICENSE=yes ZEUS_APP_TRACE="$TRACE" \
       ZEUS_INSTALL_URL="file://$REPO_DIR/install.sh" ZEUS_APP_DIR="$APPS" \
-      ZEUS_APP_OPEN_ENV="HOME ZEUS_APP_TRACE ZEUS_APP_TEST_ID ZEUS_APP_DEFAULTS_SUITE ZEUS_APP_TEST_BACKGROUND ZEUS_SIM_STATE ZEUS_SIM_PAYLOAD ZEUS_SIM_INSTALLER ZEUS_INSTALL_SYSTEM_CONDA_DIRS ZEUS_APP_NO_UPDATE ZEUS_APP_TEST_NO_CONFIRM" \
+      ZEUS_APP_OPEN_ENV="HOME SHELL ZEUS_APP_TRACE ZEUS_APP_TEST_ID ZEUS_APP_DEFAULTS_SUITE ZEUS_APP_TEST_BACKGROUND ZEUS_SIM_STATE ZEUS_SIM_PAYLOAD ZEUS_SIM_INSTALLER ZEUS_INSTALL_SYSTEM_CONDA_DIRS ZEUS_APP_NO_UPDATE ZEUS_APP_TEST_NO_CONFIRM" \
       "$@" bash "$REPO_DIR/install-app.sh" >"$OUT" 2>&1 &
     local pid=$! status=0 waited=0
     while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 600 ]; do sleep 0.5; waited=$((waited + 1)); done

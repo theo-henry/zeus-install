@@ -30,4 +30,4 @@ jobs:
 
       # Keep this command the same as commands.test in .no-mistakes.yaml.
       - name: Test
-        run: app/test/pty/run.sh && app/test/plugin-scope/run.sh && app/test/update/run.sh install app upgrade && app/test/sim/run.sh
+        run: app/test/run-all.sh

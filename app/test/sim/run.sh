@@ -39,6 +39,12 @@ fail() {
   if [ -n "${TRACE:-}" ] && [ -f "$TRACE" ]; then tail -n 25 "$TRACE" | sed 's/^/    | /'; fi
 }
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
+# need is a check that the later checks depend on: when it fails, the test stops at once (cleanup runs), so that
+# every later check does not wait out its own limit.
+need() {
+  check "$@"
+  if [ "$FAILURES" -gt 0 ]; then echo "  Stopping: the setup of this scenario failed, so the later checks cannot pass."; exit 1; fi
+}
 
 # Helpers: send a test action to the app, and list the app's windows.
 cat >"$WORK/act.swift" <<'SWIFT'
@@ -83,6 +89,7 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT
+trap 'exit 1' INT TERM
 
 # Sends a test action to this test's copy of the app only.
 act() { "$BIN/act" "@$APP_PID $1"; }
@@ -187,7 +194,7 @@ launch_app() {
   TRACE="$WORK/$name/trace.log"
   mkdir -p "$WORK/$name"
   # ZEUS_APP_TEST_BACKGROUND: the app stays behind the other apps, so the test does not take the screen.
-  env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" ZEUS_APP_TEST_BACKGROUND=1 \
+  env HOME="$SANDBOX" SHELL=/bin/zsh ZEUS_APP_TRACE="$TRACE" ZEUS_APP_TEST_BACKGROUND=1 \
     ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_REAL_NODE="$REAL_NODE" \
     ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" "$@" \
     "$EXE" >"$WORK/$name/app.out" 2>&1 &
@@ -206,9 +213,9 @@ stop_app() {
 echo
 echo "Scenario 1: a new Mac, full setup, chat, close"
 start_app new ZEUS_SIM_START_DELAY=2500
-check "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
+need "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
-check "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
+need "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
 shot 1-check
 
 act setup-install
