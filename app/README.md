@@ -125,6 +125,7 @@ It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in t
 `ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
 `ZEUS_APP_TEST_SPEECH=1` (debug builds) replaces Apple's speech recognition with a simulated recognizer that "hears" "Hello Zeus" (`denied`: no permission).
 `ZEUS_APP_TEST_ID=<id>` (debug builds) makes the test actions reach only this app copy.
+`ZEUS_APP_DEFAULTS_SUITE=<domain>` (debug builds) makes the app read and write its settings (`setupDone`, `showMenuBar`) in that defaults domain instead of `io.github.theo-henry.zeus`.
 `ZEUS_APP_TEST_BACKGROUND=1` (debug builds) makes the app never come to the front: it does not activate and puts its windows behind the windows of other apps.
 Its pages keep running and drawing while other windows cover them.
 The tests in `app/test` set it, so they do not come in front of your work.

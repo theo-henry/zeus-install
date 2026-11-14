@@ -17,12 +17,14 @@ SIM_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SIM_DIR/../.." && pwd)"
 REPO_DIR="$(dirname "$APP_DIR")"
 SHOTS="${1:-}"
-BUNDLE_ID="io.github.theo-henry.zeus"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
 BIN="$WORK/bin"
 # Test actions reach only the app copy that this test starts, not another running Zeus app.
 export ZEUS_APP_TEST_ID="sim-$$"
+# The app copies of this run keep their settings in a domain of their own, not in the settings of the user.
+export ZEUS_APP_DEFAULTS_SUITE="io.github.theo-henry.zeus.test-$ZEUS_APP_TEST_ID"
+PREFS_DOMAIN="$ZEUS_APP_DEFAULTS_SUITE"
 # The app stays behind the windows of other apps and does not take the keyboard (debug builds).
 export ZEUS_APP_TEST_BACKGROUND=1
 mkdir -p "$BIN"
@@ -66,14 +68,11 @@ APP="$("$APP_DIR/dev-bundle.sh" 2>/dev/null | tail -1)"
 EXE="$APP/Contents/MacOS/Zeus"
 
 REAL_NODE="$(command -v node)"
-PREFS_BACKUP="$WORK/prefs.plist"
-defaults export "$BUNDLE_ID" "$PREFS_BACKUP" 2>/dev/null || rm -f "$PREFS_BACKUP"
 APP_PID=""
 
 cleanup() {
   [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
-  defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
-  [ -f "$PREFS_BACKUP" ] && defaults import "$BUNDLE_ID" "$PREFS_BACKUP"
+  defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -148,7 +147,7 @@ start_app() {
   mkdir -p "$SANDBOX" "$STATE"
   # A new Mac: no tools in the home folder, and the simulated tools before the system ones.
   printf 'export PATH="%s:/usr/bin:/bin:/usr/sbin:/sbin"\n' "$SIM_DIR/stubs" >"$SANDBOX/.zprofile"
-  defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
+  defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
   launch_app "$@"
 }
 
@@ -353,7 +352,7 @@ check "quit stops every remaining PTY" '[ "$(stops)" = 7 ]'
 
 echo
 echo "Scenario 2: a cancelled logout, then a quit and a logout while one tab has a draft and one tab is busy"
-defaults write "$BUNDLE_ID" setupDone -bool true
+defaults write "$PREFS_DOMAIN" setupDone -bool true
 launch_app logout
 check "the app opens a chat at once after the setup" 'wait_for "page loaded: http://127.0.0.1" 30'
 act test-draft

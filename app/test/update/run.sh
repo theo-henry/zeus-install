@@ -15,7 +15,7 @@
 # and the whole test stops after ZEUS_UPDATE_TEST_LIMIT seconds (default 3600). ZEUS_UPDATE_TEST_TRACES=<folder>
 # keeps the trace and the session records of each app case there.
 # ZEUS_UPDATE_TEST_CASES="<case>..." runs only those cases of the settings part (settings, settings-current,
-# settings-noaccess, settings-rollback).
+# settings-noaccess, settings-starting, settings-rollback).
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables and calls in it.
 # shellcheck disable=SC2016,SC2034,SC2119,SC2120
@@ -32,6 +32,9 @@ PARTS="${*:-release install app settings}"
 WORK="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/zeus-update-test.XXXXXX")" && pwd -P)"
 # Test actions reach only the app copies that this test starts.
 export ZEUS_APP_TEST_ID="update-$$"
+# The app copies of this run keep their settings in a domain of their own, not in the settings of the user.
+export ZEUS_APP_DEFAULTS_SUITE="io.github.theo-henry.zeus.test-$ZEUS_APP_TEST_ID"
+PREFS_DOMAIN="$ZEUS_APP_DEFAULTS_SUITE"
 # The app stays behind the windows of other apps and does not take the keyboard (debug builds).
 export ZEUS_APP_TEST_BACKGROUND=1
 
@@ -45,8 +48,6 @@ TOTAL_LIMIT="${ZEUS_UPDATE_TEST_LIMIT:-3600}"
 TRACES="${ZEUS_UPDATE_TEST_TRACES:-}"
 [ -n "$TRACES" ] && mkdir -p "$TRACES"
 CASE_WATCHDOG=""
-PREFS_BACKUP="$WORK/prefs.plist"
-defaults export "$BUNDLE_ID" "$PREFS_BACKUP" 2>/dev/null || rm -f "$PREFS_BACKUP"
 # stop_copies <folder pattern>: stops the app copies there, also an app copy that does not quit.
 stop_copies() {
   pkill -f "$1/Zeus.app/Contents/MacOS/Zeus" 2>/dev/null || true
@@ -57,8 +58,7 @@ cleanup() {
   [ -n "$CASE_WATCHDOG" ] && kill "$CASE_WATCHDOG" 2>/dev/null
   [ -n "${TOTAL_WATCHDOG:-}" ] && kill "$TOTAL_WATCHDOG" 2>/dev/null
   stop_copies "$WORK/.*"
-  defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
-  [ -f "$PREFS_BACKUP" ] && defaults import "$BUNDLE_ID" "$PREFS_BACKUP"
+  defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -254,8 +254,8 @@ SWIFT
     touch "$STATE/gh-login"
     echo "user state" >"$SUPPORT/user-state"
     make_app "$2" "$APPS"
-    defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
-    defaults write "$BUNDLE_ID" showMenuBar -bool false
+    defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
+    defaults write "$PREFS_DOMAIN" showMenuBar -bool false
   }
   launch() {
     env HOME="$SANDBOX" ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
@@ -337,7 +337,7 @@ if wants app; then
   check "the old copy and the update files are removed" \
     '[ -n "$(work_folder)" ] && [ ! -e "$(work_folder)" ] && [ ! -e "$SUPPORT/update.json" ]'
   check "the user state is unchanged" \
-    '[ "$(cat "$SUPPORT/user-state")" = "user state" ] && [ "$(defaults read "$BUNDLE_ID" showMenuBar)" = 0 ]'
+    '[ "$(cat "$SUPPORT/user-state")" = "user state" ] && [ "$(defaults read "$PREFS_DOMAIN" showMenuBar)" = 0 ]'
   check "one copy of the app runs" '[ "$(copies)" = 1 ]'
   quit_all
 
@@ -403,7 +403,7 @@ if wants settings; then
     mkdir -p "$SANDBOX/Code/zeus"
     printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$REAL_NODE" "$SIM_DIR/payload/zeus.mjs" >"$SANDBOX/.local/bin/zeus"
     chmod +x "$SANDBOX/.local/bin/zeus"
-    defaults write "$BUNDLE_ID" setupDone -bool true
+    defaults write "$PREFS_DOMAIN" setupDone -bool true
   }
   act() { "$BIN/act" "$1"; }
   # wait_count <trace pattern> <count> [seconds]
@@ -534,6 +534,29 @@ if wants settings; then
     act 'test-post:{"type":"app-update-check"}'
     check "Check for updates without an answer from GitHub says so" \
       'wait_for "app update: answer - available=false error=unreachable" 30 && update_page_has "\"error\":\"unreachable\""'
+    quit_chats
+  fi
+
+  # A tab that still starts (its chat page is not shown yet) counts as busy: the update waits until it shows its chat,
+  # so the snapshot has its session and the new copy resumes it.
+  if wanted_case settings-starting; then
+    chat_case settings-starting 1.0.0
+    releases "$STATE" "app-v1.0.0:false:false"
+    launch ZEUS_SIM_START_DELAY=10000
+    check "the app opens the chat" 'wait_for "update: none (up to date)" 60 && wait_count "state: running" 1 60 && wait_count "hand-over" 1 60'
+    releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false"
+    publish "$STATE" app-v1.1.0 1.1.0
+    act new-chat
+    check "a second tab starts" 'wait_count "tab selected: " 2 30 && [ "$(grep -c "state: running" "$TRACE")" = 1 ]'
+    act 'test-post:{"type":"app-update-apply"}'
+    check "the update waits for the tab that still starts" \
+      'wait_for "app update: waiting for 1 busy tabs" 60 && ! grep -q "update: ending" "$TRACE"'
+    check "the update goes on only after the tab shows its chat" \
+      'wait_for "update: ending 2 tabs for 1.1.0" 60 && [ "$(grep -c "hand-over" "$TRACE")" -ge 2 ] &&
+       [ "$(grep -c "snapshot: .* session=[0-9a-f-]\{36\}" "$TRACE")" = 2 ]'
+    check "the new copy resumes the sessions of both tabs" \
+      'wait_for "update: confirmed 1.0.0 -> 1.1.0" 120 && wait_for "restore: 2 tabs in 1 windows" 60 &&
+       wait_count "resume=.* ok" 2 90 && [ "$(resumed_ids)" = "$(first_ids 2)" ]'
     quit_chats
   fi
 
