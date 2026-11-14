@@ -300,6 +300,10 @@ final class ChatTab: NSObject {
     /// The chat answers the close check with the first reason only (unsent text before work), so the launcher
     /// state tells the rest. Calls back on the main queue.
     func isBusy(completion: @escaping (Bool) -> Void) {
+        if session.isAlive, shownURL == nil {
+            DispatchQueue.main.async { completion(true) }
+            return
+        }
         closeState { [weak self] reason in
             if let reason, ["busy", "pending-message", "starting"].contains(reason) {
                 DispatchQueue.main.async { completion(true) }
