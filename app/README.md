@@ -164,7 +164,7 @@ Each app case stops all its app copies and fails after `ZEUS_UPDATE_TEST_CASE_LI
 4. `upgrade`: `install-app.sh` on a Mac with an older app and user data (the Zeus folder and its client projects, the Zeus settings,
    the Claude chats and plugin data, and the saved window state) closes the open older app with its own quit, shows both versions,
    puts the newest release in its place, and opens it; the new app confirms its start in `update.json`, as after a self-update,
-   and the old copy is then removed. Every user data file stays byte-identical.
+   and the old copy is then removed. Every user data file except `update.json` stays byte-identical.
    With the newest app installed, it downloads nothing and opens the app;
    when the new app stops at once, or runs but does not confirm within 60 s, it puts the same old app bundle back and opens it.
 5. `settings`: with a simulated `zeus` (`app/test/sim/payload/zeus.mjs`, with a launch record and a control socket), a chat page asks
