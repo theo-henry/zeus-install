@@ -455,7 +455,7 @@ if wants upgrade; then
   }
   # A checksum of every user data file, with its path.
   user_data() {
-    (cd "$SANDBOX" && find Code .claude "Library/Application Support/Zeus" "Library/Saved Application State" -type f -print0 |
+    (cd "$SANDBOX" && find Code .claude "Library/Application Support/Zeus" "Library/Saved Application State" -type f ! -name update.json -print0 |
       sort -z | xargs -0 shasum -a 256)
   }
   # The one-line install, stopped after 5 minutes. The app that it opens gets the test environment.
@@ -503,6 +503,11 @@ if wants upgrade; then
   }
   # No old copy and no update.json are left.
   no_update_files() { [ ! -e "$SUPPORT/update.json" ] && [ -z "$(ls -A "$TEMP" 2>/dev/null)" ]; }
+  # After a roll back, the old app keeps update.json with "rolledBack" for 120 s on purpose (Updater.lateStartWindow).
+  # No old copy is left, and update.json is absent or only that mark.
+  no_update_files_after_rollback() {
+    [ -z "$(ls -A "$TEMP" 2>/dev/null)" ] && { [ ! -e "$SUPPORT/update.json" ] || grep -q '"rolledBack":true' "$SUPPORT/update.json"; }
+  }
 
   upgrade_case upgrade 1.0.0
   releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false"
@@ -554,7 +559,7 @@ if wants upgrade; then
   check "it says that the old app is back" 'grep -q "The Zeus app 1.1.0 did not start, so your Zeus app 1.0.0 is back." "$OUT"'
   check "the app in Applications is the old app again (version 1.0.0, same bundle, valid signature)" \
     '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && [ "$(app_inode)" = "$INODE" ] && codesign --verify --strict "$APPS/Zeus.app"'
-  check "no old copy and no update.json are left" 'no_update_files'
+  check "no old copy is left, and update.json is absent or only the roll back mark" 'no_update_files_after_rollback'
   check "it opens the old app" 'wait_for "launched: version=1.0.0" 60'
   check "every user data file is unchanged" '[ -n "$BEFORE" ] && [ "$(user_data)" = "$BEFORE" ]'
   quit_opened
@@ -571,7 +576,7 @@ if wants upgrade; then
   check "it says that the old app is back" 'grep -q "The Zeus app 1.1.0 did not start, so your Zeus app 1.0.0 is back." "$OUT"'
   check "the app in Applications is the old app again (version 1.0.0, same bundle, valid signature)" \
     '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && [ "$(app_inode)" = "$INODE" ] && codesign --verify --strict "$APPS/Zeus.app"'
-  check "no old copy and no update.json are left" 'no_update_files'
+  check "no old copy is left, and update.json is absent or only the roll back mark" 'no_update_files_after_rollback'
   check "the new app is stopped and the old app opens" 'wait_for "launched: version=1.0.0" 60 && [ "$(copies)" = 1 ]'
   check "every user data file is unchanged" '[ -n "$BEFORE" ] && [ "$(user_data)" = "$BEFORE" ]'
   quit_opened
