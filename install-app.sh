@@ -9,6 +9,9 @@
 # your access to all the private Zeus repos first. Without access, it stops and downloads nothing.
 # Then it downloads the newest Zeus app release with the GitHub CLI, installs the app, and opens it.
 # The app updates itself from the same private releases each time it starts.
+# With the app already installed, it puts the newest release in place of an older app (versions 0.1.0 to 0.1.2
+# cannot update themselves) and keeps the old app until the new app has started. It changes only the app:
+# the Zeus folder, its projects, the Zeus settings, the Claude chats, and the plugins stay as they are.
 #
 # The GitHub CLI does not mark its downloads as downloaded from the internet, so the app opens without a
 # security prompt although it has no Apple Developer ID signature.

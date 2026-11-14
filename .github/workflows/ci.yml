@@ -1,0 +1,33 @@
+# Made with `no-mistakes ci-workflow` from .no-mistakes.yaml, then changed for this repo:
+# the tests build a Swift app and use macOS tools (codesign, ditto, defaults), so they run on macOS.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    # The repository variable CI_RUNS_ON picks the runner and must hold JSON. Unset, every PR (forks included)
+    # runs on the GitHub-hosted macOS runner. When the Actions minute limit gets close, the maintainer sets it to
+    # ["self-hosted","mac-local"] to run on the self-hosted Mac; fork PRs then run there too.
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"macos-latest"') }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # app/build.sh numbers the build with the commit count.
+          fetch-depth: 0
+
+      # Keep this command the same as commands.test in .no-mistakes.yaml.
+      - name: Test
+        run: app/test/pty/run.sh && app/test/plugin-scope/run.sh && app/test/update/run.sh install

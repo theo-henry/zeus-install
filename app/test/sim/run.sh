@@ -10,7 +10,7 @@
 # With a folder, it saves a screenshot of each app window state there (the app's windows only).
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
-# shellcheck disable=SC2016
+# shellcheck disable=SC2016,SC2034
 set -euo pipefail
 
 SIM_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -406,6 +406,42 @@ if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-logout-event.log"; fi
 check "the quit event of a logout ends the app within 12 s (took $logout_time s)" '[ "$logout_time" -le 12 ]'
 check "the quit event of a logout asks nothing" 'grep -q "quit by macOS" "$TRACE" && ! grep -q "quit deferred" "$TRACE"'
 check "the quit event of a logout stops the PTY" '[ "$(stops)" = 10 ]'
+
+echo
+echo "Scenario 2b: the install line closes an open app that has unsent text"
+# install-app.sh closes an open app before it replaces it (quit_zeus_app in install.sh). Its quit request must
+# reach the app's own quit check, so that a tab with unsent text asks first and nothing is lost.
+# The app runs as Zeus.app, as in the Applications folder.
+mkdir -p "$WORK/apps"
+ditto "$APP" "$WORK/apps/Zeus.app"
+DEV_EXE="$EXE"
+EXE="$WORK/apps/Zeus.app/Contents/MacOS/Zeus"
+launch_app install-quit
+check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+act test-draft
+sleep 0.5
+(
+  export ZEUS_INSTALL_SOURCED=1
+  # shellcheck source=install.sh
+  source "$REPO_DIR/install.sh"
+  quit_zeus_app "$WORK/apps"
+) >"$WORK/install-quit/out" 2>&1 &
+QUIT_PID=$!
+check "the quit of the install line asks about the unsent text, as the app's own quit does" \
+  'wait_for "quit deferred: .*composer-draft" 10'
+check "the app stays open and the install line waits while the app asks" 'sleep 2 && kill -0 "$APP_PID" && kill -0 "$QUIT_PID"'
+check "the unsent text stays in the chat" 'keyboard_has " chat message=\"Test chat turn\""'
+kill "$QUIT_PID" 2>/dev/null || true
+wait "$QUIT_PID" 2>/dev/null || true
+# A logout ends the quit question and the app.
+act test-power-off
+"$BIN/logout" "$APP_PID"
+waited=0
+while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 30 ]; do sleep 0.5; waited=$((waited + 1)); done
+check "a logout then ends the app" '! kill -0 "$APP_PID" 2>/dev/null'
+kill -0 "$APP_PID" 2>/dev/null && kill "$APP_PID"
+APP_PID=""
+EXE="$DEV_EXE"
 
 echo
 echo "Scenario 3: speech to text in the chat and in Zeus Editor (simulated recognizer)"

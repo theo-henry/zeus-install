@@ -4,10 +4,13 @@
 # (app/test/sim/payload/gh): no repo, release, or tag is made, and nothing is downloaded. Each part uses its own
 # temporary home folder; the real one is not used.
 #
-# Usage: app/test/update/run.sh [release] [install] [app] [settings]     (default: all four parts)
+# Usage: app/test/update/run.sh [release] [install] [app] [upgrade] [settings]     (default: all five parts)
 #   release   app/release.sh in a temporary copy of this repo. It builds the app for both architectures (slow).
 #   install   install-app.sh on a simulated new Mac: the access check first, then the newest app release.
 #   app       the app updates itself, starts its current version without access, and rolls back a failed update.
+#   upgrade   install-app.sh on a Mac with an older app and user data: it updates the app (also an open app),
+#             keeps every user data file, opens an app that is up to date, and puts the old app back when the
+#             new app does not start.
 #   settings  "Check for updates" and "Update now" of a chat page: the app updates while tabs are open and opens
 #             the same tabs again (sessions resumed, project, name, unsent text), also after a roll back.
 #
@@ -26,7 +29,7 @@ APP_DIR="$(cd "$TEST_DIR/../.." && pwd)"
 REPO_DIR="$(dirname "$APP_DIR")"
 SIM_DIR="$APP_DIR/test/sim"
 BUNDLE_ID="io.github.theo-henry.zeus"
-PARTS="${*:-release install app settings}"
+PARTS="${*:-release install app upgrade settings}"
 
 # The real path (/private/var, not /var): the app copies that macOS starts run from it, and pgrep sees that path.
 WORK="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/zeus-update-test.XXXXXX")" && pwd -P)"
@@ -121,7 +124,7 @@ publish() {
 
 app_version() { /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null; }
 
-if wants install || wants app || wants settings; then
+if wants install || wants app || wants upgrade || wants settings; then
   echo "Building the development app"
   DEV_APP="$("$APP_DIR/dev-bundle.sh" 2>/dev/null | tail -1)"
 fi
@@ -238,7 +241,7 @@ if wants install; then
 fi
 
 # ---------------------------------------------------------------------------------------------------------
-if wants app || wants settings; then
+if wants app || wants upgrade || wants settings; then
   BIN="$WORK/bin"
   mkdir -p "$BIN"
   cat >"$WORK/act.swift" <<'SWIFT'
@@ -404,9 +407,165 @@ if wants app; then
 fi
 
 # ---------------------------------------------------------------------------------------------------------
+if wants upgrade; then
+  echo
+  echo "Part 4: install-app.sh on a Mac with an older Zeus app and user data"
+  # upgrade_case <name> <installed version>: the app in a simulated Applications folder, a home folder with
+  # user data, and a simulated GitHub CLI. Git and the GitHub login are there; Anaconda installs (simulated).
+  upgrade_case() {
+    NAME="$1"
+    SANDBOX="$WORK/$1/home"
+    STATE="$WORK/$1/state"
+    APPS="$WORK/$1/Applications"
+    TRACE="$WORK/$1/trace.log"
+    OUT="$WORK/$1/out"
+    TEMP="$WORK/$1/tmp"
+    SUPPORT="$SANDBOX/Library/Application Support/Zeus"
+    mkdir -p "$SANDBOX/.local/bin" "$STATE/clt-dir/usr/bin" "$APPS" "$TEMP"
+    ln -sf /usr/bin/git "$STATE/clt-dir/usr/bin/git"
+    touch "$STATE/clt" "$STATE/gh-login"
+    printf 'export PATH="%s:/usr/bin:/bin:/usr/sbin:/sbin"\n' "$SIM_DIR/stubs" >"$SANDBOX/.zprofile"
+    cp "$SIM_DIR/payload/gh" "$SANDBOX/.local/bin/gh"
+    # The user data: the Zeus folder and its client projects, the Zeus settings and app state, the Claude chats
+    # and plugin data, and the saved window state.
+    local zeus="$SANDBOX/Code/zeus" claude="$SANDBOX/.claude" saved="$SANDBOX/Library/Saved Application State/$BUNDLE_ID.savedState"
+    mkdir -p "$zeus/.git" "$zeus/clients/acme/inbox" "$SUPPORT" "$claude/projects/-Users-sim-Code-zeus" \
+      "$claude/plugins/data/zeus-editor" "$saved"
+    echo "ref: refs/heads/main" >"$zeus/.git/HEAD"
+    printf '# Acme\nOpen points for the next workshop.\n' >"$zeus/clients/acme/notes.md"
+    head -c 4096 /dev/urandom >"$zeus/clients/acme/inbox/export.bin"
+    printf '{"version": 1, "shortcuts": {"app.toggleTerminal": "Shift+Cmd+J"}}\n' >"$SUPPORT/settings.json"
+    echo "user state" >"$SUPPORT/user-state"
+    printf '{"type":"user","message":"Unsent idea: compare the Q3 throughput"}\n' >"$claude/projects/-Users-sim-Code-zeus/chat.jsonl"
+    printf '{"enabledPlugins": {"zeus-editor@zeus-editor": true}}\n' >"$claude/settings.json"
+    printf '{"tabs": 3}\n' >"$claude/plugins/data/zeus-editor/state.json"
+    head -c 1024 /dev/urandom >"$saved/windows.plist"
+    make_app "$2" "$APPS"
+    defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
+    defaults write "$PREFS_DOMAIN" showMenuBar -bool false
+    # Each case stops all its app copies after CASE_LIMIT seconds; quit_opened then reports the case as failed.
+    stop_watchdog "$CASE_WATCHDOG"
+    ( sleep "$CASE_LIMIT" >/dev/null 2>&1; touch "$WORK/$1/timed-out"; stop_copies "$APPS" ) &
+    CASE_WATCHDOG=$!
+  }
+  # A checksum of every user data file, with its path.
+  user_data() {
+    (cd "$SANDBOX" && find Code .claude "Library/Application Support/Zeus" "Library/Saved Application State" -type f -print0 |
+      sort -z | xargs -0 shasum -a 256)
+  }
+  # The one-line install, stopped after 5 minutes. The app that it opens gets the test environment.
+  install_line() {
+    env HOME="$SANDBOX" TMPDIR="$TEMP" PATH="$SIM_DIR/stubs:/usr/bin:/bin:/usr/sbin:/sbin" \
+      ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" \
+      ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" ZEUS_INSTALL_ACCEPT_ANACONDA_LICENSE=yes ZEUS_APP_TRACE="$TRACE" \
+      ZEUS_INSTALL_URL="file://$REPO_DIR/install.sh" ZEUS_APP_DIR="$APPS" \
+      ZEUS_APP_OPEN_ENV="HOME ZEUS_APP_TRACE ZEUS_APP_TEST_ID ZEUS_APP_DEFAULTS_SUITE ZEUS_APP_TEST_BACKGROUND ZEUS_SIM_STATE ZEUS_SIM_PAYLOAD ZEUS_SIM_INSTALLER ZEUS_INSTALL_SYSTEM_CONDA_DIRS ZEUS_APP_NO_UPDATE ZEUS_APP_TEST_NO_CONFIRM" \
+      "$@" bash "$REPO_DIR/install-app.sh" >"$OUT" 2>&1 &
+    local pid=$! status=0 waited=0
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 600 ]; do sleep 0.5; waited=$((waited + 1)); done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "    (the install line did not end in 5 minutes)"
+      pkill -P "$pid" 2>/dev/null || true
+      kill "$pid" 2>/dev/null || true
+    fi
+    wait "$pid" || status=$?
+    return "$status"
+  }
+  # The inode of the app binary: a move keeps it, so the same inode is the same app bundle.
+  app_inode() { stat -f %i "$APPS/Zeus.app/Contents/MacOS/Zeus" 2>/dev/null; }
+  # Quits every copy of this case's app with the quit of the install line (quit_zeus_app in install.sh).
+  # The test actions (act) do not reach every copy that macOS opens with "open".
+  quit_opened() {
+    # shellcheck source=install.sh
+    if (export ZEUS_INSTALL_SOURCED=1 && source "$REPO_DIR/install.sh" && quit_zeus_app "$APPS") >/dev/null; then
+      pass "the app quits"
+    else
+      fail "the app quits"
+      stop_copies "$APPS"
+    fi
+    if [ -e "$WORK/$NAME/timed-out" ]; then fail "the case $NAME ends within ${CASE_LIMIT}s"; fi
+    stop_watchdog "$CASE_WATCHDOG"
+    CASE_WATCHDOG=""
+  }
+  # No old copy and no update.json are left.
+  no_update_files() { [ ! -e "$SUPPORT/update.json" ] && [ -z "$(ls -A "$TEMP" 2>/dev/null)" ]; }
+
+  upgrade_case upgrade 1.0.0
+  releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false"
+  publish "$STATE" app-v1.1.0 1.1.0
+  # The installed app is open. Like versions 0.1.0 to 0.1.2, it does not update itself.
+  launch ZEUS_APP_NO_UPDATE=1
+  OLD_PID="$APP_PID"
+  wait_for "setup ended: check=true" 60 || true
+  BEFORE="$(user_data)"
+  check "with an older app installed and open, the install line ends without an error" 'install_line'
+  check "it shows the installed and the newest version" \
+    'grep -q "is version 1.0.0; the newest version is 1.1.0" "$OUT" && grep -q "The Zeus app is updated from 1.0.0 to 1.1.0." "$OUT"'
+  check "it says that the projects, chats, and settings did not change" 'grep -q "Your projects, chats, and settings did not change." "$OUT"'
+  check "the open app closes with its own quit (not killed)" 'old_status=0; wait "$OLD_PID" || old_status=$?; [ "$old_status" = 0 ]'
+  check "the new app starts and confirms its start" 'wait_for "update: confirmed 1.0.0 -> 1.1.0" 10 && grep -q "launched: version=1.1.0" "$TRACE"'
+  check "the app in Applications is version 1.1.0 with a valid signature" \
+    '[ "$(app_version "$APPS/Zeus.app")" = 1.1.0 ] && codesign --verify --strict "$APPS/Zeus.app"'
+  check "the old app and update.json are removed after the confirmation" 'no_update_files'
+  check "every user data file is unchanged" '[ -n "$BEFORE" ] && [ "$(user_data)" = "$BEFORE" ]'
+  check "the app preferences are unchanged" '[ "$(defaults read "$PREFS_DOMAIN" showMenuBar)" = 0 ]'
+  check "one copy of the app runs" '[ "$(copies)" = 1 ]'
+  quit_opened
+
+  upgrade_case current 1.1.0
+  releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false"
+  publish "$STATE" app-v1.1.0 1.1.0
+  BEFORE="$(user_data)"
+  INODE="$(app_inode)"
+  check "with the newest app installed, the install line ends without an error" 'install_line'
+  check "it says that the app is already the newest version" 'grep -q "The Zeus app is already the newest version (1.1.0)." "$OUT"'
+  check "it downloads nothing and keeps the installed app" '! grep -q "release download" "$STATE/gh.log" && [ "$(app_inode)" = "$INODE" ]'
+  check "it opens the app" 'wait_for "launched: version=1.1.0" 60'
+  check "every user data file is unchanged" '[ -n "$BEFORE" ] && [ "$(user_data)" = "$BEFORE" ]'
+  quit_opened
+
+  upgrade_case rollback 1.0.0
+  releases "$STATE" "app-v1.1.0:false:false"
+  # A new app that stops at once.
+  make_app 1.1.0 "$WORK/rollback/build"
+  printf 'int main(void) { return 1; }\n' | xcrun clang -x c -o "$WORK/rollback/build/Zeus.app/Contents/MacOS/Zeus" -
+  codesign --force --sign - "$WORK/rollback/build/Zeus.app" 2>/dev/null
+  mkdir -p "$STATE/releases/app-v1.1.0"
+  ditto -c -k --keepParent "$WORK/rollback/build/Zeus.app" "$STATE/releases/app-v1.1.0/Zeus.zip"
+  (cd "$STATE/releases/app-v1.1.0" && shasum -a 256 Zeus.zip >Zeus.zip.sha256)
+  BEFORE="$(user_data)"
+  INODE="$(app_inode)"
+  check "when the new app does not start, the install line stops with an error" '! install_line ZEUS_APP_NO_UPDATE=1'
+  check "it says that the old app is back" 'grep -q "The Zeus app 1.1.0 did not start, so your Zeus app 1.0.0 is back." "$OUT"'
+  check "the app in Applications is the old app again (version 1.0.0, same bundle, valid signature)" \
+    '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && [ "$(app_inode)" = "$INODE" ] && codesign --verify --strict "$APPS/Zeus.app"'
+  check "no old copy and no update.json are left" 'no_update_files'
+  check "it opens the old app" 'wait_for "launched: version=1.0.0" 60'
+  check "every user data file is unchanged" '[ -n "$BEFORE" ] && [ "$(user_data)" = "$BEFORE" ]'
+  quit_opened
+
+  upgrade_case noconfirm 1.0.0
+  releases "$STATE" "app-v1.1.0:false:false"
+  publish "$STATE" app-v1.1.0 1.1.0
+  BEFORE="$(user_data)"
+  INODE="$(app_inode)"
+  echo "  (the new app starts but does not confirm; the install line waits 60 s)"
+  check "when the new app runs but does not confirm its start, the install line stops with an error" \
+    '! install_line ZEUS_APP_NO_UPDATE=1 ZEUS_APP_TEST_NO_CONFIRM=1'
+  check "the new app started without a confirmation" 'grep -q "launched: version=1.1.0" "$TRACE" && grep -q "update: not confirmed (test)" "$TRACE"'
+  check "it says that the old app is back" 'grep -q "The Zeus app 1.1.0 did not start, so your Zeus app 1.0.0 is back." "$OUT"'
+  check "the app in Applications is the old app again (version 1.0.0, same bundle, valid signature)" \
+    '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && [ "$(app_inode)" = "$INODE" ] && codesign --verify --strict "$APPS/Zeus.app"'
+  check "no old copy and no update.json are left" 'no_update_files'
+  check "the new app is stopped and the old app opens" 'wait_for "launched: version=1.0.0" 60 && [ "$(copies)" = 1 ]'
+  check "every user data file is unchanged" '[ -n "$BEFORE" ] && [ "$(user_data)" = "$BEFORE" ]'
+  quit_opened
+fi
+
+# ---------------------------------------------------------------------------------------------------------
 if wants settings; then
   echo
-  echo "Part 4: the update from the settings of a Zeus page"
+  echo "Part 5: the update from the settings of a Zeus page"
   REAL_NODE="$(command -v node)"
   # wanted_case <name>: ZEUS_UPDATE_TEST_CASES (case names, separated by spaces) runs only those cases of this part.
   wanted_case() { [ -z "${ZEUS_UPDATE_TEST_CASES:-}" ] || case " $ZEUS_UPDATE_TEST_CASES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }

@@ -29,6 +29,7 @@ enum Updater {
     }
 
     /// An update in progress, in a file that the old and the new copy of the app both read.
+    /// install.sh writes the same file when it updates an installed app; it is then the waiting process.
     struct Pending: Codable {
         var from: String
         var to: String
@@ -37,7 +38,7 @@ enum Updater {
         var backupPath: String
         /// The folder of the update files, removed at the end.
         var workPath: String
-        /// The old copy, which waits for the confirmation.
+        /// The old copy (or install.sh), which waits for the confirmation.
         var waitingPID: Int32
         /// The new copy, which writes its process ID at launch. The app that `openApplication` gives can be a
         /// placeholder without a process (pid -1) while the new copy still starts.
