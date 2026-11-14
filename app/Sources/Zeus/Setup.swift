@@ -29,7 +29,7 @@ final class SetupModel: ObservableObject {
         Step(id: 4, name: "GitHub login", note: "Your browser opens. You enter a one-time code."),
         Step(id: 5, name: "Access to the Zeus repos", note: "Checked each time. Ask Theo for access if it fails."),
         Step(id: 6, name: "Node.js", note: ""),
-        Step(id: 7, name: "Claude Code", note: ""),
+        Step(id: 7, name: "Claude Code", note: "Installed or updated."),
         Step(id: 8, name: "Celonis content-cli", note: ""),
         Step(id: 9, name: "Zeus workspace", note: "Copied to ~/Code/zeus, or updated there."),
         Step(id: 10, name: "Zeus Editor plugin", note: "Installed or updated."),

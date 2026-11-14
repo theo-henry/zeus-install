@@ -121,7 +121,7 @@ The installer skips each step that is already done.
 | 4 | GitHub login in the browser | You are already logged in. |
 | 5 | Check of your access to all the private Zeus repos (`zeus`, `zeus-editor`, `YAML-builder`, `celonis-ocpm`, `celonis-pql`) | Never skipped. It only reads. The installer lists all the repos you cannot reach and stops here, before it installs more. |
 | 6 | Node.js 24 in `~/.local/node` | Node.js 18.20.5 or later is already installed. |
-| 7 | Claude Code | `claude` is already installed. |
+| 7 | Claude Code, or an update of an installed Claude Code to the newest version, with the method that installed it: `claude update` (the native install), npm (an npm install, in its own folder), or Homebrew (`brew upgrade --cask`). The summary shows the version. | Never skipped. When Claude Code is already the newest version, the summary shows "up to date". A failed update, or an update that does not finish in 5 minutes, is a warning: the installer continues with the installed version and tells you how to update it later. |
 | 8 | Celonis content-cli | `content-cli` is already installed. |
 | 9 | Copy of the zeus repo to `~/Code/zeus`, or an update of an existing copy (fast-forward only, local work is never discarded) | The copy is already up to date or already has the Zeus version that Zeus Editor needs, or it cannot update safely. Then the installer tells you how Zeus gets the update. |
 | 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. |
@@ -131,7 +131,7 @@ The installer skips each step that is already done.
 The installer does not use `sudo`.
 Your Mac password can be necessary only for the Apple pop-up in step 1.
 The installer asks you to accept the Anaconda license before it installs Anaconda.
-Logs for Anaconda and the GitHub CLI are in `~/Library/Logs/zeus-install`.
+Logs for Anaconda, the GitHub CLI, and the Claude Code update are in `~/Library/Logs/zeus-install`.
 
 ## After the install
 
