@@ -17,7 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private let statusMenu = StatusMenu()
     /// The menu item of each app action, which shows and runs its shortcut from the Zeus settings.
     private var actionItems: [AppAction: NSMenuItem] = [:]
-    /// The update check at launch runs; only its loading screen shows, and no Zeus session opens until it ends.
+    /// The update check at launch runs, or an update from the settings installs; only its loading screen shows,
+    /// and no Zeus session opens until it ends.
     private var updating = false
     #if DEBUG
     /// The user's pasteboard before the paste test actions, given back by "test-pasteboard-restore".
@@ -31,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         ShortcutSettings.shared.start()
         statusMenu.app = self
         statusMenu.update()
+        AppUpdate.shared.app = self
         listenForTestActions()
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil,
                                                           queue: .main) { [weak self] _ in
@@ -40,10 +42,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
 
         Trace.log("launched: version=\(Updater.currentVersion) setupNeeded=\(setupNeeded)")
-        // The new copy of an updated app tells the old copy that it runs, and does not check again.
-        if Updater.confirmPendingUpdate() {
-            startZeus()
+        // The new copy of an updated app tells the old copy that it runs, does not check again, and opens the tabs
+        // of an update from the settings again.
+        switch Updater.confirmPendingUpdate() {
+        case .newCopy:
+            startZeus(restoring: true)
             return
+        case .unconfirmed:
+            return
+        case .late:
+            NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+            return
+        case .normal:
+            TabRestore.remove()
         }
 
         // First setup: the app puts itself in /Applications and continues from there.
@@ -61,9 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
-    private func startZeus() {
+    private func startZeus(restoring: Bool = false) {
         if setupNeeded {
             showSetup(nil)
+        } else if restoring, let restore = TabRestore.take(), restore.tabCount > 0 {
+            reopenTabs(restore)
         } else {
             newChat(nil)
         }
@@ -227,7 +240,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             Front.activate()
             return
         }
-        let tab = ChatTab(session: session)
+        let tab = makeTab(session)
+        // New chats open as tabs of the chat window in use, like new tabs in a browser.
+        let host = keyChatWindow ?? chatWindows.last ?? makeChatWindow()
+        host.add(tab)
+        Front.show(host.window)
+        Front.activate()
+    }
+
+    private func makeTab(_ session: ZeusSession, restore: TabRestore.Tab? = nil) -> ChatTab {
+        let tab = ChatTab(session: session, restore: restore)
         tab.onClosed = { [weak self] closed in self?.chatTabs.removeAll { $0 === closed } }
         tab.onRetry = { [weak self, weak tab] in
             tab?.requestClose()
@@ -238,16 +260,130 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             self?.showSetup(nil)
         }
         chatTabs.append(tab)
-        // New chats open as tabs of the chat window in use, like new tabs in a browser.
-        let host = keyChatWindow ?? chatWindows.last ?? {
-            let window = ChatWindowController()
-            window.onClosed = { [weak self] closed in self?.chatWindows.removeAll { $0 === closed } }
-            chatWindows.append(window)
-            return window
-        }()
-        host.add(tab)
-        Front.show(host.window)
-        Front.activate()
+        return tab
+    }
+
+    private func makeChatWindow() -> ChatWindowController {
+        let window = ChatWindowController()
+        window.onClosed = { [weak self] closed in self?.chatWindows.removeAll { $0 === closed } }
+        chatWindows.append(window)
+        return window
+    }
+
+    // MARK: Update from the settings
+
+    /// The chat pages of all tabs, for the update events.
+    var chatPages: [WKWebView] { chatTabs.map(\.webView) }
+
+    /// The number of tabs where Zeus works, a message is on its way, or Zeus starts: the update waits for them.
+    func busyTabCount(completion: @escaping (Int) -> Void) {
+        let tabs = chatTabs
+        guard !tabs.isEmpty else { completion(0); return }
+        var busy = 0
+        var remaining = tabs.count
+        for tab in tabs {
+            tab.isBusy { isBusy in
+                if isBusy { busy += 1 }
+                remaining -= 1
+                if remaining == 0 { completion(busy) }
+            }
+        }
+    }
+
+    /// Shows the loading screen in the place of the front chat window and hides the chat windows, so that no message
+    /// can start a turn; then keeps the tabs for the new copy (`TabRestore`) and ends every session.
+    /// Calls `completion` with the kept tabs when the sessions have ended, or with nil (and shows the chat windows
+    /// again) when a tab started to work before the windows were hidden: the update then waits again.
+    func endTabsForUpdate(to version: String, completion: @escaping (TabRestore?) -> Void) {
+        updating = true
+        // The front chat window first, so that it is the window that the loading screen replaces.
+        let ordered = NSApp.orderedWindows.compactMap { $0.windowController as? ChatWindowController }
+        let windows = ordered + chatWindows.filter { window in !ordered.contains { $0 === window } }
+        UpdateWindow.shared.show(status: "Installing Zeus \(version)…", frame: windows.first?.window?.frame)
+        windows.forEach { $0.window?.orderOut(nil) }
+        // A message sent just before the windows were hidden can have started a turn.
+        busyTabCount { [weak self] busy in
+            guard let self else { return }
+            guard busy == 0 else {
+                Trace.log("update: \(busy) tabs work again; the update waits")
+                self.updating = false
+                windows.forEach { Front.show($0.window) }
+                UpdateWindow.shared.close()
+                completion(nil)
+                return
+            }
+            self.keepAndEndTabs(windows, version: version, completion: completion)
+        }
+    }
+
+    private func keepAndEndTabs(_ windows: [ChatWindowController], version: String, completion: @escaping (TabRestore?) -> Void) {
+        setupWindow?.window?.close()
+        setupWindow = nil
+        var kept = windows.map { TabRestore.Window(frame: NSStringFromRect($0.window?.frame ?? .zero), tabs: []) }
+        let group = DispatchGroup()
+        for (index, window) in windows.enumerated() {
+            kept[index].tabs = Array(repeating: TabRestore.Tab(terminalVisible: false, selected: false), count: window.tabs.count)
+            for (position, tab) in window.tabs.enumerated() {
+                group.enter()
+                tab.snapshot { snapshot in
+                    kept[index].tabs[position] = snapshot
+                    group.leave()
+                }
+            }
+        }
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            let restore = TabRestore(version: version, createdAt: Date(), windows: kept.filter { !$0.tabs.isEmpty })
+            do {
+                try restore.write()
+            } catch {
+                Trace.log("restore: not written: \(error.localizedDescription)")
+            }
+            Trace.log("update: ending \(restore.tabCount) tabs for \(version)")
+            SpeechService.shared.cancelAll(reason: "app updates")
+            for tab in self.chatTabs { tab.closeForUpdate() }
+            SessionManager.shared.waitUntilEnded(timeout: 12) {
+                UpdateWindow.shared.setStatus("Starting Zeus \(version)…")
+                completion(restore)
+            }
+        }
+    }
+
+    /// The new copy did not start: this copy opens the same tabs again and says why.
+    func reopenAfterFailedUpdate(_ restore: TabRestore, version: String) {
+        updating = false
+        reopenTabs(restore)
+        let alert = NSAlert()
+        alert.messageText = "Zeus \(version) did not start"
+        alert.informativeText = "Zeus stays on version \(Updater.currentVersion). Your tabs are open again."
+        alert.addButton(withTitle: "OK")
+        if let window = chatWindows.last?.window { Front.beginSheet(alert, for: window) { _ in } }
+        Trace.log("update: tabs open again after the failed update to \(version)")
+    }
+
+    /// Opens the kept tabs in their windows, with their sessions resumed.
+    private func reopenTabs(_ restore: TabRestore) {
+        Trace.log("restore: \(restore.tabCount) tabs in \(restore.windows.count) windows")
+        for saved in restore.windows.reversed() {
+            let host = makeChatWindow()
+            let frame = NSRectFromString(saved.frame)
+            if frame.width > 0, frame.height > 0 { host.window?.setFrame(frame, display: false) }
+            var selected: ChatTab?
+            for state in saved.tabs {
+                do {
+                    let session = try SessionManager.shared.start()
+                    Trace.log("session \(session.pid) started (restore)")
+                    let tab = makeTab(session, restore: state)
+                    host.add(tab)
+                    if state.selected { selected = tab }
+                } catch {
+                    Trace.log("session not started: \(error.localizedDescription)")
+                }
+            }
+            if let selected { host.select(selected) }
+            if host.tabs.isEmpty { host.window?.close() } else { Front.show(host.window) }
+        }
+        if chatTabs.isEmpty { newChat(nil) }
     }
 
     /// The key window, or the front window of the app while another app is active.
@@ -358,6 +494,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     Trace.log("test page: \(result ?? error?.localizedDescription ?? "empty")")
                 }
             case "test-terminal-input": self.chatTabs.last?.testTerminalInput()
+            // Types text in the terminal of the last tab, without Enter.
+            case "test-terminal-type": self.chatTabs.last?.testTerminalInput(argument)
+            // The chat page of the last tab posts a message to the app ("test-post:{\"type\":\"app-update-check\"}"),
+            // and "test-update-page" writes the update events that the page got into the trace.
+            case "test-post":
+                self.chatTabs.last?.webView.callAsyncJavaScript("window.webkit.messageHandlers.zeusApp.postMessage(JSON.parse(message))",
+                                                               arguments: ["message": argument], in: nil, in: .page)
+            case "test-update-page":
+                self.chatTabs.last?.webView.evaluateJavaScript("JSON.stringify({version: window.zeusApp?.update?.version ?? null, events: window.updateEvents ?? null})") { result, error in
+                    Trace.log("update page: \(result ?? error?.localizedDescription ?? "empty")")
+                }
             // Paste: "test-pasteboard" puts the text on the pasteboard ("\\n" is a line end) and keeps the user's pasteboard
             // until "test-pasteboard-restore". "test-paste" is Edit > Paste, where Cmd+V also ends, in the chat window; that
             // window may not be the key window (the test app stays behind the other apps), so it goes to its first responder.

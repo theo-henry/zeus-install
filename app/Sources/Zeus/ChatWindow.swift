@@ -36,12 +36,21 @@ final class ChatTab: NSObject {
     private var closeGeneration = 0
     private var closed = false
 
+    /// The tab as it was before an update from the settings, which this tab opens again (`TabRestore`).
+    private let restore: TabRestore.Tab?
+    private enum Resume { case none, waiting, running, done }
+    /// The Claude Code session of `restore` resumes before the chat page loads.
+    private var resume = Resume.none
+    /// The unsent text of `restore` goes back into the message box once.
+    private var draftRestored = false
+
     var onRunSetup: (() -> Void)?
     var onRetry: (() -> Void)?
     var onClosed: ((ChatTab) -> Void)?
 
-    init(session: ZeusSession) {
+    init(session: ZeusSession, restore: TabRestore.Tab? = nil) {
         self.session = session
+        self.restore = restore
         super.init()
 
         webView = handler.makeWebView()
@@ -49,7 +58,12 @@ final class ChatTab: NSObject {
         // The window's Zeus background shows until the first page paints, not a gray frame.
         webView.setValue(false, forKey: "drawsBackground")
         terminal = TerminalPanel(session: session)
-        terminal.webView.isHidden = true
+        terminal.webView.isHidden = !(restore?.terminalVisible ?? false)
+        if let restore {
+            tabName.setProject(restore.project)
+            tabName.rename(restore.customName)
+            if restore.sessionID != nil || restore.terminalDraft != nil { resume = .waiting }
+        }
         makeCloseBanner()
         let content = self.view
         for part in [closeBanner, webView!, terminal.webView] { content.addArrangedSubview(part) }
@@ -71,6 +85,7 @@ final class ChatTab: NSObject {
             guard let self else { return }
             if self.host?.selectedTab === self { WebViewHandler.matchTitleBar(of: webView.window, to: webView) }
             guard self.shownURL != nil, webView.url == self.shownURL else { return }
+            self.restoreDraft()
             // After the first chat, the page comes in as soon as it is loaded.
             guard !Self.greeted else { self.handOver(); return }
             // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.
@@ -91,6 +106,18 @@ final class ChatTab: NSObject {
             showLoader()
         case let .running(url):
             guard shownURL != url else { return }
+            // A tab that an update opens again first resumes its Claude Code session, then shows the chat.
+            switch resume {
+            case .waiting:
+                resume = .running
+                loader?.setStatus("Opening the chat again…")
+                resumeSession(url: url)
+                return
+            case .running:
+                return
+            case .none, .done:
+                break
+            }
             shownURL = url
             loader?.setStatus("Opening the chat…")
             webView.load(URLRequest(url: url))   // Behind the loading screen, until the hand-over.
@@ -135,7 +162,7 @@ final class ChatTab: NSObject {
     }
 
     private func updateLoaderStatus() {
-        guard shownURL == nil, let loader else { return }
+        guard shownURL == nil, resume != .running, let loader else { return }
         let updating = session.log.lines.suffix(30).contains { $0.range(of: "updat", options: .caseInsensitive) != nil }
         loader.setStatus(updating ? "Checking for updates…" : "Starting Zeus…")
     }
@@ -220,6 +247,148 @@ final class ChatTab: NSObject {
         if shownURL != nil { webView.reload() } else { render() }
     }
 
+    // MARK: Update from the settings
+
+    /// The composer of the Zeus chat (zeus-editor src/chat/client, `#zeus-message`).
+    private static let draftScript = "document.getElementById('zeus-message')?.value ?? null"
+
+    /// The tab as it is now, for the new copy of the app: the Claude Code session and the terminal's unsent text
+    /// from the launcher, the unsent text of the message box from the page.
+    func snapshot(completion: @escaping (TabRestore.Tab) -> Void) {
+        var tab = TabRestore.Tab(sessionID: nil, project: tabName.project, customName: tabName.custom, draft: nil,
+                                 terminalDraft: nil, terminalVisible: !terminal.webView.isHidden,
+                                 selected: host?.selectedTab === self)
+        // A tab that has not shown its chat yet keeps what it was to open again.
+        if shownURL == nil, let restore {
+            tab.sessionID = restore.sessionID
+            tab.draft = restore.draft
+            tab.terminalDraft = restore.terminalDraft
+        }
+        let group = DispatchGroup()
+        let launchID = session.launchID, chatURL = session.chatURL
+        var launcherState: [String: Any]?
+        if chatURL != nil {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: chatURL) {
+                    launcherState = LaunchControl.request(endpoint, ["op": "state"], timeout: 3)
+                }
+                group.leave()
+            }
+        }
+        var pageDraft: String?
+        if shownURL != nil {
+            group.enter()
+            webView.evaluateJavaScript(Self.draftScript) { result, _ in
+                pageDraft = result as? String
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { [weak self] in
+            if let state = launcherState {
+                if let id = state["sessionId"] as? String, !id.isEmpty { tab.sessionID = id }
+                let input = state["input"] as? [String: Any]
+                tab.terminalDraft = (input?["draft"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            }
+            if self?.shownURL != nil { tab.draft = pageDraft.flatMap { $0.isEmpty ? nil : $0 } }
+            Trace.log("snapshot: \(self?.session.pid ?? 0) session=\(tab.sessionID ?? "-") project=\(tab.project ?? "-") draft=\(tab.draft?.count ?? 0) terminal-draft=\(tab.terminalDraft?.count ?? 0)")
+            completion(tab)
+        }
+    }
+
+    /// Zeus works in the tab: a turn, a question or permission prompt in a turn, a message on its way, or a start.
+    /// The chat answers the close check with the first reason only (unsent text before work), so the launcher
+    /// state tells the rest. Calls back on the main queue.
+    func isBusy(completion: @escaping (Bool) -> Void) {
+        if session.isAlive, shownURL == nil {
+            DispatchQueue.main.async { completion(true) }
+            return
+        }
+        closeState { [weak self] reason in
+            if let reason, ["busy", "pending-message", "starting"].contains(reason) {
+                DispatchQueue.main.async { completion(true) }
+                return
+            }
+            guard let self, reason != nil else { DispatchQueue.main.async { completion(false) }; return }
+            let launchID = self.session.launchID, chatURL = self.session.chatURL
+            DispatchQueue.global(qos: .userInitiated).async {
+                var busy = false
+                if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: chatURL),
+                   let state = LaunchControl.request(endpoint, ["op": "state"], timeout: 3) {
+                    let status = state["status"] as? String
+                    busy = status == "busy" || status == "waiting" || state["restarting"] as? Bool == true
+                        || !((state["pending"] as? [Any])?.isEmpty ?? true)
+                }
+                DispatchQueue.main.async { completion(busy) }
+            }
+        }
+    }
+
+    /// Ends the session for an update, without the close check: the update waited for the turns, and the new copy
+    /// opens the tab again with its unsent text.
+    func closeForUpdate() { finishClose() }
+
+    /// Restarts Claude Code in the new launch with `--resume` for the session of the tab, then types the terminal's
+    /// unsent text back when Claude Code is ready for it.
+    private func resumeSession(url: URL) {
+        guard let restore else { return }
+        let launchID = session.launchID, pid = session.pid
+        let terminalDraft = restore.terminalDraft?.replacingOccurrences(of: "\r", with: "")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var resumed = false
+            var ready = false
+            if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: url) {
+                if let id = restore.sessionID {
+                    resumed = LaunchControl.request(endpoint, ["op": "restart", "resume": id], timeout: 30) != nil
+                }
+                if let terminalDraft, !terminalDraft.isEmpty {
+                    // Claude Code shows an empty input box when it is ready for typing.
+                    let deadline = Date().addingTimeInterval(30)
+                    while !ready, Date() < deadline {
+                        let input = LaunchControl.request(endpoint, ["op": "state"], timeout: 3)?["input"] as? [String: Any]
+                        ready = input?["present"] as? Bool == true && input?["empty"] as? Bool == true
+                        if !ready { usleep(300_000) }
+                    }
+                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                Trace.log("restore: \(pid) resume=\(restore.sessionID ?? "-") \(resumed ? "ok" : "not resumed")")
+                guard let self, !self.closed else { return }
+                if ready, let terminalDraft {
+                    // A text of several lines goes in as a paste, so that its line ends do not send it.
+                    self.session.write(terminalDraft.contains("\n") ? "\u{1b}[200~\(terminalDraft)\u{1b}[201~" : terminalDraft)
+                    Trace.log("restore: \(pid) terminal text back")
+                }
+                self.resume = .done
+                self.render()
+            }
+        }
+    }
+
+    /// Puts the unsent text back into the message box of the chat page, when the box is empty.
+    private func restoreDraft() {
+        guard !draftRestored, let draft = restore?.draft, !draft.isEmpty else { return }
+        draftRestored = true
+        let script = """
+            for (let i = 0; i < 150; i++) {
+              const box = document.getElementById('zeus-message');
+              if (box) {
+                if (!box.value) {
+                  box.value = draft;
+                  box.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                return box.value === draft;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            return false;
+            """
+        let pid = session.pid
+        webView.callAsyncJavaScript(script, arguments: ["draft": draft], in: nil, in: .page) { result in
+            Trace.log("restore: \(pid) message box text back=\((try? result.get()) as? Bool ?? false)")
+        }
+    }
+
     @objc func toggleTerminal(_ sender: Any? = nil) {
         terminal.webView.isHidden.toggle()
         keyboardWasInTerminal = !terminal.webView.isHidden
@@ -228,7 +397,9 @@ final class ChatTab: NSObject {
         Trace.log("terminal visible: \(session.pid) \(!terminal.webView.isHidden)")
     }
 
-    func testTerminalInput() { terminal.webView.evaluateJavaScript("term.input('terminal-test\\r', true)") }
+    func testTerminalInput(_ text: String = "terminal-test\r") {
+        terminal.webView.callAsyncJavaScript("term.input(text, true)", arguments: ["text": text], in: nil, in: .page)
+    }
 
     #if DEBUG
     /// Test actions: a mouse click in the message box of the chat page or in the terminal, as the user clicks,

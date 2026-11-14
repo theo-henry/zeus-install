@@ -17,12 +17,14 @@ SIM_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SIM_DIR/../.." && pwd)"
 REPO_DIR="$(dirname "$APP_DIR")"
 SHOTS="${1:-}"
-BUNDLE_ID="io.github.theo-henry.zeus"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
 BIN="$WORK/bin"
 # Test actions reach only the app copy that this test starts, not another running Zeus app.
 export ZEUS_APP_TEST_ID="sim-$$"
+# The app copies of this run keep their settings in a domain of their own, not in the settings of the user.
+export ZEUS_APP_DEFAULTS_SUITE="io.github.theo-henry.zeus.test-$ZEUS_APP_TEST_ID"
+PREFS_DOMAIN="$ZEUS_APP_DEFAULTS_SUITE"
 # The app stays behind the windows of other apps and does not take the keyboard (debug builds).
 export ZEUS_APP_TEST_BACKGROUND=1
 mkdir -p "$BIN"
@@ -66,14 +68,13 @@ APP="$("$APP_DIR/dev-bundle.sh" 2>/dev/null | tail -1)"
 EXE="$APP/Contents/MacOS/Zeus"
 
 REAL_NODE="$(command -v node)"
-PREFS_BACKUP="$WORK/prefs.plist"
-defaults export "$BUNDLE_ID" "$PREFS_BACKUP" 2>/dev/null || rm -f "$PREFS_BACKUP"
 APP_PID=""
 
 cleanup() {
   [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
-  defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
-  [ -f "$PREFS_BACKUP" ] && defaults import "$BUNDLE_ID" "$PREFS_BACKUP"
+  defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
+  # defaults delete can leave the empty settings file of the domain.
+  rm -f "$HOME/Library/Preferences/$PREFS_DOMAIN.plist"
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -86,7 +87,11 @@ shot() {
   sleep 0.8
   local id
   id="$("$BIN/windows" "$APP_PID" | head -1 | awk '{print $1}')"
-  [ -n "$id" ] && screencapture -x -o -l "$id" "$SHOTS/$1.png"
+  # A screenshot is evidence, not a check: a failed capture must not end the test.
+  if [ -z "$id" ] || ! screencapture -x -o -l "$id" "$SHOTS/$1.png"; then
+    echo "    (screenshot $1 not saved)"
+  fi
+  return 0
 }
 
 # wait_for <trace pattern> [seconds]
@@ -126,8 +131,8 @@ keyboard_has() {
   wait_count "test keyboard: " $((before + 1)) 10 >/dev/null && grep "test keyboard: " "$TRACE" | tail -1 | grep -qF -- "$1"
 }
 
-# pty_got <text>: the simulated zeus of a tab got this text as terminal input. Its terminal gives it a line only at
-# the line end, so the text must be followed by one.
+# pty_got <text>: the simulated zeus of a tab got this text as terminal input. Its terminal is in raw mode, as the
+# terminal of zeus: the text comes in at once, without a line end.
 pty_got() { grep -q "input [0-9a-f]*$(printf %s "$1" | xxd -p | tr -d '\n')" "$STATE/sessions"; }
 
 # wait_starts <count>: waits until that many simulated zeus sessions have started.
@@ -148,7 +153,7 @@ start_app() {
   mkdir -p "$SANDBOX" "$STATE"
   # A new Mac: no tools in the home folder, and the simulated tools before the system ones.
   printf 'export PATH="%s:/usr/bin:/bin:/usr/sbin:/sbin"\n' "$SIM_DIR/stubs" >"$SANDBOX/.zprofile"
-  defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
+  defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
   launch_app "$@"
 }
 
@@ -271,7 +276,8 @@ act test-cmd-j
 check "the per-tab terminal opens" 'wait_for "terminal visible: .* true" 10'
 act test-terminal-input
 sleep 1
-check "xterm input reaches the live PTY" 'grep -q "input 7465726d696e616c2d746573740a" "$STATE/sessions"'
+# The simulated zeus reads its terminal in raw mode, as zeus does: Enter comes in as \r.
+check "xterm input reaches the live PTY" 'grep -q "input 7465726d696e616c2d746573740d" "$STATE/sessions"'
 shot 8-terminal-tabs
 # A paste goes where the user clicked. The test app is behind the other apps, so each click here is the click that
 # only brings the window to the front, which the page does not get: that click must still move the keyboard.
@@ -353,7 +359,7 @@ check "quit stops every remaining PTY" '[ "$(stops)" = 7 ]'
 
 echo
 echo "Scenario 2: a cancelled logout, then a quit and a logout while one tab has a draft and one tab is busy"
-defaults write "$BUNDLE_ID" setupDone -bool true
+defaults write "$PREFS_DOMAIN" setupDone -bool true
 launch_app logout
 check "the app opens a chat at once after the setup" 'wait_for "page loaded: http://127.0.0.1" 30'
 act test-draft
@@ -571,10 +577,13 @@ printf '%s\n' '{"version": 1, "shortcuts": {"app.newTab": "Shift+Cmd+;"}}' >"$SE
 check "a symbol key shortcut applies" 'wait_for "shortcuts: app.newTab=Shift+Cmd+; $DEFAULT_SHORTCUTS (file)" 10'
 act test-open-editor
 check "a Zeus Editor page opens" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/editor" 10'
+hand_overs="$(grep -c "hand-over: " "$TRACE" || true)"
 act "test-editor-key:Shift+Cmd+;"
 check "the shortcut opens a tab from a Zeus Editor window" 'wait_starts $((starts + 4))'
 act test-close-editor
 rm -f "$SETTINGS"
+# Settings… goes to the chat page of the tab in front, so the new tab shows its chat page first.
+wait_count "hand-over: " $((hand_overs + 1)) 30 >/dev/null
 act test-settings
 check "Settings… opens the settings of the chat page in front" 'wait_for "settings opened" 10 && shortcuts_page_has "\"settings\":1"'
 shot 13-shortcuts
