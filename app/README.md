@@ -125,7 +125,7 @@ It sends 1 MiB to a raw-mode terminal and checks that every byte arrives, that a
 ## Test the releases and the self-update
 
 ```bash
-app/test/update/run.sh [release] [install] [app]
+app/test/update/run.sh [release] [install] [app] [upgrade]
 ```
 
 GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is made, and nothing is downloaded.
@@ -137,6 +137,12 @@ GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is mad
 3. `app`: the app updates itself from 1.0.0 to 1.1.0, restarts in the new version, and keeps the user state;
    it starts its current version when it is up to date, without access, or when the download is damaged or is not Zeus;
    when the new copy does not confirm, the old copy is put back.
+4. `upgrade`: `install-app.sh` on a Mac with an older app and user data (the Zeus folder and its client projects, the Zeus settings,
+   the Claude chats and plugin data, and the saved window state) closes the open older app with its own quit, shows both versions,
+   puts the newest release in its place, and opens it; the new app confirms its start in `update.json`, as after a self-update,
+   and the old copy is then removed. Every user data file stays byte-identical.
+   With the newest app installed, it downloads nothing and opens the app;
+   when the new app stops at once, or runs but does not confirm within 60 s, it puts the same old app bundle back and opens it.
 
 ## Test the plugin scope
 
@@ -175,6 +181,7 @@ It presses the app's buttons through the debug test actions and checks the trace
 2. One tab has unsent text and one tab is busy: a logout that another app cancels changes nothing, a later quit asks about both tabs,
    and a logout while that question is open stops every session and quits within 12 s without an answer;
    the quit event of a logout while a quit still checks the tabs asks nothing, also after the check, and quits within 12 s.
+   The quit of the install line (`quit_zeus_app` in `install.sh`) asks about unsent text as the app's own quit does, and the install line waits.
 3. Speech to text with a simulated recognizer (`ZEUS_APP_TEST_SPEECH`, debug builds): the chat page keeps `window.zeusApp.speech` after it sets `window.zeusApp`;
    the languages and the default come to the page; a start listens, the words come in, and a stop gives the final text, which replaces only the dictated part of the message;
    a second start is busy; a language without recognition on the Mac gives `no-on-device`; showing another tab stops it; it runs in a Zeus Editor page,

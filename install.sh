@@ -13,6 +13,9 @@
 #   ZEUS_APP_REPO="owner/name"               replaces the private repo with the Zeus app releases (for tests).
 #   ZEUS_APP_DIR=...                         installs the Zeus app into this folder, not /Applications (for tests).
 #   ZEUS_APP_NO_OPEN=1                       installs the Zeus app but does not open it (for tests).
+#   ZEUS_APP_OPEN_ENV="NAME ..."             gives these environment variables (such as HOME) to the Zeus app that the
+#                                             installer opens (for tests). ZEUS_APP_TEST_BACKGROUND=1 opens it behind
+#                                             the other apps.
 #   ZEUS_INSTALL_APP=1                        app mode, used by Zeus.app. It adds two steps (the Zeus skill plugins and
 #                                             the Claude login) and prints machine-readable lines that start with
 #                                             "@@zeus " so that the app can show a checklist. Terminal use is unchanged.
@@ -68,7 +71,6 @@ SKILL_PLUGINS="celonis-yaml-builder@yaml-builder:theo-henry/YAML-builder celonis
 # App releases have tags "app-v<version>" (see app/release.sh); other releases of the repo are not used.
 ZEUS_APP_REPO="${ZEUS_APP_REPO:-$ZEUS_REPO}"
 APP_BUNDLE_ID="io.github.theo-henry.zeus"
-APP_INSTALLED=""
 APP_ONLY=""
 if [ "${1:-}" = "--app-only" ]; then APP_ONLY=1; fi
 # Terminal use: step 12 installs the Zeus app. App mode: steps 12 and 13 finish the setup that the app needs.
@@ -662,15 +664,16 @@ latest_app_tag() {
   printf '%s\n' "$tags" | grep -E '^app-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 | grep .
 }
 
-# Downloads the newest Zeus app release with gh into $1/unpacked/Zeus.app and checks it: the checksum,
+# plist_value <app bundle> <key>: prints a value of the Info.plist of the app, or nothing.
+plist_value() {
+  /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null || true
+}
+
+# Downloads the Zeus app release with tag $2 with gh into $1/unpacked/Zeus.app and checks it: the checksum,
 # the zip, the bundle identifier, the version, and the signature. On failure, sets APP_ERROR and returns 1.
 APP_ERROR=""
 download_zeus_app() {
-  local dir="$1" tag version expected actual plist
-  if ! tag="$(latest_app_tag)"; then
-    APP_ERROR="No Zeus app release was found in $ZEUS_APP_REPO."
-    return 1
-  fi
+  local dir="$1" tag="$2" version expected actual app
   version="${tag#app-v}"
   info "Downloading the Zeus app $version"
   mkdir -p "$dir"
@@ -685,74 +688,325 @@ download_zeus_app() {
     APP_ERROR="The Zeus app download is damaged or changed (checksum mismatch)."
     return 1
   fi
-  plist="$dir/unpacked/Zeus.app/Contents/Info.plist"
-  if ! ditto -x -k "$dir/Zeus.zip" "$dir/unpacked" 2>/dev/null || [ ! -f "$plist" ]; then
+  app="$dir/unpacked/Zeus.app"
+  if ! ditto -x -k "$dir/Zeus.zip" "$dir/unpacked" 2>/dev/null || [ ! -f "$app/Contents/Info.plist" ]; then
     APP_ERROR="The Zeus app download is damaged (no Zeus.app in Zeus.zip)."
     return 1
   fi
-  if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null)" != "$APP_BUNDLE_ID" ] ||
-    [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null)" != "$version" ]; then
+  if [ "$(plist_value "$app" CFBundleIdentifier)" != "$APP_BUNDLE_ID" ] ||
+    [ "$(plist_value "$app" CFBundleShortVersionString)" != "$version" ]; then
     APP_ERROR="The Zeus app in the download is not Zeus $version."
     return 1
   fi
-  if ! codesign --verify --strict "$dir/unpacked/Zeus.app" 2>/dev/null; then
+  if ! codesign --verify --strict "$app" 2>/dev/null; then
     APP_ERROR="The Zeus app in the download is damaged or changed (signature check failed)."
     return 1
   fi
 }
 
-# Asks a running Zeus app to quit, so that it can be replaced. Its sessions stop as when you quit it yourself.
-# A tab with unsent text or work in progress makes the app ask first. Returns 1 when the app is still open.
+# Prints the folder of the Zeus app, as a real path (without symbolic links), because the app compares its own
+# path with the path in update.json. The folder is ZEUS_APP_DIR (tests), else the folder of the installed app
+# (/Applications, or ~/Applications when it was installed without administrator rights), else /Applications.
+# Without write access to the folder, it is ~/Applications.
+zeus_app_folder() {
+  local folder="${ZEUS_APP_DIR:-}" dir
+  if [ -z "$folder" ]; then
+    folder=/Applications
+    for dir in /Applications "$HOME/Applications"; do
+      if [ -d "$dir/Zeus.app" ] && [ -w "$dir" ]; then
+        folder="$dir"
+        break
+      fi
+    done
+  fi
+  if [ ! -w "$folder" ]; then
+    folder="$HOME/Applications"
+    mkdir -p "$folder"
+  fi
+  (cd "$folder" && pwd -P)
+}
+
+# Prints the process IDs of the running copies of the Zeus app in folder $1. A copy in another folder is not one.
+zeus_app_pids() {
+  local pattern
+  pattern="$(printf '%s' "$1/Zeus.app/Contents/MacOS/Zeus" | sed 's/[][\\.*^$+?(){}|]/\\&/g')"
+  pgrep -f "^$pattern" 2>/dev/null || true
+}
+
+# Sends the quit Apple event (aevt/quit, without a reply) to the app with process ID $1, as Zeus > Quit Zeus does.
+# It goes to the process ID, so a copy of Zeus in another folder does not get it.
+send_quit_event() {
+  osascript -l JavaScript -e "ObjC.import('Foundation');
+    var target = \$.NSAppleEventDescriptor.descriptorWithProcessIdentifier($1);
+    var quit = \$.NSAppleEventDescriptor.appleEventWithEventClassEventIDTargetDescriptorReturnIDTransactionID(
+      0x61657674, 0x71756974, target, -1, 0);
+    quit.sendEventWithOptionsTimeoutError(1, 10, null);" >/dev/null 2>&1
+}
+
+# Asks each running copy of the Zeus app in folder $1 to quit, as Zeus > Quit Zeus does: when a tab has unsent
+# text, attachments, or work in progress, the app asks first (Quit Anyway or Cancel), and the chats stay in the
+# history. Returns 1 when the app is still open after 2 minutes (for example, the user clicked Cancel).
 quit_zeus_app() {
-  local app="$1/Zeus.app/Contents/MacOS/Zeus" waited=0
-  pgrep -f "$app" >/dev/null 2>&1 || return 0
-  osascript -e "tell application id \"$APP_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
-  while pgrep -f "$app" >/dev/null 2>&1 && [ "$waited" -lt 30 ]; do
+  local folder="$1" pid waited=0
+  [ -n "$(zeus_app_pids "$folder")" ] || return 0
+  info "The Zeus app is open. It now closes as when you quit it."
+  info "If a tab has unsent text or Zeus is working, the app asks you first. Your chats stay in the history."
+  for pid in $(zeus_app_pids "$folder"); do send_quit_event "$pid" || true; done
+  while [ -n "$(zeus_app_pids "$folder")" ] && [ "$waited" -lt 120 ]; do
     sleep 1
     waited=$((waited + 1))
   done
-  ! pgrep -f "$app" >/dev/null 2>&1
+  [ -z "$(zeus_app_pids "$folder")" ]
+}
+
+# An update of an installed app keeps the old app until the new app has started, as the app's own update does.
+# The file is the one of the app's update (Updater.Pending in app/Sources/Zeus/Updater.swift): the new app
+# confirms its start in it when the waiting process (this installer) still runs. When this installer stopped
+# before the confirmation, the next start of the new app removes the old copy and the file.
+APP_PENDING="$HOME/Library/Application Support/Zeus/update.json"
+APP_FOLDER=""
+APP_INSTALLED=""
+APP_RESULT=""
+APP_OLD_VERSION=""
+APP_NEW_VERSION=""
+APP_BACKUP=""
+
+json_string() {
+  local text="${1//\\/\\\\}"
+  printf '"%s"' "${text//\"/\\\"}"
+}
+
+# The app compares the path in update.json with its own standardized path (Foundation), which has no first
+# "/private" when the path without it is the same folder (/private/var is /var). Applications folders do not
+# start with /private; the test folders do.
+app_standardized_path() {
+  local folder="$APP_FOLDER"
+  case "$folder" in
+    /private/*) if [ "$(cd "${folder#/private}" 2>/dev/null && pwd -P)" = "$folder" ]; then folder="${folder#/private}"; fi ;;
+  esac
+  printf '%s/Zeus.app' "$folder"
+}
+
+write_app_pending() {
+  mkdir -p "$(dirname "$APP_PENDING")" &&
+    printf '{"from":%s,"to":%s,"appPath":%s,"backupPath":%s,"workPath":%s,"waitingPID":%s,"confirmed":false}\n' \
+      "$(json_string "$APP_OLD_VERSION")" "$(json_string "$APP_NEW_VERSION")" "$(json_string "$(app_standardized_path)")" \
+      "$(json_string "$APP_BACKUP/Zeus.app")" "$(json_string "$APP_BACKUP")" "$$" >"$APP_PENDING.tmp" &&
+    mv -f "$APP_PENDING.tmp" "$APP_PENDING"
+}
+
+# Puts the downloaded app ($1) in the place of the app in $APP_FOLDER. An installed app moves to a backup
+# folder (APP_BACKUP), outside the work folder, so that it stays when this installer stops. On the same volume,
+# both moves are renames. On failure, the installed app stays, APP_ERROR is set, and it returns 1.
+replace_zeus_app() {
+  local new="$1"
+  if [ ! -e "$APP_INSTALLED" ]; then
+    mv "$new" "$APP_INSTALLED" && return 0
+    APP_ERROR="The Zeus app could not be put in $APP_FOLDER."
+    return 1
+  fi
+  APP_BACKUP="$(mktemp -d "${TMPDIR:-/tmp}/zeus-app-previous.XXXXXX")"
+  if ! write_app_pending; then
+    rm -rf "$APP_BACKUP" "$APP_PENDING.tmp"
+    APP_BACKUP=""
+    APP_ERROR="The Zeus app could not prepare the update in $(dirname "$APP_PENDING")."
+    return 1
+  fi
+  if ! mv "$APP_INSTALLED" "$APP_BACKUP/Zeus.app"; then
+    rm -rf "$APP_BACKUP"
+    rm -f "$APP_PENDING"
+    APP_BACKUP=""
+    APP_ERROR="The installed Zeus app could not be moved. It is not changed."
+    return 1
+  fi
+  if ! mv "$new" "$APP_INSTALLED"; then
+    mv "$APP_BACKUP/Zeus.app" "$APP_INSTALLED"
+    rm -rf "$APP_BACKUP"
+    rm -f "$APP_PENDING"
+    APP_BACKUP=""
+    APP_ERROR="The new Zeus app could not be put in $APP_FOLDER. The installed app is not changed."
+    return 1
+  fi
+}
+
+# The new app has started (or is not opened, ZEUS_APP_NO_OPEN): the old copy and update.json are removed.
+finish_zeus_app_update() {
+  [ -n "$APP_BACKUP" ] || return 0
+  rm -rf "$APP_BACKUP"
+  rm -f "$APP_PENDING"
+  APP_BACKUP=""
+}
+
+# Waits up to 60 s for the new app to confirm its start in update.json. Returns 1 when the new app stopped,
+# or when no copy of it runs 10 s after the open.
+wait_for_zeus_app_start() {
+  local waited=0 new_pid
+  while [ "$waited" -lt 120 ]; do
+    if grep -q '"confirmed" *: *true' "$APP_PENDING" 2>/dev/null; then return 0; fi
+    new_pid="$(sed -n 's/.*"newPID" *: *\([0-9][0-9]*\).*/\1/p' "$APP_PENDING" 2>/dev/null || true)"
+    if [ -n "$new_pid" ]; then
+      kill -0 "$new_pid" 2>/dev/null || return 1
+    elif [ "$waited" -ge 20 ] && [ -z "$(zeus_app_pids "$APP_FOLDER")" ]; then
+      return 1
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+# The new app did not start: stops it and puts the old app back. Returns 1 when the old app could not be put back.
+# A new copy that wrote its process ID in update.json is at its first launch step, before any Zeus session or
+# chat, so it is stopped at once, as the app's own update does. Another copy can have chats, so it gets the
+# quit of quit_zeus_app; when it stays open (the user clicked Cancel), the new app stays.
+roll_back_zeus_app() {
+  local new_pid waited=0
+  new_pid="$(sed -n 's/.*"newPID" *: *\([0-9][0-9]*\).*/\1/p' "$APP_PENDING" 2>/dev/null || true)"
+  if [ -n "$new_pid" ]; then kill -KILL "$new_pid" 2>/dev/null || true; fi
+  while [ -n "$new_pid" ] && kill -0 "$new_pid" 2>/dev/null && [ "$waited" -lt 20 ]; do
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  # Without update.json, a later start of the new app does not remove the old app in APP_BACKUP.
+  if ! quit_zeus_app "$APP_FOLDER"; then
+    rm -f "$APP_PENDING"
+    return 1
+  fi
+  mkdir -p "$WORK_DIR/zeus-app/not-started"
+  if ! mv "$APP_INSTALLED" "$WORK_DIR/zeus-app/not-started/Zeus.app" ||
+    ! mv "$APP_BACKUP/Zeus.app" "$APP_INSTALLED"; then
+    rm -f "$APP_PENDING"
+    return 1
+  fi
+  rm -rf "$APP_BACKUP"
+  rm -f "$APP_PENDING"
+  APP_BACKUP=""
+}
+
+# open_app [-n]: opens $APP_INSTALLED. -n opens a new copy, also when Zeus runs from another folder.
+# ZEUS_APP_TEST_BACKGROUND=1 opens it behind the other apps, and ZEUS_APP_OPEN_ENV (names of environment
+# variables, such as HOME) gives these variables to the app (tests).
+open_app() {
+  local args=("$@") name
+  if [ "${ZEUS_APP_TEST_BACKGROUND:-}" = "1" ]; then args+=(-g); fi
+  for name in ${ZEUS_APP_OPEN_ENV:-}; do
+    if [ -n "${!name+set}" ]; then args+=(--env "$name=${!name}"); fi
+  done
+  open ${args[@]+"${args[@]}"} "$APP_INSTALLED" >/dev/null 2>&1
+}
+
+# Opens the Zeus app. After an update, it waits until the new app has started, as after the app's own update,
+# and then removes the old app. When the new app does not start, it puts the old app back and opens it.
+# Returns 1 after such a roll back. ZEUS_APP_NO_OPEN=1 (tests) opens nothing and removes the old app.
+start_zeus_app() {
+  [ -n "$APP_INSTALLED" ] || return 0
+  if [ "${ZEUS_APP_NO_OPEN:-}" = "1" ]; then
+    finish_zeus_app_update
+    return 0
+  fi
+  if [ "$APP_RESULT" = "current" ]; then
+    open_app || true
+    return 0
+  fi
+  if [ -z "$APP_BACKUP" ]; then
+    open_app -n || true
+    return 0
+  fi
+  info "Starting the Zeus app $APP_NEW_VERSION"
+  if open_app -n && wait_for_zeus_app_start; then
+    finish_zeus_app_update
+    return 0
+  fi
+  if roll_back_zeus_app; then
+    APP_ERROR="The Zeus app $APP_NEW_VERSION did not start, so your Zeus app $APP_OLD_VERSION is back."
+    open_app -n || true
+  else
+    APP_ERROR="The Zeus app $APP_NEW_VERSION did not start. Your old Zeus app $APP_OLD_VERSION is in $APP_BACKUP/Zeus.app."
+  fi
+  return 1
+}
+
+# A failed app step: with --app-only, the app is what the user asked for, so it stops the installer.
+# In Terminal use, it does not stop the installer: Zeus works without the app.
+zeus_app_failed() {
+  if [ -n "$APP_ONLY" ]; then fail "$APP_ERROR" "$@"; fi
+  info "$APP_ERROR"
+  info "Zeus works without the app; use the steps below."
+  record "failed" "Zeus app"
 }
 
 # Step 12 (Terminal use) or step 6 (--app-only) - The Zeus app. It opens Zeus without Terminal and finishes
 # the setup in its own window. Step 5 already checked access to the private repo with the app releases.
-# In Terminal use, a failed download does not stop the installer: Zeus works without the app.
-# With --app-only, the app is what the user asked for, so a failure stops the installer.
+# An installed app is updated to the newest release. The update changes only the app: the Zeus folder and its
+# projects, the Zeus settings, the Claude chats, the plugins, and the app state stay as they are.
 install_zeus_app() {
   step "$TOTAL_STEPS" "Zeus app"
-  local target="${ZEUS_APP_DIR:-/Applications}"
-  if [ ! -w "$target" ]; then
-    target="$HOME/Applications"
-    mkdir -p "$target"
+  local tag
+  APP_FOLDER="$(zeus_app_folder)"
+  APP_INSTALLED="$APP_FOLDER/Zeus.app"
+  if [ -f "$APP_INSTALLED/Contents/Info.plist" ] &&
+    [ "$(plist_value "$APP_INSTALLED" CFBundleIdentifier)" != "$APP_BUNDLE_ID" ]; then
+    APP_ERROR="$APP_INSTALLED is another app, not the Zeus app."
+    APP_INSTALLED=""
+    zeus_app_failed "Rename it or move it to another folder, then run the same line again."
+    return
   fi
-  if ! download_zeus_app "$WORK_DIR/zeus-app"; then
-    if [ -n "$APP_ONLY" ]; then
-      fail "$APP_ERROR" "Check your internet connection, then run the same line again."
+  if [ -e "$APP_INSTALLED" ]; then APP_OLD_VERSION="$(plist_value "$APP_INSTALLED" CFBundleShortVersionString)"; fi
+  if ! tag="$(latest_app_tag)"; then
+    APP_ERROR="No Zeus app release was found in $ZEUS_APP_REPO."
+    APP_INSTALLED=""
+    zeus_app_failed "Check your internet connection, then run the same line again."
+    return
+  fi
+  APP_NEW_VERSION="${tag#app-v}"
+  if printf '%s\n' "$APP_OLD_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' &&
+    [ "$(printf '%s\n%s\n' "$APP_OLD_VERSION" "$APP_NEW_VERSION" | sort -V | tail -1)" = "$APP_OLD_VERSION" ]; then
+    APP_RESULT="current"
+    info "The Zeus app in $APP_FOLDER is already the newest version ($APP_OLD_VERSION)."
+    record "skipped" "Zeus app (already the newest version, $APP_OLD_VERSION)"
+    return
+  fi
+  if [ -e "$APP_INSTALLED" ]; then
+    info "The Zeus app in $APP_FOLDER is version ${APP_OLD_VERSION:-unknown}; the newest version is $APP_NEW_VERSION."
+    if [ -z "$APP_ONLY" ] && [ -n "$(zeus_app_pids "$APP_FOLDER")" ]; then
+      info "Quit the Zeus app, then run the same line again to update it."
+      APP_INSTALLED=""
+      record "skipped" "Zeus app (open, not updated)"
+      return
     fi
-    info "$APP_ERROR"
-    info "The Zeus app is not installed. Zeus works without it; use the steps below."
-    record "failed" "Zeus app (not installed)"
+  fi
+  if ! download_zeus_app "$WORK_DIR/zeus-app" "$tag"; then
+    APP_INSTALLED=""
+    zeus_app_failed "Check your internet connection, then run the same line again."
     return
   fi
-  if [ -n "$APP_ONLY" ]; then
-    quit_zeus_app "$target" ||
-      fail "The Zeus app is still open." "Quit the Zeus app, then run the same line again."
-  elif pgrep -f "$target/Zeus.app/Contents/MacOS/Zeus" >/dev/null 2>&1; then
-    info "Quit the Zeus app, then run the same line again to update it."
-    record "skipped" "Zeus app (open, not updated)"
-    return
+  if [ -n "$APP_ONLY" ] && ! quit_zeus_app "$APP_FOLDER"; then
+    fail "The Zeus app is still open." "Quit the Zeus app, then run the same line again."
   fi
-  rm -rf "$target/Zeus.app"
-  ditto "$WORK_DIR/zeus-app/unpacked/Zeus.app" "$target/Zeus.app"
   # gh does not mark its downloads as downloaded from the internet; this removes a mark from another tool.
-  xattr -dr com.apple.quarantine "$target/Zeus.app" 2>/dev/null || true
-  APP_INSTALLED="$target/Zeus.app"
-  info "Installed $target/Zeus.app."
-  record "done" "Zeus app"
+  xattr -dr com.apple.quarantine "$WORK_DIR/zeus-app/unpacked/Zeus.app" 2>/dev/null || true
+  if ! replace_zeus_app "$WORK_DIR/zeus-app/unpacked/Zeus.app"; then
+    APP_INSTALLED=""
+    zeus_app_failed "Your projects, chats, and settings did not change."
+    return
+  fi
+  if [ -n "$APP_BACKUP" ]; then
+    APP_RESULT="updated"
+    info "Put the Zeus app $APP_NEW_VERSION in $APP_FOLDER. The old app stays until the new app has started."
+    record "done" "Zeus app (updated from ${APP_OLD_VERSION:-an unknown version} to $APP_NEW_VERSION)"
+  else
+    APP_RESULT="installed"
+    info "Installed $APP_INSTALLED."
+    record "done" "Zeus app"
+  fi
 }
 
+# Opens the app (start_zeus_app). In Terminal use, an update that does not start does not stop the installer.
 open_zeus_app() {
-  if [ "${ZEUS_APP_NO_OPEN:-}" != "1" ]; then open "$APP_INSTALLED" 2>/dev/null || true; fi
+  start_zeus_app && return 0
+  if [ -n "$APP_ONLY" ]; then fail "$APP_ERROR" "Your projects, chats, and settings did not change."; fi
+  info "$APP_ERROR"
+  record "failed" "Zeus app (the update did not start)"
 }
 
 print_summary() {
@@ -763,17 +1017,31 @@ print_summary() {
     return
   fi
   if [ -n "$APP_ONLY" ]; then
-    printf '\n'
-    bold "The Zeus app is installed."
-    info "The Zeus app opens now. Follow its setup window: it installs the other tools that Zeus needs,"
-    info "logs you in to Claude, and keeps Zeus in the Dock. Then click Start Zeus."
-    info "Later, click Zeus in the Dock to start Zeus. You do not need Terminal."
-    info "The app updates itself when it starts."
-    printf '\n'
     open_zeus_app
+    printf '\n'
+    case "$APP_RESULT" in
+      current)
+        bold "The Zeus app is already the newest version ($APP_NEW_VERSION)."
+        info "The Zeus app opens now. Your projects, chats, and settings did not change."
+        ;;
+      updated)
+        bold "The Zeus app is updated from ${APP_OLD_VERSION:-an older version} to $APP_NEW_VERSION."
+        info "The Zeus app opens now. Your projects, chats, and settings did not change."
+        info "The app updates itself when it starts."
+        ;;
+      *)
+        bold "The Zeus app is installed."
+        info "The Zeus app opens now. Follow its setup window: it installs the other tools that Zeus needs,"
+        info "logs you in to Claude, and keeps Zeus in the Dock. Then click Start Zeus."
+        info "Later, click Zeus in the Dock to start Zeus. You do not need Terminal."
+        info "The app updates itself when it starts."
+        ;;
+    esac
+    printf '\n'
     return
   fi
   if [ -n "$APP_INSTALLED" ]; then
+    open_zeus_app
     printf '\n'
     bold "Zeus install is complete."
     local line
@@ -786,7 +1054,6 @@ print_summary() {
     info "logs you in to Claude, and keeps Zeus in the Dock. Then click Start Zeus."
     info "Later, click Zeus in the Dock to start Zeus. You do not need Terminal."
     printf '\n'
-    open_zeus_app
     return
   fi
   printf '\n'

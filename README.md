@@ -56,6 +56,29 @@ When you are offline, or your account has no access, the app starts its current 
 The app does not check for updates while it runs; quit it and open it again to get an update.
 The Zeus content (`~/Code/zeus` and the plugins) updates itself each time Zeus starts, as before.
 
+### You already have the Zeus app
+
+Versions 0.1.0, 0.1.1, and 0.1.2 of the app cannot update themselves: their update always goes back to the old version.
+**Zeus > About Zeus** shows your version.
+To get the newest version, run the same install line one time in Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/theo-henry/zeus-install/main/install-app.sh | bash
+```
+
+Your projects and your history stay.
+The line replaces only the app.
+It does not change `~/Code/zeus` and its client folders, the Zeus settings in `~/Library/Application Support/Zeus`, your Claude chats in `~/.claude`, or your plugins.
+
+- The line shows your version and the newest version, replaces the app, and opens the new app.
+  From the new version on, the app updates itself again.
+- When your app is already the newest version, the line tells you and opens it.
+- When the Zeus app is open, the line closes it as when you quit it.
+  When a tab has unsent text or Zeus is working, the app asks you first.
+  If you click **Cancel**, the app stays open, and after 2 minutes the line stops without a change.
+- The line keeps the old app until the new app has started.
+  If the new app does not start, the line puts the old app back and opens it.
+
 ### The Zeus app
 
 | Feature | Where |
@@ -103,7 +126,7 @@ The installer skips each step that is already done.
 | 9 | Copy of the zeus repo to `~/Code/zeus`, or an update of an existing copy (fast-forward only, local work is never discarded) | The copy is already up to date or already has the Zeus version that Zeus Editor needs, or it cannot update safely. Then the installer tells you how Zeus gets the update. |
 | 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. |
 | 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
-| 12 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo | The app is open. A failed download does not stop the installer. |
+| 12 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
 
 The installer does not use `sudo`.
 Your Mac password can be necessary only for the Apple pop-up in step 1.
