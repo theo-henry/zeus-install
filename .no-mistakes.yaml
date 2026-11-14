@@ -1,0 +1,6 @@
+# Per-repo no-mistakes settings.
+# .github/workflows/ci.yml runs the same test command, so the pipeline and CI check the same things.
+commands:
+  # The tests that need no app window in front: the PTY, the plugin scope of install.sh, and install-app.sh
+  # on a simulated new Mac. GitHub and the downloads are simulated; the real home folder is not used.
+  test: 'app/test/pty/run.sh && app/test/plugin-scope/run.sh && app/test/update/run.sh install'
