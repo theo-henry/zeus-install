@@ -680,6 +680,15 @@ check "a version 1 page in a language that the English-only model does not decod
   'wait_for "speech event: state v3 stopped" 10 && grep -q "speech: final v3 engine=apple" "$TRACE"'
 act 'test-speech-post:{"type":"speech-settings-set","model":"accurate","language":"auto"}'
 check "back to the Accurate model: it loads again from this Mac" 'wait_count "dictation: loaded sim-accurate-1" 2 10 && [ "$(grep -c "^accurate-1.bin$" "$MODELS_SRV/requests.log")" = 1 ]'
+touch "$MODELS_SRV/accurate-1.bin.hold"
+act 'test-speech-post:{"type":"speech-model-download","model":"accurate"}'
+check "a re-download of the model on this Mac fetches it again" 'wait_count "dictation: download sim-accurate-1 starts (requested)" 1 10'
+act test-clear
+speech_round w9
+check "dictation keeps working with the current model during the re-download" 'page_has "\"final w9 Hello Zeus." && grep -q "speech: final w9 engine=whisper" "$TRACE"'
+rm -f "$MODELS_SRV/accurate-1.bin.hold"
+check "the re-download is checked again, replaces the file, and the runtime loads the new copy" \
+  'wait_count "dictation: download sim-accurate-1 checked" 2 20 && wait_count "dictation: loaded sim-accurate-1" 3 10 && [ "$(grep -c "^accurate-1.bin$" "$MODELS_SRV/requests.log")" = 2 ] && [ ! -e "$MODELS_DIR/sim-accurate-1.bin.download" ]'
 # The dictated text is a draft; without it, the quit asks nothing.
 act test-clear
 sleep 0.3

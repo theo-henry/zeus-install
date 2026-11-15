@@ -142,6 +142,9 @@ Details:
   An invalid `model` or `language` is ignored; the other fields still apply.
 - `speech-model-download` starts the download of that model now, also after a failure or a cancel.
   The app downloads the model of the selected role by itself; this message is for a "Retry" or "Download" button.
+  For a model that is already on this Mac, it is a re-download (a "Re-download" button): the app fetches the file again, checks its size and SHA-256, and replaces the file in one atomic rename.
+  The current model stays loaded and in use until the new copy is checked; then the app loads the new copy.
+  When the re-download fails or is cancelled, the model on this Mac stays in use and its state goes back to `downloaded`.
 
 ## Events to the page
 

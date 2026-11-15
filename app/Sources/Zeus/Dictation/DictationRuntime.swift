@@ -63,8 +63,8 @@ final class DictationRuntime {
     typealias Factory = (_ engine: String, _ file: URL) throws -> Transcriber
 
     private(set) var state: State = .idle
-    /// The role and id of the loaded model.
-    private(set) var loaded: (role: String, id: String)?
+    /// The role, id, and file revision (`DictationModels.revisions`) of the loaded model.
+    private(set) var loaded: (role: String, id: String, revision: Int)?
     private(set) var multilingual = true
     var onChange: [() -> Void] = []
 
@@ -72,7 +72,7 @@ final class DictationRuntime {
     /// Written only on `queue` and under `lock`; read on `queue`, or under `lock` on other threads.
     private var transcriber: Transcriber?
     private let lock = NSLock()
-    private var loadingID: String?
+    private var loadingID: (id: String, revision: Int)?
     private var failedIDs = Set<String>()
     private var started = false
     var factory: Factory = DictationRuntime.makeTranscriber
@@ -94,10 +94,12 @@ final class DictationRuntime {
         guard started else { return }
         let models = DictationModels.shared
         let role = DictationSettings.shared.role
-        guard let candidate = models.candidate(for: role), candidate.id != loaded?.id, candidate.id != loadingID,
+        guard let candidate = models.candidate(for: role),
+              candidate.id != loaded?.id || candidate.revision != loaded?.revision,
+              candidate.id != loadingID?.id || candidate.revision != loadingID?.revision,
               !failedIDs.contains(candidate.id) else { return }
         let engine = models.model(for: role).flatMap { $0.id == candidate.id ? $0.engine : nil } ?? "whisper"
-        loadingID = candidate.id
+        loadingID = (candidate.id, candidate.revision)
         set(.loading(candidate.id))
         Trace.log("dictation: loading \(candidate.id) for \(role)")
         let started = Date()
@@ -115,7 +117,7 @@ final class DictationRuntime {
                 let seconds = String(format: "%.2f", Date().timeIntervalSince(started))
                 switch result {
                 case let .success(multilingual):
-                    self.loaded = (role, candidate.id)
+                    self.loaded = (role, candidate.id, candidate.revision)
                     self.multilingual = multilingual
                     Trace.log("dictation: loaded \(candidate.id) in \(seconds) s")
                     self.set(.ready(candidate.id))

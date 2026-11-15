@@ -78,6 +78,9 @@ final class DictationModels: NSObject, ObservableObject {
     @Published private(set) var states: [String: State] = [:]
     /// When a failed download tries again, for each model id.
     private(set) var retryAt: [String: Date] = [:]
+    /// How many times a model file was replaced on this Mac since the app start (a re-download), for each model id.
+    /// The runtime loads a model again when this changes.
+    private(set) var revisions: [String: Int] = [:]
     /// Called after each change (the speech bridge tells the pages).
     var onChange: [() -> Void] = []
 
@@ -119,12 +122,12 @@ final class DictationModels: NSObject, ObservableObject {
 
     /// The model file to load for a role: the model of the model list when it is on this Mac,
     /// otherwise the model that the role used before (an older app's model, until the new one loads).
-    func candidate(for role: String) -> (id: String, file: URL, committed: Bool)? {
+    func candidate(for role: String) -> (id: String, revision: Int, file: URL, committed: Bool)? {
         if let model = model(for: role), isComplete(model) {
-            return (model.id, file(model.id), installed[role] == model.id)
+            return (model.id, revisions[model.id] ?? 0, file(model.id), installed[role] == model.id)
         }
         if let old = installed[role], FileManager.default.fileExists(atPath: file(old).path) {
-            return (old, file(old), true)
+            return (old, revisions[old] ?? 0, file(old), true)
         }
         return nil
     }
@@ -171,14 +174,16 @@ final class DictationModels: NSObject, ObservableObject {
     }
 
     /// The download (again) of the model of a role, for the user: also after a failure or a cancel.
+    /// A model that is on this Mac downloads again (a re-download): its file stays in use until the new copy is
+    /// checked and replaces it in one rename; then the runtime loads the new copy.
     func download(role: String) {
         guard let model = model(for: role) else { return }
         start()
         switch state(of: model) {
-        case .missing, .failed, .cancelled:
+        case .missing, .failed, .cancelled, .downloaded:
             failures[model.id] = 0
             download(model, reason: "requested")
-        case .downloading, .verifying, .downloaded: break
+        case .downloading, .verifying: break
         }
     }
 
@@ -193,7 +198,8 @@ final class DictationModels: NSObject, ObservableObject {
         }
         if case .downloaded = state(of: model) { return }
         Trace.log("dictation: download \(model.id) cancelled")
-        set(model.id, .cancelled)
+        // A cancelled re-download keeps the checked file that is on this Mac.
+        set(model.id, isComplete(model) ? .downloaded : .cancelled)
     }
 
     /// The runtime loaded this model for its role: it is the model of the role now, and the old file goes.
@@ -262,6 +268,12 @@ final class DictationModels: NSObject, ObservableObject {
     }
 
     private func fail(_ model: DictationModel, _ message: String) {
+        // A failed re-download keeps the checked file that is on this Mac, with no retry.
+        if isComplete(model) {
+            Trace.log("dictation: download \(model.id) failed: \(message); the model on this Mac stays in use")
+            set(model.id, .downloaded)
+            return
+        }
         let count = (failures[model.id] ?? 0) + 1
         failures[model.id] = count
         let delay = Self.retryDelays[min(count - 1, Self.retryDelays.count - 1)]
@@ -276,18 +288,16 @@ final class DictationModels: NSObject, ObservableObject {
         set(model.id, .failed(message))
     }
 
-    /// Checks the size and the SHA-256 off the main queue, then gives the file its final name in one rename.
+    /// Checks the size and the SHA-256 off the main queue, then gives the file its final name in one rename,
+    /// which replaces a file of the same model (a re-download) atomically.
     private func verify(_ model: DictationModel, at partial: URL) {
         set(model.id, .verifying)
         let target = file(model.id)
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var problem = Self.check(partial, bytes: model.bytes, sha256: model.sha256)
             if problem == nil {
-                do {
-                    try? FileManager.default.removeItem(at: target)
-                    try FileManager.default.moveItem(at: partial, to: target)
-                } catch {
-                    problem = "The download cannot be saved: \(error.localizedDescription)"
+                if rename(partial.path, target.path) != 0 {
+                    problem = "The download cannot be saved: \(String(cString: strerror(errno)))"
                 }
             }
             DispatchQueue.main.async {
@@ -299,6 +309,7 @@ final class DictationModels: NSObject, ObservableObject {
                 }
                 self.failures[model.id] = 0
                 Trace.log("dictation: download \(model.id) checked")
+                self.revisions[model.id, default: 0] += 1
                 self.set(model.id, .downloaded)
                 // The model of the chosen role becomes the role's model when it loads (DictationRuntime);
                 // another role's model replaces the old one at once.
