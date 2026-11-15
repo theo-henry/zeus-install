@@ -14,7 +14,8 @@
 #
 # Environment:
 #   ZEUS_RELEASE_REPO="owner/name"   replaces the repo of the release (for tests).
-#   ZEUS_RELEASE_NOTE="text"         is added to the end of the release notes (CI puts the PR title there).
+#   ZEUS_RELEASE_NOTE="text"         is added to the end of the release notes (CI puts the first line of the head commit
+#                                    message there: the PR title for a squash merge).
 #   GH_TOKEN                         a token for gh, when gh is not logged in (CI uses a secret).
 set -euo pipefail
 

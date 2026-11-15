@@ -10,9 +10,10 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels the older run of the PR. A push to main never cancels a run of main, so a release is not stopped.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -34,8 +35,10 @@ jobs:
 
   release:
     name: Release the app
-    # Only a push to main that changed the app. install.sh and install-app.sh are included because the app
-    # downloads and runs them; a change to the other part of install.sh makes one extra release, which is harmless.
+    # Only a push to main. The job releases when app/, install.sh, or install-app.sh changed since the commit of the
+    # newest app release, so a change that a failed or cancelled run did not release is released by the next run.
+    # install.sh and install-app.sh are included because the app downloads and runs them; a change to the other part
+    # of install.sh makes one extra release, which is harmless.
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # Always a GitHub-hosted runner, never the self-hosted mac-local runner: the release token is a secret.
@@ -45,35 +48,40 @@ jobs:
     concurrency:
       group: app-release
       cancel-in-progress: false
+    env:
+      # A fine-grained token: only theo-henry/zeus, Contents read and write. See "Release the Zeus app" in README.md.
+      GH_TOKEN: ${{ secrets.ZEUS_RELEASE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Find out if the app changed
+      - name: Find out if the app changed since the newest app release
         id: changed
-        env:
-          BEFORE: ${{ github.event.before }}
         run: |
-          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error title=No release token::The secret ZEUS_RELEASE_TOKEN is not set, so CI cannot release the app. See \"Release the Zeus app\" in README.md."
+            exit 1
+          fi
+          body="$(gh api "repos/theo-henry/zeus/releases?per_page=100" --jq '
+            [.[] | select(.draft == false and .prerelease == false and (.tag_name | test("^app-v[0-9]+\\.[0-9]+\\.[0-9]+$")))]
+            | sort_by(.tag_name | ltrimstr("app-v") | split(".") | map(tonumber)) | last | .body // ""')"
+          released="$(printf '%s\n' "$body" | sed -nE 's/.*zeus-install commit ([0-9a-f]{40}).*/\1/p' | head -n 1)"
+          if [ -z "$released" ] || ! git cat-file -e "$released^{commit}" 2>/dev/null; then
             echo "app=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$BEFORE" HEAD -- app install.sh install-app.sh; then
+            echo "The commit of the newest app release is not known. Release."
+          elif git diff --quiet "$released" HEAD -- app install.sh install-app.sh; then
             echo "app=false" >> "$GITHUB_OUTPUT"
-            echo "The app did not change. No release."
+            echo "The app did not change since the newest app release ($released). No release."
           else
             echo "app=true" >> "$GITHUB_OUTPUT"
+            echo "The app changed since the newest app release ($released). Release."
           fi
 
       - name: Release
         if: steps.changed.outputs.app == 'true'
         env:
-          # A fine-grained token: only theo-henry/zeus, Contents read and write. See "Release the Zeus app" in README.md.
-          GH_TOKEN: ${{ secrets.ZEUS_RELEASE_TOKEN }}
           ZEUS_RELEASE_NOTE: ${{ github.event.head_commit.message }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::warning title=No release::The secret ZEUS_RELEASE_TOKEN is not set, so the app was not released."
-            exit 0
-          fi
           export ZEUS_RELEASE_NOTE="$(printf '%s' "$ZEUS_RELEASE_NOTE" | head -n 1)"
           app/release.sh

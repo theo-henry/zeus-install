@@ -169,17 +169,20 @@ The install line, step 12, and the self-update of the app use the newest of thes
 Drafts, pre-releases, and the other releases of the zeus repo are not used.
 
 CI makes a release by itself.
-Each push to `main` that changes `app/`, `install.sh`, or `install-app.sh` runs the tests, and then the `release` job of `.github/workflows/ci.yml` runs `app/release.sh` on a GitHub-hosted macOS runner.
-The release has the next version (the newest app release plus 1 in the last number), and its notes have the title of the merge commit.
+Each push to `main` runs the tests, and then the `release` job of `.github/workflows/ci.yml` finds the commit of the newest app release (in its notes).
+When `app/`, `install.sh`, or `install-app.sh` changed since that commit, the job runs `app/release.sh` on a GitHub-hosted macOS runner.
+The release has the next version (the newest app release plus 1 in the last number), and its notes have the first line of the head commit message (the PR title for a squash merge).
 A concurrency group makes one release at a time, so two merges cannot take the same version.
+A push to `main` does not cancel a run of `main`.
 The job never runs on the self-hosted runner.
-If a newer commit is already on `main`, the job of the older commit stops, and the release of the newer commit has both changes.
+If a newer commit is already on `main`, the job of the older commit stops.
+The next push to `main` then releases all app changes since the newest app release, also when a job failed or did not release.
 
 The job needs the Actions secret `ZEUS_RELEASE_TOKEN` in this repo: a fine-grained personal access token with access to only the repo `theo-henry/zeus` and the permission Contents: read and write.
 The token cannot do anything else.
 To make the token, open GitHub > Settings > Developer settings > Fine-grained tokens, and set a date for it to expire.
 Make a new token before that date, and replace the secret.
-Without the secret the job does not release and does not fail: it shows a warning that the app was not released.
+Without the secret the job fails with an error that names `ZEUS_RELEASE_TOKEN`, so CI on `main` is red until you add it.
 
 To make a release by hand (for a version that you choose, or when CI cannot), run this on a Mac with the Xcode Command Line Tools and with `gh` logged in with write access to the zeus repo:
 
