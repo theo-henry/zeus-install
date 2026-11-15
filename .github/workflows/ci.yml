@@ -71,6 +71,9 @@ jobs:
           GH_TOKEN: ${{ secrets.ZEUS_RELEASE_TOKEN }}
           ZEUS_RELEASE_NOTE: ${{ github.event.head_commit.message }}
         run: |
-          [ -n "$GH_TOKEN" ] || { echo "The secret ZEUS_RELEASE_TOKEN is not set."; exit 1; }
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning title=No release::The secret ZEUS_RELEASE_TOKEN is not set, so the app was not released."
+            exit 0
+          fi
           export ZEUS_RELEASE_NOTE="$(printf '%s' "$ZEUS_RELEASE_NOTE" | head -n 1)"
           app/release.sh

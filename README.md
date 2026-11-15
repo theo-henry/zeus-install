@@ -179,7 +179,7 @@ The job needs the Actions secret `ZEUS_RELEASE_TOKEN` in this repo: a fine-grain
 The token cannot do anything else.
 To make the token, open GitHub > Settings > Developer settings > Fine-grained tokens, and set a date for it to expire.
 Make a new token before that date, and replace the secret.
-Without the secret the job fails with a message.
+Without the secret the job does not release and does not fail: it shows a warning that the app was not released.
 
 To make a release by hand (for a version that you choose, or when CI cannot), run this on a Mac with the Xcode Command Line Tools and with `gh` logged in with write access to the zeus repo:
 
