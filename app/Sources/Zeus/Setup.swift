@@ -429,7 +429,7 @@ struct SetupView: View {
 }
 
 /// The dictation model in the setup checklist. It downloads next to the installer and never stops the setup:
-/// after a failure, Zeus tries again in the background, and dictation uses Apple's recognizer until the model is ready.
+/// after a download failure, Zeus tries again in the background, and dictation uses Apple's recognizer until the model is ready.
 struct DictationSetupRow: View {
     @ObservedObject var models: DictationModels
 
@@ -471,7 +471,9 @@ struct DictationSetupRow: View {
             return "\(done) of \(all). Speech to text stays on this Mac."
         case .verifying: return "Checking the download."
         case .downloaded: return "\(model?.name ?? "The") model (\(size)) is on this Mac."
-        case let .failed(message): return "\(message) Zeus tries again in the background."
+        case let .failed(message):
+            guard let model, models.retryAt[model.id] != nil else { return message }
+            return "\(message) Zeus tries again in the background."
         case .cancelled: return "Stopped. Zeus downloads it at the next start."
         case .missing: return "Downloads in the background (\(size))."
         }

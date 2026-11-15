@@ -503,10 +503,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             case "test-real-turn":
                 self.chatTabs.last?.webView.evaluateJavaScript("const input=document.querySelector('textarea'); input.value='Reply with APP_OK. Do not use tools or change files.'; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.send-button').click()")
             // Runs JavaScript in the chat page of the last tab (a click as the user does) and writes its result into the trace.
-            case "test-eval":
-                self.chatTabs.last?.webView.evaluateJavaScript(argument) { result, error in
-                    Trace.log("test eval: \(result ?? error?.localizedDescription ?? "empty")")
-                }
             case "test-inspect":
                 self.chatTabs.last?.webView.evaluateJavaScript("document.body.innerText.slice(-1800)") { result, error in
                     Trace.log("test page: \(result ?? error?.localizedDescription ?? "empty")")

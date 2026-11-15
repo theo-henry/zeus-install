@@ -5,6 +5,7 @@ import Foundation
 ///
 /// A version 1 page shows the words while the user speaks, and gives up 4 s after it posts Stop. So Apple's
 /// recognizer runs as before (partial text), and Whisper records the same microphone audio at the same time.
+/// When the loaded model does not decode the language of the page's locale, Apple does the whole session.
 /// At Stop, the Whisper text replaces Apple's text when it is ready within `whisperDeadline`;
 /// otherwise (a long recording, an empty or failed Whisper result) the page gets Apple's final text.
 /// The page always gets its final text within Apple's own 3 s stop limit.
@@ -25,6 +26,8 @@ final class HybridSpeechEngine: SpeechEngine {
     private var samples: [Float] = []
     private var capturing = false
     private var language: String?
+    /// Whisper records: the loaded model decodes the language of the page's locale.
+    private var whisper = false
     private var stopped = false
     /// Whisper has the recording of this session and works on it.
     private var whisperRunning = false
@@ -52,7 +55,9 @@ final class HybridSpeechEngine: SpeechEngine {
         let generation = generation
         self.onEvent = onEvent
         finalEngine = "apple"
-        language = DictationRuntime.shared.language(for: locale)
+        let runtime = DictationRuntime.shared
+        language = runtime.language(for: locale)
+        whisper = locale.map { runtime.decodes(DictationRuntime.languageCode(of: $0)) } ?? true
         apple.start(locale: locale) { [weak self] event in
             guard let self, self.generation == generation, self.onEvent != nil else { return }
             self.handleApple(event, generation: generation)
@@ -62,7 +67,7 @@ final class HybridSpeechEngine: SpeechEngine {
     private func handleApple(_ event: SpeechEngineEvent, generation: Int) {
         switch event {
         case .listening:
-            startCapture(generation: generation)
+            if whisper { startCapture(generation: generation) }
             onEvent?(.listening)
         case .partial:
             onEvent?(event)

@@ -307,30 +307,24 @@ final class SpeechService {
         var languages: [[String: Any]] = DictationSettings.languages(of: model).map { ["id": $0.id, "name": $0.name] }
         if model?.multilingual == true { languages.insert(["id": "auto", "name": "Auto-detect"], at: 0) }
         let words = settings.customWords
-        let webViews = webViews.map { Weak($0) }
-        DictationRuntime.shared.prompt(words: words) { prompt in
-            var event: [String: Any] = [
-                "type": "settings",
-                "model": settings.role,
-                "models": DictationModels.shared.manifest.models.map { ["role": $0.role, "name": $0.name, "description": $0.description] },
-                "language": settings.language,
-                "effectiveLanguage": settings.effectiveLanguage(for: model) ?? "auto",
-                "languages": languages,
-                "allLanguages": DictationSettings.allLanguages.map { ["id": $0.id, "name": $0.name] },
-                "customWords": words,
-                "prompt": ["limit": DictationSettings.promptTokenLimit, "tokens": prompt.tokens, "included": prompt.included,
-                           "total": words.count, "estimated": prompt.estimated],
-                "recordingLimitSeconds": Int(WhisperSpeechEngine.recordingLimit),
-            ]
-            if let error { event["error"] = error }
-            for webView in webViews.compactMap(\.value) { Self.send(event, to: webView) }
-        }
+        let prompt = DictationRuntime.shared.prompt(words: words)
+        var event: [String: Any] = [
+            "type": "settings",
+            "model": settings.role,
+            "models": DictationModels.shared.manifest.models.map { ["role": $0.role, "name": $0.name, "description": $0.description] },
+            "language": settings.language,
+            "effectiveLanguage": settings.effectiveLanguage(for: model) ?? "auto",
+            "languages": languages,
+            "allLanguages": DictationSettings.allLanguages.map { ["id": $0.id, "name": $0.name] },
+            "customWords": words,
+            "prompt": ["limit": DictationSettings.promptTokenLimit, "tokens": prompt.tokens, "included": prompt.included,
+                       "total": words.count, "estimated": prompt.estimated],
+            "recordingLimitSeconds": Int(WhisperSpeechEngine.recordingLimit),
+        ]
+        if let error { event["error"] = error }
+        for webView in webViews { Self.send(event, to: webView) }
     }
 
-    private struct Weak {
-        weak var value: WKWebView?
-        init(_ value: WKWebView) { self.value = value }
-    }
 
     /// The trace line of an event: its type, id, and state or error code; of a text only its length.
     private static func describe(_ event: [String: Any]) -> String {

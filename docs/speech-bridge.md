@@ -12,6 +12,7 @@ The app and zeus-editor ship separately, so the app supports both versions at th
 - **Version 1** (the pages of today): the page gets `partial` text while the user speaks and the `final` text after Stop, and gives up 4 s after it posts Stop.
   The app keeps this contract: see "Version 1 sessions".
 - **Version 2**: Whisper gives the text only after Stop.
+  A version 2 session uses Whisper only; it uses Apple's recognizer only while no Whisper model is loaded.
   While the user speaks, the page gets audio levels (for a waveform), not words.
   After Stop, the page gets a `processing` state, then the `final` text, with no deadline.
   The page also reads and writes the dictation settings and sees the model downloads.
@@ -48,7 +49,13 @@ Rules:
 
 A version 1 session behaves as before Whisper: `state: "listening"`, `partial` text while the user speaks, `final` after Stop, then `state: "stopped"`, with no `level` and no `processing` events.
 
+The hybrid path below (Apple's recognizer and Whisper in the same session) is transitional.
+It applies to version 1 pages only, and it goes when the version 1 pages are replaced by version 2 pages.
+Version 2 sessions never use it.
+
 - Without a loaded Whisper model, Apple's recognizer does the whole session, as before.
+- When the loaded Whisper model does not decode the language of the session's locale, Apple's recognizer does the whole session, as before.
+  For example, the Fast model decodes only English, so a `"de-DE"` session uses only Apple's recognizer.
 - With a loaded Whisper model, Apple's recognizer gives the `partial` text, and Whisper records the same microphone audio at the same time.
   After Stop, the `final` text is the Whisper text when Whisper is ready within 2.8 s of the stop.
   Otherwise (a long recording, a slow Mac, an empty or failed Whisper result), the `final` text is Apple's text.

@@ -69,8 +69,9 @@ final class DictationRuntime {
     var onChange: [() -> Void] = []
 
     private let queue = DispatchQueue(label: "io.github.theo-henry.zeus.dictation", qos: .userInitiated)
-    /// Only on `queue`.
+    /// Written only on `queue` and under `lock`; read on `queue`, or under `lock` on other threads.
     private var transcriber: Transcriber?
+    private let lock = NSLock()
     private var loadingID: String?
     private var failedIDs = Set<String>()
     private var started = false
@@ -105,7 +106,7 @@ final class DictationRuntime {
             // The swap frees the old model on this queue, after the transcriptions that used it.
             // Only the queue holds a transcriber, so that `shutdown` can free it.
             let result = Result { try factory(engine, candidate.file) }.map { new -> Bool in
-                self?.transcriber = new
+                self?.setTranscriber(new)
                 return new.multilingual
             }
             DispatchQueue.main.async {
@@ -148,14 +149,24 @@ final class DictationRuntime {
     /// ggml stops the process with an assertion when its Metal device ends at exit while a model is still loaded.
     func shutdown() {
         started = false
-        queue.sync { transcriber = nil }
+        queue.sync { setTranscriber(nil) }
         Trace.log("dictation: model freed")
+    }
+
+    /// The language code of a locale: "de" for "de-DE" or "de_DE".
+    static func languageCode(of locale: String) -> String {
+        String(locale.split(whereSeparator: { $0 == "-" || $0 == "_" }).first ?? "").lowercased()
+    }
+
+    /// The loaded model decodes this language: a multilingual model each Whisper language, another model only English.
+    func decodes(_ language: String) -> Bool {
+        multilingual ? DictationSettings.allLanguages.contains { $0.id == language } : language == "en"
     }
 
     /// The language of a transcription: the language of a v1 page's locale, or the setting.
     func language(for locale: String?) -> String? {
         if !multilingual { return "en" }
-        if let locale { return String(locale.split(separator: "-").first ?? "").lowercased() }
+        if let locale { return Self.languageCode(of: locale) }
         let setting = DictationSettings.shared.language
         return setting == "auto" ? nil : setting
     }
@@ -185,11 +196,17 @@ final class DictationRuntime {
     }
 
     /// The prompt of the custom words, counted with the loaded model when there is one.
-    func prompt(words: [String], completion: @escaping (DictationSettings.Prompt) -> Void) {
-        queue.async { [weak self] in
-            let prompt = DictationSettings.prompt(words: words, count: self?.transcriber?.tokenCount)
-            DispatchQueue.main.async { completion(prompt) }
-        }
+    /// It does not wait for a load or a transcription: the tokenizer only reads the model's vocabulary.
+    func prompt(words: [String]) -> DictationSettings.Prompt {
+        lock.lock()
+        defer { lock.unlock() }
+        return DictationSettings.prompt(words: words, count: transcriber?.tokenCount)
+    }
+
+    private func setTranscriber(_ new: Transcriber?) {
+        lock.lock()
+        transcriber = new
+        lock.unlock()
     }
 
     private func set(_ state: State) {

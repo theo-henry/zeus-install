@@ -670,6 +670,12 @@ check "the Fast model downloads when the user picks it, and loads" 'wait_for "di
 act test-clear
 speech_round w7
 check "the English-only model decodes English, also with French in the settings" 'page_has "\"text\":\"Hello Zeus. (en) [Celonis, Apolix.]\"" && page_has "\"effectiveLanguage\":\"en\""'
+act test-clear
+act 'test-speech-post:{"type":"speech-start","id":"v3","locale":"de-DE"}'
+wait_for "speech event: state v3 listening" 10 >/dev/null
+act 'test-speech-post:{"type":"speech-stop","id":"v3"}'
+check "a version 1 page in a language that the English-only model does not decode gets only Apple's text" \
+  'wait_for "speech event: state v3 stopped" 10 && grep -q "speech: final v3 engine=apple" "$TRACE"'
 act 'test-speech-post:{"type":"speech-settings-set","model":"accurate","language":"auto"}'
 check "back to the Accurate model: it loads again from this Mac" 'wait_count "dictation: loaded sim-accurate-1" 2 10 && [ "$(grep -c "^accurate-1.bin$" "$MODELS_SRV/requests.log")" = 1 ]'
 # The dictated text is a draft; without it, the quit asks nothing.
