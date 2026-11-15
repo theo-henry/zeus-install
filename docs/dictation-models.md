@@ -62,7 +62,7 @@ When a release changes the list, each Mac gets the new model by itself at the ne
    shasum -a 256 /tmp/model.bin
    ```
 
-5. Build and test the app, then release it (`app/release.sh`).
+5. Build and test the app, then merge the change to `main`; CI releases the app (see [Release the Zeus app](../README.md#release-the-zeus-app-maintainer)).
    At the next start, each Mac downloads the new model in the background, switches to it when it loads, and deletes the old one.
 
 To add a role (for example a third choice), add a model with the new `role`; the settings show it at once.
