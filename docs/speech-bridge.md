@@ -1,45 +1,62 @@
-# Zeus speech bridge, version 2
+# Zeus speech bridge, versions 1 and 2
 
 This document is the contract between the Zeus app (native macOS shell, `app/Sources/Zeus/Speech.swift`) and the Zeus pages that use speech to text: the main chat and the Zeus Editor pages of zeus-editor.
 A page can use the bridge without reading the Swift code.
+The app and zeus-editor ship separately, so the app supports both versions at the same time.
 
-## Summary of version 2
+## Summary
 
 - Dictation uses local Whisper models (`whisper.cpp`) on the Mac.
   No audio leaves the Mac.
-- Whisper gives the text only after Stop.
+- While no Whisper model is loaded (first download, or the load after the app start), the app uses Apple's on-device speech recognition.
+- **Version 1** (the pages of today): the page gets `partial` text while the user speaks and the `final` text after Stop, and gives up 4 s after it posts Stop.
+  The app keeps this contract: see "Version 1 sessions".
+- **Version 2**: Whisper gives the text only after Stop.
   While the user speaks, the page gets audio levels (for a waveform), not words.
-  After Stop, the page gets a `processing` state, then the `final` text.
-- While the Whisper model is not ready (first download, or the load after the app start), the app uses Apple's on-device speech recognition instead.
-  That engine still sends `partial` text while the user speaks, as in version 1.
-  The page does not choose the engine; each `state: "listening"` event says which engine runs.
+  After Stop, the page gets a `processing` state, then the `final` text, with no deadline.
+  The page also reads and writes the dictation settings and sees the model downloads.
 - The dictation settings are app-wide and shared by both chats: the model (`accurate` or `fast`), the language (`auto` or a fixed language), and one list of custom words.
-  Pages read and write them through the bridge.
-- A recording stops by itself after 10 minutes (`recordingLimitSeconds` in the settings), and is then transcribed.
+  They apply to both versions.
+- A version 2 recording stops by itself after 10 minutes (`recordingLimitSeconds` in the settings), and is then transcribed.
 
 ## Detection and compatibility rules
 
 At document start, in the main frame of every Zeus page, the app sets:
 
 ```js
-window.zeusApp.speech = { version: 2 }
+window.zeusApp.speech = { version: 1, versions: [1, 2] }
 ```
 
 The object is frozen.
 A page that sets its own `window.zeusApp` keeps `speech` (the app adds it back).
 
-Compatibility rules:
+Rules:
 
-1. The version is a single integer that changes only when the meaning of an existing message or event changes.
-   New message types, new event types, and new fields in an event do not change the version.
-2. A page must ignore event types and fields that it does not know.
-3. A page that supports only version 1 (it checks `version === 1`) shows no dictation control in an app with version 2.
-   This is intended: a version 1 page cannot wait for text that comes after Stop, so it would lose dictated words.
-4. A page that supports version 2 must check `version >= 2`, and must work with both engines (`whisper` and `apple`).
-5. In an app with version 1 (`version === 1`), a version 2 page can fall back to the version 1 behaviour, or show no dictation control.
-   Version 1 has only the messages `speech-languages`, `speech-start`, `speech-stop`, and the events `languages`, `state` (`listening` and `stopped`), `partial`, `final`, and `error`.
-6. All messages from version 1 keep their names and fields in version 2.
-   A start with a `locale` still works (see `speech-start`).
+1. `version` stays `1`, so that version 1 pages (which check `version === 1`) keep their dictation.
+2. `versions` lists every version that the app supports.
+   A version 2 page checks `window.zeusApp.speech.versions?.includes(2)`.
+   An older app has no `versions`; a version 2 page then uses version 1 (or shows no dictation control).
+3. The version of a session is chosen by its start: `{type: "speech-start", id, version: 2}` is a version 2 session; a start without `version` (or with `version: 1`) is a version 1 session.
+   Two pages with different versions can use the app at the same time.
+4. A new version number comes only when the meaning of an existing message or event changes.
+   New message types, new event types, and new fields in an event do not change it.
+5. A page must ignore event types and fields that it does not know.
+6. All messages and events of version 1 keep their names and fields.
+   The messages of version 2 that are not starts (`speech-status`, `speech-settings`, `speech-settings-set`, `speech-model-download`, `speech-model-cancel`, `speech-cancel`) work for any page.
+
+## Version 1 sessions
+
+A version 1 session behaves as before Whisper: `state: "listening"`, `partial` text while the user speaks, `final` after Stop, then `state: "stopped"`, with no `level` and no `processing` events.
+
+- Without a loaded Whisper model, Apple's recognizer does the whole session, as before.
+- With a loaded Whisper model, Apple's recognizer gives the `partial` text, and Whisper records the same microphone audio at the same time.
+  After Stop, the `final` text is the Whisper text when Whisper is ready within 2.8 s of the stop.
+  Otherwise (a long recording, a slow Mac, an empty or failed Whisper result), the `final` text is Apple's text.
+  The `final` event comes within about 3 s of the stop either way, inside the page's 4 s deadline.
+  The `final` event has `engine: "whisper"` or `engine: "apple"`.
+- `speech-languages` without `version: 2` answers with the BCP-47 locales of Apple's recognizer, as before; a version 1 start passes one of them, or null for the language of the Mac.
+- Apple's recognizer needs the speech recognition permission, as before.
+- A version 1 page cancels with `speech-stop` and then ignores the late events, as before.
 
 ## Transport
 
@@ -52,7 +69,7 @@ Compatibility rules:
 - `status` and `settings` events go to every page that has posted at least one speech message, so that both chats stay in step.
   A page that wants these events from the start posts `speech-status` and `speech-settings` when it loads.
 
-## Sessions
+## Sessions (both versions)
 
 - A page starts a session with an `id` of its choice (a non-empty string, unique within the page).
 - One session runs in the whole app at a time, from its start until its `stopped` state, including the time while Whisper processes.
@@ -64,10 +81,10 @@ Compatibility rules:
 - The page must keep its session until `stopped`.
   Do not reset the session on a timer while the state is `processing`; Whisper processing can take several seconds for long recordings.
 
-Typical Whisper session:
+Typical version 2 Whisper session:
 
 ```text
-page -> app   {type: "speech-start", id: "d1"}
+page -> app   {type: "speech-start", id: "d1", version: 2}
 app  -> page  {type: "state", id: "d1", state: "listening", engine: "whisper"}
 app  -> page  {type: "level", id: "d1", level: 0.42}         (about 20 per second)
 page -> app   {type: "speech-stop", id: "d1"}
@@ -76,10 +93,10 @@ app  -> page  {type: "final", id: "d1", text: "Show the Celonis process.", engin
 app  -> page  {type: "state", id: "d1", state: "stopped"}
 ```
 
-Typical Apple fallback session (model not ready):
+Typical version 2 session while no model is loaded (Apple's recognizer):
 
 ```text
-page -> app   {type: "speech-start", id: "d2"}
+page -> app   {type: "speech-start", id: "d2", version: 2}
 app  -> page  {type: "state", id: "d2", state: "listening", engine: "apple"}
 app  -> page  {type: "partial", id: "d2", text: "Show the"}
 page -> app   {type: "speech-stop", id: "d2"}
@@ -93,7 +110,7 @@ The Apple engine sends no `level` and no `processing`.
 
 | Message | Fields | Answer |
 | --- | --- | --- |
-| `speech-start` | `id` (string, required); `locale` (optional, see below) | `state: "listening"`, or an `error` |
+| `speech-start` | `id` (string, required); `version` (`2` for a version 2 session; without it, version 1); `locale` (optional, see below) | `state: "listening"`, or an `error` |
 | `speech-stop` | `id` | Whisper: `state: "processing"`, then `final`, then `stopped`. Apple: `final`, then `stopped` |
 | `speech-cancel` | `id` | `{type: "state", id, state: "stopped", cancelled: true}` at once; no `final` |
 | `speech-status` | none | `status` event |
@@ -101,11 +118,11 @@ The Apple engine sends no `level` and no `processing`.
 | `speech-settings-set` | any of `model`, `language`, `customWords` | After a change, a `settings` event to every page. The sender always gets a `settings` event; it has an `error` field when a value is not valid |
 | `speech-model-download` | `model`: `"accurate"` or `"fast"` | `status` events with the download progress |
 | `speech-model-cancel` | `model`: `"accurate"` or `"fast"` | `status` event with the state `cancelled` |
-| `speech-languages` | none | `languages` event (version 1 message, still available) |
+| `speech-languages` | `version` (optional) | `languages` event: Apple's locales without `version: 2`, the locales of the engine of a version 2 start with it |
 
 Details:
 
-- `speech-start` `locale`: omit it or send `null` to use the language of the settings (the normal case in version 2).
+- `speech-start` `locale` in a version 2 session: omit it or send `null` to use the language of the settings (the normal case).
   A version 1 BCP-47 id such as `"fr-FR"` is still accepted: Whisper uses its language code (`fr`), and Apple uses that locale.
   `"auto"` means auto-detection.
 - `speech-stop` and `speech-cancel` with an `id` that is not the current session of this page do nothing.
@@ -129,7 +146,7 @@ Details:
 { type: "state", id, state: "stopped", cancelled?: true }
 ```
 
-- `processing` comes only from Whisper, after `speech-stop`, after the app stopped the session (see "App-side stops"), or after the 10-minute limit (`reason: "limit"`).
+- `processing` comes only in a version 2 Whisper session, after `speech-stop`, after the app stopped the session (see "App-side stops"), or after the 10-minute limit (`reason: "limit"`).
   Show "Transcribing..." in this state.
 - `cancelled: true` is present only in the answer to `speech-cancel`.
 
@@ -140,7 +157,7 @@ Details:
 ```
 
 The loudness of the microphone: 0 is -50 dBFS or quieter, 1 is 0 dBFS.
-About 20 events per second, only from Whisper, only while `listening`.
+About 20 events per second, only in a version 2 Whisper session, only while `listening`.
 
 ### `partial` and `final`
 
@@ -233,15 +250,15 @@ With `partial`, each event has the complete text so far; replace, do not append.
   Show that to the user.
 - Custom words are a hint for spelling and context, not a guarantee.
 
-### `languages` (version 1 message)
+### `languages`
 
 ```js
 { type: "languages", engine, locales: [{ id, name, onDevice: true }], default }
 ```
 
-With Whisper, the ids are Whisper language codes, with `{id: "auto", name: "Auto-detect"}` first for a multilingual model, and `default` is the setting.
-With Apple, the ids are BCP-47 locales, as in version 1.
-New pages use `settings` instead.
+Without `version: 2` in the request, and with Apple's recognizer, the ids are BCP-47 locales, as in version 1.
+With `version: 2` and a loaded Whisper model, the ids are Whisper language codes, with `{id: "auto", name: "Auto-detect"}` first for a multilingual model, and `default` is the setting.
+Version 2 pages use `settings` instead.
 
 ## App-side stops and cancels
 
@@ -249,8 +266,8 @@ The app stops or cancels a session by itself in these cases:
 
 | Case | What the app does | Events to the page |
 | --- | --- | --- |
-| The page's chat tab goes out of view (another tab, or a Zeus Editor tab goes out of view) | Stop | Whisper: `processing`, `final`, `stopped`; Apple: `final`, `stopped` |
-| 10 minutes of recording | Stop | `processing` with `reason: "limit"`, `final`, `stopped` |
+| The page's chat tab goes out of view (another tab, or a Zeus Editor tab goes out of view) | Stop | Version 2 with Whisper: `processing`, `final`, `stopped`; version 1 and Apple: `final`, `stopped` |
+| 10 minutes of recording (version 2 with Whisper) | Stop | `processing` with `reason: "limit"`, `final`, `stopped` |
 | The page reloads or goes to another page, its window or tab closes, its web process ends, or the app quits | Cancel | None; the audio and any Whisper processing are discarded |
 
 A page that hides a frame and still exists keeps its session and gets its `final` text.
@@ -258,7 +275,7 @@ A page that removes a frame posts `speech-cancel` first, or loses the result.
 
 ## Send while dictating
 
-Whisper text arrives after Stop.
+In a version 2 session, the Whisper text arrives after Stop.
 A Send action during a session must post `speech-stop`, wait for `final` (or `error`) and `stopped`, insert the text, and only then send.
 A Send that cancels the session loses the dictated words.
 

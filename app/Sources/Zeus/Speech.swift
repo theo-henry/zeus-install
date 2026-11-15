@@ -4,13 +4,16 @@ import WebKit
 
 /// Speech to text for the Zeus pages (the chat and Zeus Editor), on this Mac only: no audio leaves the Mac.
 ///
-/// Two engines:
+/// Engines:
 /// - Whisper (`WhisperSpeechEngine`, `DictationRuntime`): the dictation model of the settings. It gives the text after Stop.
-/// - Apple's speech recognition (`AppleSpeechEngine`), only while no Whisper model is loaded (the first download,
+/// - Apple's speech recognition (`AppleSpeechEngine`), while no Whisper model is loaded (the first download,
 ///   or the load after the app start). It gives text while the user speaks.
+/// - For a version 1 page while a Whisper model is loaded, both (`HybridSpeechEngine`): Apple's text while the user
+///   speaks, then the Whisper text when it is ready within the page's stop deadline.
 ///
-/// The bridge between a page and the app is version 2; docs/speech-bridge.md is its contract.
-/// - At document start, `window.zeusApp.speech = {version: 2}`.
+/// The bridge has versions 1 and 2; docs/speech-bridge.md is the contract.
+/// - At document start, `window.zeusApp.speech = {version: 1, versions: [1, 2]}`: version 1 pages check `version === 1`.
+/// - A version 2 session starts with `{type: "speech-start", id, version: 2}`; a start without it is a version 1 session.
 /// - A page posts `{type: "speech-…"}` messages to `window.webkit.messageHandlers.zeusApp`.
 /// - The app calls `window.zeusSpeech?.onEvent(event)` in that page only; the status and settings events go to each
 ///   page that sent a speech message.
@@ -22,10 +25,11 @@ final class SpeechService {
     static let shared = SpeechService()
 
     /// The page bridge: `window.zeusApp.speech` (see `WebViewHandler.pageBridgeScript`).
-    static let pageInfo: [String: Any] = ["version": 2]
+    static let pageInfo: [String: Any] = ["version": 1, "versions": [1, 2]]
 
     private let apple: SpeechEngine
     private let whisper: SpeechEngine
+    private let hybrid: HybridSpeechEngine
     private var current: Recognition?
     /// The pages that use speech to text: they get the status and settings events.
     private let pages = NSHashTable<WKWebView>.weakObjects()
@@ -53,21 +57,29 @@ final class SpeechService {
             // The whisper path with simulated audio and a simulated model (see `SimulatedTranscriber`).
             apple = SimulatedSpeechEngine(mode: "1")
             whisper = WhisperSpeechEngine { TestAudioSource() }
+            hybrid = HybridSpeechEngine(apple: apple) { TestAudioSource() }
             DictationRuntime.shared.factory = { _, file in try SimulatedTranscriber(model: file) }
         } else if !mode.isEmpty {
             apple = SimulatedSpeechEngine(mode: mode)
             whisper = WhisperSpeechEngine { TestAudioSource() }
+            hybrid = HybridSpeechEngine(apple: apple) { TestAudioSource() }
         } else if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_AUDIO_FILE"] != nil {
             // The real model, with a sound file instead of the microphone.
             apple = AppleSpeechEngine()
             whisper = WhisperSpeechEngine { TestAudioSource() }
+            hybrid = HybridSpeechEngine(apple: apple) { TestAudioSource() }
         } else {
-            apple = AppleSpeechEngine()
+            let appleEngine = AppleSpeechEngine()
+            apple = appleEngine
             whisper = WhisperSpeechEngine { MicrophoneSource() }
+            hybrid = HybridSpeechEngine(apple: appleEngine) { TapAudioSource(tap: appleEngine.tap) }
         }
         #else
-        apple = AppleSpeechEngine()
+        let appleEngine = AppleSpeechEngine()
+        apple = appleEngine
         whisper = WhisperSpeechEngine { MicrophoneSource() }
+        // One microphone: Whisper gets the buffers of Apple's recognizer.
+        hybrid = HybridSpeechEngine(apple: appleEngine) { TapAudioSource(tap: appleEngine.tap) }
         #endif
         DictationModels.shared.onChange.append { [weak self] in self?.queueStatus() }
         DictationRuntime.shared.onChange.append { [weak self] in self?.queueStatus() }
@@ -77,9 +89,19 @@ final class SpeechService {
         }
     }
 
-    /// The engine of a start now: Whisper when its model is loaded, otherwise Apple's recognizer.
+    /// The engine of a version 2 start now: Whisper when its model is loaded, otherwise Apple's recognizer.
     private var engineNow: (engine: SpeechEngine, name: String) {
         DictationRuntime.shared.isReady ? (whisper, "whisper") : (apple, "apple")
+    }
+
+    /// The engine of a version 1 start: Apple's text while the user speaks, with the Whisper text at the end when a
+    /// model is loaded.
+    private var engineV1: (engine: SpeechEngine, name: String) {
+        DictationRuntime.shared.isReady ? (hybrid, "hybrid") : (apple, "apple")
+    }
+
+    private static func isVersion2(_ message: [String: Any]) -> Bool {
+        ((message["version"] as? NSNumber)?.intValue ?? 1) >= 2
     }
 
     /// Handles a speech message from a page. Returns false for every other message.
@@ -91,7 +113,8 @@ final class SpeechService {
         pages.add(webView)
         switch type {
         case "speech-languages":
-            let now = engineNow
+            // A version 1 page gets the locales of Apple's recognizer, as before.
+            let now: (engine: SpeechEngine, name: String) = Self.isVersion2(message) ? engineNow : (apple, "apple")
             now.engine.languages { [weak webView] languages in
                 guard let webView else { return }
                 Self.send(["type": "languages", "engine": now.name,
@@ -100,7 +123,7 @@ final class SpeechService {
             }
         case "speech-start":
             guard let id = message["id"] as? String, !id.isEmpty else { return true }
-            start(id: id, locale: message["locale"] as? String, in: webView)
+            start(id: id, locale: message["locale"] as? String, version2: Self.isVersion2(message), in: webView)
         case "speech-stop":
             guard let id = message["id"] as? String, let current, current.id == id, current.webView === webView else { return true }
             Trace.log("speech: stop \(id) (page)")
@@ -130,21 +153,21 @@ final class SpeechService {
         return true
     }
 
-    private func start(id: String, locale: String?, in webView: WKWebView) {
+    private func start(id: String, locale: String?, version2: Bool, in webView: WKWebView) {
         if current != nil {
             Trace.log("speech: start \(id) refused, busy")
             Self.send(["type": "error", "id": id, "code": "busy",
                        "message": "Speech to text is already on in another Zeus page. Stop it there first."], to: webView)
             return
         }
-        let now = engineNow
+        let now = version2 ? engineNow : engineV1
         let recognition = Recognition(id: id, engine: now.engine, engineName: now.name, webView: webView)
         current = recognition
         let locale = locale.flatMap { $0.isEmpty ? nil : $0 }
-        Trace.log("speech: start \(id) locale=\(locale ?? "default") engine=\(now.name)")
-        // Without a locale, Apple's recognizer takes the fixed language of the dictation settings.
+        Trace.log("speech: start \(id) locale=\(locale ?? "default") engine=\(now.name) bridge=\(version2 ? 2 : 1)")
+        // Without a locale, Apple's recognizer of a version 2 session takes the fixed language of the dictation settings.
         let language = DictationSettings.shared.language
-        let engineLocale = locale ?? (now.name == "apple" && language != "auto" ? language : nil)
+        let engineLocale = locale ?? (version2 && now.name == "apple" && language != "auto" ? language : nil)
         now.engine.start(locale: engineLocale) { [weak self, weak recognition] event in
             guard let self, let recognition, self.current === recognition else { return }
             self.deliver(event, for: recognition)
@@ -170,10 +193,11 @@ final class SpeechService {
         case let .partial(text):
             events.append(["type": "partial", "id": id, "text": text])
         case let .final(text):
+            let engine = (recognition.engine as? HybridSpeechEngine)?.finalEngine ?? recognition.engineName
             if let stopAt = recognition.stopAt {
-                Trace.log("speech: final \(id) engine=\(recognition.engineName) stop-to-text=\(Int(Date().timeIntervalSince(stopAt) * 1000)) ms")
+                Trace.log("speech: final \(id) engine=\(engine) stop-to-text=\(Int(Date().timeIntervalSince(stopAt) * 1000)) ms")
             }
-            events.append(["type": "final", "id": id, "text": text, "engine": recognition.engineName])
+            events.append(["type": "final", "id": id, "text": text, "engine": engine])
         case let .failed(code, message):
             events.append(["type": "error", "id": id, "code": code.rawValue, "message": message])
         case .ended:
@@ -416,6 +440,8 @@ extension SpeechEngine {
 
 /// Apple's speech recognition (SFSpeechRecognizer) with the microphone (AVAudioEngine), on this Mac only.
 final class AppleSpeechEngine: SpeechEngine {
+    /// The microphone buffers, also for Whisper in a version 1 session (see `HybridSpeechEngine`).
+    let tap = BufferTap()
     private var generation = 0
     private var onEvent: ((SpeechEngineEvent) -> Void)?
     private var audio: AVAudioEngine?
@@ -527,7 +553,10 @@ final class AppleSpeechEngine: SpeechEngine {
             finish(.failed(.unavailable, "Zeus finds no microphone. Connect a microphone and try again."))
             return
         }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [tap] buffer, _ in
+            request.append(buffer)
+            tap.send(buffer)
+        }
         audio.prepare()
         do {
             try audio.start()

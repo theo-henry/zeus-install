@@ -502,6 +502,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             case "test-send": self.chatTabs.last?.webView.evaluateJavaScript("document.querySelector('#send,.send-button').click()")
             case "test-real-turn":
                 self.chatTabs.last?.webView.evaluateJavaScript("const input=document.querySelector('textarea'); input.value='Reply with APP_OK. Do not use tools or change files.'; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.send-button').click()")
+            // Runs JavaScript in the chat page of the last tab (a click as the user does) and writes its result into the trace.
+            case "test-eval":
+                self.chatTabs.last?.webView.evaluateJavaScript(argument) { result, error in
+                    Trace.log("test eval: \(result ?? error?.localizedDescription ?? "empty")")
+                }
             case "test-inspect":
                 self.chatTabs.last?.webView.evaluateJavaScript("document.body.innerText.slice(-1800)") { result, error in
                     Trace.log("test page: \(result ?? error?.localizedDescription ?? "empty")")
@@ -563,7 +568,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                                              arguments: ["message": argument], in: nil, in: .page)
             case "test-speech-page", "test-editor-speech-page":
                 let webView = action == "test-speech-page" ? self.chatTabs.last?.webView : EditorWindowController.newestWebView
-                let script = "JSON.stringify({version: window.zeusApp?.speech?.version ?? null, close: typeof window.zeusApp?.closeState, "
+                let script = "JSON.stringify({version: window.zeusApp?.speech?.version ?? null, versions: window.zeusApp?.speech?.versions ?? null, "
+                    + "close: typeof window.zeusApp?.closeState, "
                     + "text: document.querySelector('textarea')?.value ?? null, events: window.speechEvents ?? null, "
                     + "status: window.speechStatus ?? null, settings: window.speechSettings ?? null, models: window.speechModelStates ?? null})"
                 webView?.evaluateJavaScript(script) { result, error in

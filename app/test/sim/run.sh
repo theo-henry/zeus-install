@@ -486,7 +486,7 @@ page_has() {
   act "test-${2:-}speech-page"
   wait_count "speech page: " $((before + 1)) 10 >/dev/null && grep "speech page: " "$TRACE" | tail -1 | grep -qF -- "$1"
 }
-check "the chat page can use speech to text, also after it sets window.zeusApp" 'page_has "\"version\":2,\"close\":\"function\""'
+check "the chat page can use speech to text, also after it sets window.zeusApp" 'page_has "\"version\":1,\"versions\":[1,2],\"close\":\"function\""'
 act 'test-speech-post:{"type":"speech-languages"}'
 check "the languages are those on this Mac, with the default" 'sleep 1 && page_has "languages  en-US,fr-FR,nl-NL,de-DE/en-US"'
 act test-draft
@@ -509,7 +509,7 @@ act 'test-speech-post:{"type":"speech-start","id":"s4","locale":"ja-JP"}'
 check "a language without recognition on the Mac gives no-on-device" 'wait_for "speech event: error s4 no-on-device" 10 && sleep 0.5 && ! grep -q "speech event: state s4" "$TRACE"'
 act test-open-editor
 check "a Zeus Editor page opens" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/editor" 10'
-check "the Zeus Editor page can use speech to text" 'page_has "\"version\":2" editor-'
+check "the Zeus Editor page can use speech to text" 'page_has "\"version\":1,\"versions\":[1,2]" editor-'
 act 'test-editor-speech-post:{"type":"speech-start","id":"e1","locale":"de-DE"}'
 check "speech to text runs in the Zeus Editor page" 'wait_for "speech event: partial e1 chars=10" 10 && page_has "\"text\":\"Hello Zeus\"" editor-'
 act 'test-speech-post:{"type":"speech-stop","id":"e1"}'
@@ -605,7 +605,7 @@ MODELS_DIR="$SANDBOX/Library/Application Support/io.github.theo-henry.zeus/whisp
 whisper_env() { echo "ZEUS_APP_TEST_SPEECH=whisper ZEUS_APP_NO_MODEL_DOWNLOAD=0 ZEUS_APP_DICTATION_MANIFEST=$MODELS_SRV/$1"; }
 # speech_round <id> [seconds]: a start, then a stop after that many seconds, then the final text.
 speech_round() {
-  act "test-speech-post:{\"type\":\"speech-start\",\"id\":\"$1\",\"locale\":null}"
+  act "test-speech-post:{\"type\":\"speech-start\",\"id\":\"$1\",\"locale\":null,\"version\":2}"
   wait_for "speech event: state $1 listening" 10 && sleep "${2:-0.6}"
   act "test-speech-post:{\"type\":\"speech-stop\",\"id\":\"$1\"}"
   wait_for "speech event: state $1 stopped" 10
@@ -615,7 +615,7 @@ touch "$MODELS_SRV/accurate-1.bin.hold"
 # shellcheck disable=SC2046
 launch_app whisper $(whisper_env v1.json)
 check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
-check "the chat page has speech bridge version 2" 'page_has "\"version\":2,\"close\":\"function\""'
+check "the chat page has speech bridge versions 1 and 2" 'page_has "\"version\":1,\"versions\":[1,2],\"close\":\"function\""'
 check "the accurate model downloads in the background after the start" 'wait_for "dictation: download sim-accurate-1 starts (needed)" 10'
 act 'test-speech-post:{"type":"speech-status"}'
 check "the status says Apple's recognizer while the model is not ready" 'sleep 0.5 && page_has "\"engine\":\"apple\""'
@@ -634,6 +634,13 @@ speech_round w1 0.8
 check "Whisper listens, sends the audio level, then processing, then the final text after the stop" \
   'page_has "\"state w1 listening\",\"level w1 \"" && page_has "\"state w1 processing\",\"final w1 Hello Zeus.\",\"state w1 stopped\"" && page_has "\"text\":\"Hello Zeus.\""'
 check "the trace has the time from the stop to the text" 'grep -q "speech: final w1 engine=whisper stop-to-text=[0-9]* ms" "$TRACE"'
+act test-clear
+act 'test-speech-post:{"type":"speech-start","id":"v1","locale":null}'
+check "a version 1 page (no version in its start) still gets the words while the user speaks" \
+  'wait_for "speech: start v1 locale=default engine=hybrid bridge=1" 10 && wait_for "speech event: partial v1 chars=10" 10'
+act 'test-speech-post:{"type":"speech-stop","id":"v1"}'
+check "then it gets the Whisper text through the version 1 events, before its 4 s deadline" \
+  'wait_for "speech event: state v1 stopped" 10 && grep -q "speech: final v1 engine=whisper stop-to-text=[0-9]* ms" "$TRACE" && [ "$(grep "speech: final v1 " "$TRACE" | sed "s/.*stop-to-text=\([0-9]*\) ms/\1/")" -lt 4000 ] && page_has "\"partial v1 Hello Zeus\",\"final v1 Hello Zeus.\",\"state v1 stopped\""'
 act 'test-speech-post:{"type":"speech-settings-set","customWords":[" Celonis ","Apolix","celonis",""]}'
 check "the custom words are saved for both chats, cleaned, and counted in tokens" \
   'sleep 0.5 && page_has "\"customWords\":[\"Celonis\",\"Apolix\"]" && page_has "\"included\":2" && defaults read "$PREFS_DOMAIN" dictationCustomWords | grep -q Apolix'
@@ -646,13 +653,13 @@ speech_round w3
 check "a fixed language goes to the model" 'page_has "Hello Zeus. (fr) [Celonis, Apolix.]"'
 act 'test-speech-post:{"type":"speech-settings-set","language":"xx"}'
 check "an unknown language is refused with an error, and the setting stays" 'sleep 0.5 && page_has "unknown language" && page_has "\"language\":\"fr\""'
-act 'test-speech-post:{"type":"speech-start","id":"w4","locale":null}'
+act 'test-speech-post:{"type":"speech-start","id":"w4","locale":null,"version":2}'
 wait_for "speech event: state w4 listening" 10 >/dev/null
 act 'test-speech-post:{"type":"speech-stop","id":"w4"}'
-act 'test-speech-post:{"type":"speech-start","id":"w5","locale":null}'
+act 'test-speech-post:{"type":"speech-start","id":"w5","locale":null,"version":2}'
 check "a start while Whisper processes is busy" 'wait_for "speech event: state w4 processing" 10 && sleep 0.3 && page_has "error w5 busy"'
 check "the processing recording still gives its text" 'wait_for "speech event: final w4 " 10'
-act 'test-speech-post:{"type":"speech-start","id":"w6","locale":null}'
+act 'test-speech-post:{"type":"speech-start","id":"w6","locale":null,"version":2}'
 wait_for "speech event: state w6 listening" 10 >/dev/null
 act 'test-speech-post:{"type":"speech-stop","id":"w6"}'
 wait_for "speech event: state w6 processing" 10 >/dev/null
@@ -670,10 +677,18 @@ act test-clear
 sleep 0.3
 stop_app
 # shellcheck disable=SC2046
-launch_app whisper-limit $(whisper_env v1.json) ZEUS_APP_TEST_RECORDING_LIMIT=2
+launch_app whisper-limit $(whisper_env v1.json) ZEUS_APP_TEST_RECORDING_LIMIT=2 ZEUS_APP_TEST_V1_DEADLINE=0.2
 check "the app loads the model on this Mac at start, without a download" 'wait_for "dictation: loaded sim-accurate-1" 20 && ! grep -q "download sim-accurate-1 starts" "$TRACE"'
 check "the chat opens" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
-act 'test-speech-post:{"type":"speech-start","id":"w8","locale":null}'
+act 'test-speech-post:{"type":"speech-start","id":"v2","locale":null}'
+wait_for "speech event: state v2 listening" 10 >/dev/null
+sleep 0.5
+act 'test-speech-post:{"type":"speech-stop","id":"v2"}'
+check "when Whisper is not ready in time, a version 1 page gets the text of Apple's recognizer" \
+  'wait_for "speech: v1 Whisper text not ready in 0.2 s" 10 && wait_for "speech: final v2 engine=apple" 10 && wait_for "speech event: state v2 stopped" 10'
+act test-clear
+sleep 0.3
+act 'test-speech-post:{"type":"speech-start","id":"w8","locale":null,"version":2}'
 check "the recording limit stops the recording and gives the text" 'wait_for "speech: whisper recording 2\.[0-9] s (10-minute limit)" 10 && wait_for "speech event: final w8 " 10 && page_has "\"state w8 processing\""'
 act test-clear
 sleep 0.3
