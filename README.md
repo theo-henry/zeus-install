@@ -171,12 +171,11 @@ Drafts, pre-releases, and the other releases of the zeus repo are not used.
 CI makes a release by itself.
 Each push to `main` runs the tests, and then the `release` job of `.github/workflows/ci.yml` finds the commit of the newest app release (in its notes).
 When `app/`, `install.sh`, or `install-app.sh` changed since that commit, the job runs `app/release.sh` on a GitHub-hosted macOS runner.
-The release has the next version (the newest app release plus 1 in the last number), and its notes have the first line of the head commit message (the PR title for a squash merge).
-A concurrency group makes one release at a time, so two merges cannot take the same version.
-A push to `main` does not cancel a run of `main`.
+The release has the next version (the newest app release plus 1 in the last number), and its notes list the subjects of all commits that changed these files since that commit.
+The runs of `main` run one at a time, and a run never stops a running run, so two merges cannot take the same version.
 The job never runs on the self-hosted runner.
-If a newer commit is already on `main`, the job of the older commit stops.
-The next push to `main` then releases all app changes since the newest app release, also when a job failed or did not release.
+If a newer commit is already on `main`, the job of the older commit does not release and shows a notice: the run of the newer commit releases all app changes since the newest app release.
+Because each run compares with the newest app release, a change is also released by the next push to `main` when a job failed or did not release.
 
 The job needs the Actions secret `ZEUS_RELEASE_TOKEN` in this repo: a fine-grained personal access token with access to only the repo `theo-henry/zeus` and the permission Contents: read and write.
 The token cannot do anything else.

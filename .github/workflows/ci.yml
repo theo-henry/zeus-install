@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR cancels the older run of the PR. A push to main never cancels a run of main, so a release is not stopped.
+# A new push to a PR cancels the older run of the PR. A run of main waits for the older run of main and never stops it, so a release is not stopped.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -44,10 +44,6 @@ jobs:
     # Always a GitHub-hosted runner, never the self-hosted mac-local runner: the release token is a secret.
     runs-on: macos-latest
     timeout-minutes: 30
-    # One release at a time, so two merges cannot take the same version. A queued run waits; it is not cancelled.
-    concurrency:
-      group: app-release
-      cancel-in-progress: false
     env:
       # A fine-grained token: only theo-henry/zeus, Contents read and write. See "Release the Zeus app" in README.md.
       GH_TOKEN: ${{ secrets.ZEUS_RELEASE_TOKEN }}
@@ -63,10 +59,17 @@ jobs:
             echo "::error title=No release token::The secret ZEUS_RELEASE_TOKEN is not set, so CI cannot release the app. See \"Release the Zeus app\" in README.md."
             exit 1
           fi
+          git fetch --quiet origin main
+          if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
+            echo "app=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=No release::A newer commit is on main. Its run releases all app changes since the newest app release."
+            exit 0
+          fi
           body="$(gh api "repos/theo-henry/zeus/releases?per_page=100" --jq '
             [.[] | select(.draft == false and .prerelease == false and (.tag_name | test("^app-v[0-9]+\\.[0-9]+\\.[0-9]+$")))]
             | sort_by(.tag_name | ltrimstr("app-v") | split(".") | map(tonumber)) | last | .body // ""')"
           released="$(printf '%s\n' "$body" | sed -nE 's/.*zeus-install commit ([0-9a-f]{40}).*/\1/p' | head -n 1)"
+          echo "released=$released" >> "$GITHUB_OUTPUT"
           if [ -z "$released" ] || ! git cat-file -e "$released^{commit}" 2>/dev/null; then
             echo "app=true" >> "$GITHUB_OUTPUT"
             echo "The commit of the newest app release is not known. Release."
@@ -81,7 +84,10 @@ jobs:
       - name: Release
         if: steps.changed.outputs.app == 'true'
         env:
-          ZEUS_RELEASE_NOTE: ${{ github.event.head_commit.message }}
+          RELEASED: ${{ steps.changed.outputs.released }}
         run: |
-          export ZEUS_RELEASE_NOTE="$(printf '%s' "$ZEUS_RELEASE_NOTE" | head -n 1)"
+          if [ -n "$RELEASED" ] && git cat-file -e "$RELEASED^{commit}" 2>/dev/null; then
+            ZEUS_RELEASE_NOTE="$(printf 'Changes:\n%s' "$(git log --format='- %s' "$RELEASED..HEAD" -- app install.sh install-app.sh)")"
+            export ZEUS_RELEASE_NOTE
+          fi
           app/release.sh
