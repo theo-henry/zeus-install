@@ -123,7 +123,7 @@ app/dev-bundle.sh         # app/build/Zeus-dev.app, a quick debug build for this
 The app has an ad-hoc signature, not an Apple Developer ID.
 The GitHub CLI does not mark its downloads with the quarantine attribute, so macOS opens the app without a Developer ID.
 
-To publish a release, run `app/release.sh [version]` (see [Release the Zeus app](../README.md#release-the-zeus-app-maintainer)).
+CI publishes a release with `app/release.sh` after each merge to `main` that changes the app (see [Release the Zeus app](../README.md#release-the-zeus-app-maintainer)).
 It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in the private zeus repo.
 `install-app.sh` (through `install.sh --app-only`), step 12 of `install.sh`, and the app's self-update download the newest one.
 
