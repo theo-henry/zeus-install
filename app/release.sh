@@ -14,6 +14,8 @@
 #
 # Environment:
 #   ZEUS_RELEASE_REPO="owner/name"   replaces the repo of the release (for tests).
+#   ZEUS_RELEASE_NOTE="text"         is added to the end of the release notes (CI puts the PR title there).
+#   GH_TOKEN                         a token for gh, when gh is not logged in (CI uses a secret).
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -96,11 +98,14 @@ main() {
   (cd "$out" && shasum -a 256 Zeus.zip >Zeus.zip.sha256)
 
   commit="$(git -C "$REPO_DIR" rev-parse HEAD)"
+  local notes="The Zeus app $version, built from theo-henry/zeus-install commit $commit.
+The installer and the app's self-update use the newest $TAG_PREFIX release."
+  if [ -n "${ZEUS_RELEASE_NOTE:-}" ]; then notes="$notes
+Change: $ZEUS_RELEASE_NOTE"; fi
   printf 'Publishing %s%s in %s\n' "$TAG_PREFIX" "$version" "$RELEASE_REPO"
   gh release create "$TAG_PREFIX$version" "$out/Zeus.zip" "$out/Zeus.zip.sha256" -R "$RELEASE_REPO" \
     --title "Zeus app $version" --latest=false \
-    --notes "The Zeus app $version, built from theo-henry/zeus-install commit $commit.
-The installer and the app's self-update use the newest $TAG_PREFIX release." ||
+    --notes "$notes" ||
     fail "gh could not make the release." "If a part of it was made, delete it on GitHub before you try again."
   printf 'Released the Zeus app %s.\n' "$version"
 }

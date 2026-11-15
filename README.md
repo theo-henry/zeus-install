@@ -168,7 +168,20 @@ The app releases are in the private zeus repo, with tags `app-v<version>` and th
 The install line, step 12, and the self-update of the app use the newest of these releases.
 Drafts, pre-releases, and the other releases of the zeus repo are not used.
 
-After each merged change to the app, run this on a Mac with the Xcode Command Line Tools and with `gh` logged in with write access to the zeus repo:
+CI makes a release by itself.
+Each push to `main` that changes `app/`, `install.sh`, or `install-app.sh` runs the tests, and then the `release` job of `.github/workflows/ci.yml` runs `app/release.sh` on a GitHub-hosted macOS runner.
+The release has the next version (the newest app release plus 1 in the last number), and its notes have the title of the merge commit.
+A concurrency group makes one release at a time, so two merges cannot take the same version.
+The job never runs on the self-hosted runner.
+If a newer commit is already on `main`, the job of the older commit stops, and the release of the newer commit has both changes.
+
+The job needs the Actions secret `ZEUS_RELEASE_TOKEN` in this repo: a fine-grained personal access token with access to only the repo `theo-henry/zeus` and the permission Contents: read and write.
+The token cannot do anything else.
+To make the token, open GitHub > Settings > Developer settings > Fine-grained tokens, and set a date for it to expire.
+Make a new token before that date, and replace the secret.
+Without the secret the job fails with a message.
+
+To make a release by hand (for a version that you choose, or when CI cannot), run this on a Mac with the Xcode Command Line Tools and with `gh` logged in with write access to the zeus repo:
 
 ```bash
 git switch main && git pull --ff-only
@@ -179,7 +192,8 @@ app/release.sh 1.2.0      # or a version that you choose, higher than the newest
 The script stops when the working tree has changes or when the checkout is not the newest commit of `origin/main`.
 It builds the app with `app/build.sh`, checks the zip (bundle identifier, version, and signature), and makes the release with `gh`.
 The release is not marked as the latest release of the zeus repo.
-No GitHub token is stored in the app, in this repo, or in CI.
+No GitHub token is stored in the app or in the files of this repo.
+The only token is the secret `ZEUS_RELEASE_TOKEN` of the CI release job.
 
 ## When the installer says "no access"
 

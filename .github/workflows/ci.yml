@@ -31,3 +31,46 @@ jobs:
       # Keep this command the same as commands.test in .no-mistakes.yaml.
       - name: Test
         run: app/test/run-all.sh
+
+  release:
+    name: Release the app
+    # Only a push to main that changed the app. install.sh and install-app.sh are included because the app
+    # downloads and runs them; a change to the other part of install.sh makes one extra release, which is harmless.
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Always a GitHub-hosted runner, never the self-hosted mac-local runner: the release token is a secret.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    # One release at a time, so two merges cannot take the same version. A queued run waits; it is not cancelled.
+    concurrency:
+      group: app-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find out if the app changed
+        id: changed
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BEFORE" HEAD -- app install.sh install-app.sh; then
+            echo "app=false" >> "$GITHUB_OUTPUT"
+            echo "The app did not change. No release."
+          else
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Release
+        if: steps.changed.outputs.app == 'true'
+        env:
+          # A fine-grained token: only theo-henry/zeus, Contents read and write. See "Release the Zeus app" in README.md.
+          GH_TOKEN: ${{ secrets.ZEUS_RELEASE_TOKEN }}
+          ZEUS_RELEASE_NOTE: ${{ github.event.head_commit.message }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "The secret ZEUS_RELEASE_TOKEN is not set."; exit 1; }
+          export ZEUS_RELEASE_NOTE="$(printf '%s' "$ZEUS_RELEASE_NOTE" | head -n 1)"
+          app/release.sh
