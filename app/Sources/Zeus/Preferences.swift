@@ -22,6 +22,22 @@ enum Preferences {
         get { defaults.bool(forKey: "showMenuBar") }
         set { defaults.set(newValue, forKey: "showMenuBar") }
     }
+
+    /// The dictation settings (see `DictationSettings`).
+    static var dictationModel: String? {
+        get { defaults.string(forKey: "dictationModel") }
+        set { defaults.set(newValue, forKey: "dictationModel") }
+    }
+
+    static var dictationLanguage: String? {
+        get { defaults.string(forKey: "dictationLanguage") }
+        set { defaults.set(newValue, forKey: "dictationLanguage") }
+    }
+
+    static var dictationCustomWords: [String] {
+        get { defaults.stringArray(forKey: "dictationCustomWords") ?? [] }
+        set { defaults.set(newValue, forKey: "dictationCustomWords") }
+    }
 }
 
 /// Keeps the app in the Dock: adds it to the Dock's list of kept apps, then restarts the Dock.

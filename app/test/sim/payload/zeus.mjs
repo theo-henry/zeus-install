@@ -23,7 +23,10 @@ console.log('Checking for Zeus updates... (simulated)');
 let busy = false;
 // Like the mic of the Zeus chat and Zeus Editor: the dictated text replaces only its own span of the message box.
 const speech = `window.speechEvents=[];let dictationStart=null,dictationLength=0;
+window.speechStatus=null;window.speechSettings=null;window.speechModelStates=[];
 window.zeusSpeech={onEvent(e){
+ if(e.type==='status'){window.speechStatus=e;for(const m of e.models||[]){const s=m.role+':'+m.id+':'+m.state;if(window.speechModelStates.at(-1)!==s&&!window.speechModelStates.includes(s))window.speechModelStates.push(s);}return;}
+ if(e.type==='settings'){window.speechSettings=e;return;}
  window.speechEvents.push([e.type,e.id,e.state||e.code||e.text||(e.locales&&e.locales.map(l=>l.id).join(',')+'/'+e.default)||''].join(' '));
  const box=document.querySelector('textarea');
  if(e.type==='state'&&e.state==='listening'){dictationStart=box.value.length;dictationLength=0;}
@@ -70,13 +73,15 @@ document.getElementById('send').onclick=async()=>{
 const template = fs.existsSync(`${state}/no-close-state`) ? page.replace('window.zeusApp=', 'window.oldPlugin=')
   : fs.existsSync(`${state}/hung-close-state`) ? page.replace('closeState:async()=>{', 'closeState:async()=>{await new Promise(r=>setTimeout(r,600000));')
   : page;
+// With <state>/long-turn at start, a turn of this session takes 60 s, longer than any check that waits on it.
+const turnMs = fs.existsSync(`${state}/long-turn`) ? 60000 : Number(process.env.ZEUS_SIM_TURN_MS||3000);
 // The page shows the chat of the session that runs now, in its project.
 const html = () => template.replace('__SESSION__', sessionId).replace('__PROJECT__', projectOf(sessionId));
 const server = http.createServer((req, res) => {
  if(req.url === '/close-state') {res.end(JSON.stringify({safe_to_close:!busy,reason:busy?'busy':'idle'}));return;}
  if(req.url === '/project') {let name='';req.on('data',chunk=>name+=chunk);req.on('end',()=>{fs.writeFileSync(projectFile(sessionId),name.trim());res.end('ok');});return;}
  if(req.url === '/turn') {
-  busy=true;record('busy');let text='';req.on('data',chunk=>text+=chunk);req.on('end',()=>setTimeout(()=>{busy=false;record('reply',text);res.end('Reply: '+text);},Number(process.env.ZEUS_SIM_TURN_MS||3000)));return;
+  busy=true;record('busy');let text='';req.on('data',chunk=>text+=chunk);req.on('end',()=>setTimeout(()=>{busy=false;record('reply',text);res.end('Reply: '+text);},turnMs));return;
  }
  res.writeHead(200,{'content-type':'text/html;charset=utf-8'});res.end(req.url === '/editor' ? editor : html());
 });

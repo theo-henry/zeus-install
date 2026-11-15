@@ -21,17 +21,22 @@ binaries=()
 for arch in "${archs[@]}"; do
   swift build -c release --arch "$arch" --scratch-path "$OUT/.build-$arch" >&2
   # Ask SwiftPM for the product folder: its layout differs between Swift versions.
-  binaries+=("$(swift build -c release --arch "$arch" --scratch-path "$OUT/.build-$arch" --show-bin-path)/Zeus")
+  products="$(swift build -c release --arch "$arch" --scratch-path "$OUT/.build-$arch" --show-bin-path)"
+  binaries+=("$products/Zeus")
 done
 
-mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources" "$BUNDLE/Contents/Frameworks"
 lipo -create "${binaries[@]}" -output "$BUNDLE/Contents/MacOS/Zeus"
+# whisper.cpp for dictation (both architectures in one framework); see Package.swift.
+"$APP_DIR/copy-whisper.sh" "$products/whisper.framework" "$BUNDLE/Contents/Frameworks"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist >"$BUNDLE/Contents/Info.plist"
 cp -R Resources/Terminal "$BUNDLE/Contents/Resources/"
 cp Resources/*.ttf "$BUNDLE/Contents/Resources/"
 cp Resources/*.woff "$BUNDLE/Contents/Resources/"
 cp Resources/zeus-logo.svg "$BUNDLE/Contents/Resources/"
 cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
+# Dictation: the model list, the voice detector, and the notices of whisper.cpp, OpenSuperWhisper, Silero, and the models.
+cp Resources/dictation-models.json Resources/ggml-silero-v5.1.2.bin Resources/THIRD-PARTY-NOTICES.md "$BUNDLE/Contents/Resources/"
 # The Zeus globe of the loading screen: the same file as zeus-editor/src/chat/client/globe.js, without "export".
 cp Resources/globe.js "$BUNDLE/Contents/Resources/globe.js"
 # The app runs this copy of the installer, so the app and its installer always match.

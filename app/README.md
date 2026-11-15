@@ -86,23 +86,34 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   A chat page without a globe (an older Zeus Editor) gets a cross-fade.
   This hand-over plays only for the first chat after the app starts; later chats (Cmd+T, **Try again**) come in at once when their page is ready.
   The close banner and the terminal panel stay usable while the loading screen shows.
-- **Speech to text.** The chat and the Zeus Editor pages can turn speech into text with Apple's speech recognition (`Sources/Zeus/Speech.swift`).
-  The recognition runs on the Mac only (`requiresOnDeviceRecognition`), so no audio leaves the Mac.
-  The app asks for the speech recognition and microphone permissions at the first use, not at start.
-  At document start, every Zeus page gets `window.zeusApp.speech = {version: 1}`; the page keeps it (and `shortcuts`) when it sets its own `window.zeusApp`.
-  A page posts `{type: "speech-languages"}`, `{type: "speech-start", id, locale}` (a BCP-47 id, or null for the `default` of the languages answer), and `{type: "speech-stop", id}` to `window.webkit.messageHandlers.zeusApp`.
-  The app answers in that page only, with `window.zeusSpeech?.onEvent(event)`:
-  `{type: "languages", locales: [{id, name, onDevice: true}], default}` (only the languages that the Mac recognizes on the Mac),
-  `{type: "state", id, state: "listening" | "stopped"}`, `{type: "partial", id, text}`, `{type: "final", id, text}`,
-  and `{type: "error", id, code: "permission-denied" | "no-on-device" | "unavailable" | "busy" | "failed", message}`.
-  After "listening", a recognition always ends with "stopped"; an error before "listening" is the only answer to that start.
-  One recognition runs at a time: a start while one runs gets "busy".
+- **Speech to text.** The chat and the Zeus Editor pages turn speech into text on this Mac; no audio leaves the Mac (`Sources/Zeus/Speech.swift`, `Sources/Zeus/Dictation`).
+  The engine is Whisper (whisper.cpp with Metal, `Contents/Frameworks/whisper.framework`), with a local model: **Accurate** (Whisper Large V3 Turbo Q5, the default, 574 MB) or **Fast** (Whisper Tiny, English only, 78 MB).
+  Whisper gives the text after Stop: while the user speaks, the page gets the audio level; after Stop, "processing", then the text.
+  A recording stops by itself after 10 minutes and is then transcribed.
+  The model list is in the app (`Resources/dictation-models.json`, see [docs/dictation-models.md](../docs/dictation-models.md)).
+  The first setup downloads the model of the settings next to the installer, with its progress in the checklist; a failed download never stops the setup, and the app tries again in the background.
+  At each start, about 2 s after the first window opens, the app downloads a missing or new model in the background, checks its size and SHA-256, and loads it; the model stays loaded for all tabs.
+  The models are in `~/Library/Application Support/io.github.theo-henry.zeus/whisper-models/`, so an app update does not download them again.
+  When an app update changes a model, the old model stays in use until the new one loads; then the app deletes the old file.
+  Until a model is loaded, the app uses Apple's speech recognition on the Mac (`requiresOnDeviceRecognition`), which shows the words while the user speaks.
+  The app asks for the microphone permission at the first use (and, for Apple's recognizer, the speech recognition permission), not at start.
+  The dictation settings are app-wide, for both chats: the model, the language (auto-detect or one language; the Fast model is English only), and one list of custom words.
+  The custom words go to the model as its initial prompt, up to 100 tokens: a hint for spelling, not a guarantee.
+  At document start, every Zeus page gets `window.zeusApp.speech = {version: 1, versions: [1, 2]}`; the page keeps it (and `shortcuts`) when it sets its own `window.zeusApp`.
+  [docs/speech-bridge.md](../docs/speech-bridge.md) is the contract of both versions: start, stop, cancel, the status of the models and their downloads, the settings, the audio level, the processing state, and the text.
+  A version 2 page starts with `version: 2` and gets the Whisper behaviour above.
+  A version 1 page (zeus-editor before its version 2 update) keeps its behaviour: Apple's text while the user speaks, and at Stop the Whisper text when it is ready within 2.8 s, otherwise Apple's text, so that the page gets its text within its 4 s deadline.
+  This hybrid path is transitional; a version 1 session in a language that the loaded model does not decode uses only Apple's recognizer.
+  One recognition runs at a time, from its start until it stops (also while Whisper processes): a start while one runs gets "busy".
   The recognition stops (with its final text) when its tab or Zeus Editor tab goes out of view, and ends at once when its tab, window, or page closes, and when the app quits.
+  The third-party notices of whisper.cpp, OpenSuperWhisper, Silero VAD, and the Whisper models are in `Resources/THIRD-PARTY-NOTICES.md` (also in the app bundle).
 - **Links.** Pages on 127.0.0.1 stay in the app (pop-ups open in a new app window). Other links open in the default browser.
 
 ## Build
 
 Needs only the Xcode Command Line Tools (Swift 5.9 or later). Full Xcode is not necessary.
+The first build downloads the whisper.cpp framework (about 54 MB, pinned by its checksum in `Package.swift`); SwiftPM keeps it in its cache.
+The app needs macOS 13.3 or later.
 
 ```bash
 app/build.sh 0.1.0        # app/build/Zeus.app and app/build/Zeus.zip, for Apple silicon and Intel
@@ -125,8 +136,15 @@ It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in t
 `ZEUS_APP_INSTALLER=/path/to/install.sh` replaces the bundled installer.
 `ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
 `ZEUS_APP_TEST_SPEECH=1` (debug builds) replaces Apple's speech recognition with a simulated recognizer that "hears" "Hello Zeus" (`denied`: no permission).
+`ZEUS_APP_TEST_SPEECH=whisper` (debug builds) also replaces the Whisper model with a simulated one (a file that starts with `ZEUS-SIMULATED-MODEL`) and the microphone with a simulated voice.
+`ZEUS_APP_DICTATION_MANIFEST=/path/to/models.json` (debug builds) replaces the model list of the app.
+`ZEUS_APP_TEST_AUDIO_FILE=/path/to/sound.wav` (debug builds) replaces the microphone with that sound file, played in real time and then silence, for the real Whisper model.
+`ZEUS_APP_TEST_RECORDING_LIMIT=<seconds>` (debug builds) replaces the 10-minute recording limit.
+`ZEUS_APP_TEST_V1_DEADLINE=<seconds>` (debug builds) replaces the 2.8 s that Whisper has for the text of a version 1 session.
+`ZEUS_APP_NO_MODEL_DOWNLOAD=1` turns off the download of the dictation models; dictation then uses a model that is already on the Mac, or Apple's recognizer.
+The tests set it.
 `ZEUS_APP_TEST_ID=<id>` (debug builds) makes the test actions reach only this app copy.
-`ZEUS_APP_DEFAULTS_SUITE=<domain>` (debug builds) makes the app read and write its settings (`setupDone`, `showMenuBar`) in that defaults domain instead of `io.github.theo-henry.zeus`.
+`ZEUS_APP_DEFAULTS_SUITE=<domain>` (debug builds) makes the app read and write its settings (`setupDone`, `showMenuBar`, and the dictation settings) in that defaults domain instead of `io.github.theo-henry.zeus`.
 `ZEUS_APP_TEST_BACKGROUND=1` (debug builds) makes the app never come to the front: it does not activate and puts its windows behind the windows of other apps.
 Its pages keep running and drawing while other windows cover them.
 The tests in `app/test` set it, so they do not come in front of your work.
@@ -231,6 +249,17 @@ It presses the app's buttons through the debug test actions and checks the trace
    a second start is busy; a language without recognition on the Mac gives `no-on-device`; showing another tab stops it; it runs in a Zeus Editor page,
    another page cannot stop it, and closing the Zeus Editor window, closing the tab, or quitting the app ends it;
    with Apple's recognizer, the page gets the languages of this Mac, and a language that no Mac knows gives `no-on-device` without a permission question.
+   Then Whisper dictation with a simulated model, which a local server sends slowly (`ZEUS_APP_TEST_SPEECH=whisper`): the page has bridge versions 1 and 2;
+   while the model downloads, dictation uses Apple's recognizer; the download shows its progress, is checked, and loads;
+   Whisper sends the audio level, then "processing", then the text, and the trace has the time from the stop to the text;
+   a version 1 start gets the words while the user speaks, then the Whisper text within 4 s, and Apple's text when Whisper is not ready in time;
+   the custom words are cleaned, saved, counted in tokens, and reach the model; a fixed language reaches the model, and an unknown language is refused;
+   a start while Whisper processes is busy; a cancel while it processes gives no text; the Fast model downloads when the user picks it and decodes English only;
+   the model on the Mac loads at the next start without a download; the recording limit stops a recording and gives its text;
+   a new model with a wrong checksum fails and the old model stays in use; a new model list downloads the new model, switches to it, and deletes the old file;
+   a new model that does not load is removed, and the old model stays in use;
+   a version 1 page in a language that the English-only model does not decode gets only Apple's text;
+   a re-download of the model on this Mac fetches and checks it again while dictation keeps working, and the runtime loads the new copy.
 4. Keyboard shortcuts: the app reads the changed shortcuts of the settings file at start, gives the default for a reserved shortcut,
    a shortcut without Cmd or Ctrl, and a shortcut of two actions (also after a chain of collisions), and shows the shortcuts in the menu; the chat page has `window.zeusApp.shortcuts`;
    the old shortcut does nothing and the new one opens a tab; a file saved with a rename, a file written in place, and `{type: "settings-changed"}`

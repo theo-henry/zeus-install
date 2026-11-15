@@ -40,6 +40,8 @@ export ZEUS_APP_DEFAULTS_SUITE="io.github.theo-henry.zeus.test-$ZEUS_APP_TEST_ID
 PREFS_DOMAIN="$ZEUS_APP_DEFAULTS_SUITE"
 # The app stays behind the windows of other apps and does not take the keyboard (debug builds).
 export ZEUS_APP_TEST_BACKGROUND=1
+# The app copies download no dictation model (a test that needs one serves its own and sets this to 0).
+export ZEUS_APP_NO_MODEL_DOWNLOAD=1
 
 FAILURES=0
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
@@ -464,7 +466,7 @@ if wants upgrade; then
       ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" \
       ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" ZEUS_INSTALL_ACCEPT_ANACONDA_LICENSE=yes ZEUS_APP_TRACE="$TRACE" \
       ZEUS_INSTALL_URL="file://$REPO_DIR/install.sh" ZEUS_APP_DIR="$APPS" \
-      ZEUS_APP_OPEN_ENV="HOME SHELL ZEUS_APP_TRACE ZEUS_APP_TEST_ID ZEUS_APP_DEFAULTS_SUITE ZEUS_APP_TEST_BACKGROUND ZEUS_SIM_STATE ZEUS_SIM_PAYLOAD ZEUS_SIM_INSTALLER ZEUS_INSTALL_SYSTEM_CONDA_DIRS ZEUS_APP_NO_UPDATE ZEUS_APP_TEST_NO_CONFIRM" \
+      ZEUS_APP_OPEN_ENV="HOME SHELL ZEUS_APP_TRACE ZEUS_APP_TEST_ID ZEUS_APP_DEFAULTS_SUITE ZEUS_APP_TEST_BACKGROUND ZEUS_SIM_STATE ZEUS_SIM_PAYLOAD ZEUS_SIM_INSTALLER ZEUS_INSTALL_SYSTEM_CONDA_DIRS ZEUS_APP_NO_UPDATE ZEUS_APP_TEST_NO_CONFIRM ZEUS_APP_NO_MODEL_DOWNLOAD" \
       "$@" bash "$REPO_DIR/install-app.sh" >"$OUT" 2>&1 &
     local pid=$! status=0 waited=0
     while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 600 ]; do sleep 0.5; waited=$((waited + 1)); done
