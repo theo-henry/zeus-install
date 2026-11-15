@@ -27,6 +27,8 @@ export ZEUS_APP_DEFAULTS_SUITE="io.github.theo-henry.zeus.test-$ZEUS_APP_TEST_ID
 PREFS_DOMAIN="$ZEUS_APP_DEFAULTS_SUITE"
 # The app stays behind the windows of other apps and does not take the keyboard (debug builds).
 export ZEUS_APP_TEST_BACKGROUND=1
+# The app copies download no dictation model (a test that needs one serves its own and sets this to 0).
+export ZEUS_APP_NO_MODEL_DOWNLOAD=1
 mkdir -p "$BIN"
 [ -n "$SHOTS" ] && mkdir -p "$SHOTS"
 
@@ -83,6 +85,7 @@ APP_PID=""
 
 cleanup() {
   [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+  [ -n "${MODEL_SERVER_PID:-}" ] && kill "$MODEL_SERVER_PID" 2>/dev/null || true
   defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
   # defaults delete can leave the empty settings file of the domain.
   rm -f "$HOME/Library/Preferences/$PREFS_DOMAIN.plist"
@@ -483,7 +486,7 @@ page_has() {
   act "test-${2:-}speech-page"
   wait_count "speech page: " $((before + 1)) 10 >/dev/null && grep "speech page: " "$TRACE" | tail -1 | grep -qF -- "$1"
 }
-check "the chat page can use speech to text, also after it sets window.zeusApp" 'page_has "\"version\":1,\"close\":\"function\""'
+check "the chat page can use speech to text, also after it sets window.zeusApp" 'page_has "\"version\":2,\"close\":\"function\""'
 act 'test-speech-post:{"type":"speech-languages"}'
 check "the languages are those on this Mac, with the default" 'sleep 1 && page_has "languages  en-US,fr-FR,nl-NL,de-DE/en-US"'
 act test-draft
@@ -506,7 +509,7 @@ act 'test-speech-post:{"type":"speech-start","id":"s4","locale":"ja-JP"}'
 check "a language without recognition on the Mac gives no-on-device" 'wait_for "speech event: error s4 no-on-device" 10 && sleep 0.5 && ! grep -q "speech event: state s4" "$TRACE"'
 act test-open-editor
 check "a Zeus Editor page opens" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/editor" 10'
-check "the Zeus Editor page can use speech to text" 'page_has "\"version\":1" editor-'
+check "the Zeus Editor page can use speech to text" 'page_has "\"version\":2" editor-'
 act 'test-editor-speech-post:{"type":"speech-start","id":"e1","locale":"de-DE"}'
 check "speech to text runs in the Zeus Editor page" 'wait_for "speech event: partial e1 chars=10" 10 && page_has "\"text\":\"Hello Zeus\"" editor-'
 act 'test-speech-post:{"type":"speech-stop","id":"e1"}'
@@ -534,6 +537,168 @@ check "Apple's recognizer lists the languages of this Mac and a default" 'sleep 
 act 'test-speech-post:{"type":"speech-start","id":"a1","locale":"xx-XX"}'
 check "Apple's recognizer gives no-on-device for a language that it does not know" 'wait_for "speech event: error a1 no-on-device" 10'
 stop_app
+
+echo
+echo "Scenario 3b: Whisper dictation with a simulated model (download, fallback, settings, model swap)"
+# A model server on this Mac: it sends 64 KiB every 10 ms, and holds a file while "<file>.hold" exists.
+MODELS_SRV="$WORK/model-server"
+mkdir -p "$MODELS_SRV"
+cat >"$WORK/model-server.py" <<'PY'
+import http.server, os, sys, time
+root = sys.argv[1]
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        path = os.path.join(root, os.path.basename(self.path.split("?")[0]))
+        while os.path.exists(path + ".hold"):
+            time.sleep(0.1)
+        if not os.path.isfile(path):
+            self.send_response(404); self.end_headers(); return
+        with open(os.path.join(root, "requests.log"), "a") as log:
+            log.write(os.path.basename(path) + "\n")
+        size = os.path.getsize(path)
+        self.send_response(200)
+        self.send_header("Content-Length", str(size))
+        self.end_headers()
+        with open(path, "rb") as f:
+            while chunk := f.read(65536):
+                self.wfile.write(chunk)
+                time.sleep(0.01)
+    def log_message(self, *args):
+        pass
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+with open(os.path.join(root, "port"), "w") as f:
+    f.write(str(server.server_address[1]))
+server.serve_forever()
+PY
+python3 "$WORK/model-server.py" "$MODELS_SRV" &
+MODEL_SERVER_PID=$!
+waited=0
+until [ -s "$MODELS_SRV/port" ] || [ "$waited" -ge 50 ]; do sleep 0.1; waited=$((waited + 1)); done
+MODEL_URL="http://127.0.0.1:$(cat "$MODELS_SRV/port")"
+# make_model <file> <first line>: a simulated model of 3 MiB.
+make_model() {
+  { printf '%s\n' "$2"; head -c 3145728 /dev/zero; } >"$MODELS_SRV/$1"
+}
+sha_of() { shasum -a 256 "$MODELS_SRV/$1" | awk '{print $1}'; }
+size_of() { stat -f %z "$MODELS_SRV/$1"; }
+# make_manifest <name> <accurate id> <accurate file> [accurate sha256]: a model list with that accurate model and the fast model.
+make_manifest() {
+  local sha="${4:-$(sha_of "$3")}"
+  cat >"$MODELS_SRV/$1" <<JSON
+{"version": 1, "defaultRole": "accurate", "models": [
+ {"id": "$2", "role": "accurate", "engine": "whisper", "name": "Accurate", "description": "Simulated multilingual model.",
+  "url": "$MODEL_URL/$3", "bytes": $(size_of "$3"), "sha256": "$sha", "multilingual": true, "license": "MIT", "source": "test"},
+ {"id": "sim-fast-1", "role": "fast", "engine": "whisper", "name": "Fast", "description": "Simulated English model.",
+  "url": "$MODEL_URL/fast-1.bin", "bytes": $(size_of fast-1.bin), "sha256": "$(sha_of fast-1.bin)", "multilingual": false,
+  "languages": ["en"], "license": "MIT", "source": "test"}]}
+JSON
+}
+make_model accurate-1.bin "ZEUS-SIMULATED-MODEL multilingual 1"
+make_model accurate-2.bin "ZEUS-SIMULATED-MODEL multilingual 2"
+make_model accurate-3.bin "NOT A MODEL"
+make_model fast-1.bin "ZEUS-SIMULATED-MODEL english-only"
+make_manifest v1.json sim-accurate-1 accurate-1.bin
+make_manifest v2-bad.json sim-accurate-2 accurate-2.bin 0000000000000000000000000000000000000000000000000000000000000000
+make_manifest v2.json sim-accurate-2 accurate-2.bin
+make_manifest v3.json sim-accurate-3 accurate-3.bin
+MODELS_DIR="$SANDBOX/Library/Application Support/io.github.theo-henry.zeus/whisper-models"
+whisper_env() { echo "ZEUS_APP_TEST_SPEECH=whisper ZEUS_APP_NO_MODEL_DOWNLOAD=0 ZEUS_APP_DICTATION_MANIFEST=$MODELS_SRV/$1"; }
+# speech_round <id> [seconds]: a start, then a stop after that many seconds, then the final text.
+speech_round() {
+  act "test-speech-post:{\"type\":\"speech-start\",\"id\":\"$1\",\"locale\":null}"
+  wait_for "speech event: state $1 listening" 10 && sleep "${2:-0.6}"
+  act "test-speech-post:{\"type\":\"speech-stop\",\"id\":\"$1\"}"
+  wait_for "speech event: state $1 stopped" 10
+}
+
+touch "$MODELS_SRV/accurate-1.bin.hold"
+# shellcheck disable=SC2046
+launch_app whisper $(whisper_env v1.json)
+check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+check "the chat page has speech bridge version 2" 'page_has "\"version\":2,\"close\":\"function\""'
+check "the accurate model downloads in the background after the start" 'wait_for "dictation: download sim-accurate-1 starts (needed)" 10'
+act 'test-speech-post:{"type":"speech-status"}'
+check "the status says Apple's recognizer while the model is not ready" 'sleep 0.5 && page_has "\"engine\":\"apple\""'
+act test-draft
+sleep 0.3
+act 'test-speech-post:{"type":"speech-start","id":"w0","locale":null}'
+check "dictation without a model uses Apple's recognizer" 'wait_for "speech: start w0 locale=default engine=apple" 10 && wait_for "speech event: state w0 listening engine=apple" 10'
+act 'test-speech-post:{"type":"speech-stop","id":"w0"}'
+check "Apple's recognizer gives its final text" 'wait_for "speech event: state w0 stopped" 10 && page_has "\"text\":\"Test chat turnHello Zeus.\""'
+rm -f "$MODELS_SRV/accurate-1.bin.hold"
+check "the download shows its progress, is checked, and the model loads" 'wait_for "dictation: download sim-accurate-1 checked" 20 && wait_for "dictation: loaded sim-accurate-1" 10 && page_has "accurate:sim-accurate-1:downloading" && page_has "accurate:sim-accurate-1:ready"'
+check "the status says Whisper when the model is loaded" 'sleep 0.5 && page_has "\"engine\":\"whisper\""'
+check "the model is in the models folder of the app, with installed.json" '[ -f "$MODELS_DIR/sim-accurate-1.bin" ] && grep -q "sim-accurate-1" "$MODELS_DIR/installed.json"'
+act test-clear
+speech_round w1 0.8
+check "Whisper listens, sends the audio level, then processing, then the final text after the stop" \
+  'page_has "\"state w1 listening\",\"level w1 \"" && page_has "\"state w1 processing\",\"final w1 Hello Zeus.\",\"state w1 stopped\"" && page_has "\"text\":\"Hello Zeus.\""'
+check "the trace has the time from the stop to the text" 'grep -q "speech: final w1 engine=whisper stop-to-text=[0-9]* ms" "$TRACE"'
+act 'test-speech-post:{"type":"speech-settings-set","customWords":[" Celonis ","Apolix","celonis",""]}'
+check "the custom words are saved for both chats, cleaned, and counted in tokens" \
+  'sleep 0.5 && page_has "\"customWords\":[\"Celonis\",\"Apolix\"]" && page_has "\"included\":2" && defaults read "$PREFS_DOMAIN" dictationCustomWords | grep -q Apolix'
+act test-clear
+speech_round w2
+check "the custom words go to the model as its prompt" 'page_has "\"text\":\"Hello Zeus. [Celonis, Apolix.]\""'
+act 'test-speech-post:{"type":"speech-settings-set","language":"fr"}'
+act test-clear
+speech_round w3
+check "a fixed language goes to the model" 'page_has "Hello Zeus. (fr) [Celonis, Apolix.]"'
+act 'test-speech-post:{"type":"speech-settings-set","language":"xx"}'
+check "an unknown language is refused with an error, and the setting stays" 'sleep 0.5 && page_has "unknown language" && page_has "\"language\":\"fr\""'
+act 'test-speech-post:{"type":"speech-start","id":"w4","locale":null}'
+wait_for "speech event: state w4 listening" 10 >/dev/null
+act 'test-speech-post:{"type":"speech-stop","id":"w4"}'
+act 'test-speech-post:{"type":"speech-start","id":"w5","locale":null}'
+check "a start while Whisper processes is busy" 'wait_for "speech event: state w4 processing" 10 && sleep 0.3 && page_has "error w5 busy"'
+check "the processing recording still gives its text" 'wait_for "speech event: final w4 " 10'
+act 'test-speech-post:{"type":"speech-start","id":"w6","locale":null}'
+wait_for "speech event: state w6 listening" 10 >/dev/null
+act 'test-speech-post:{"type":"speech-stop","id":"w6"}'
+wait_for "speech event: state w6 processing" 10 >/dev/null
+act 'test-speech-post:{"type":"speech-cancel","id":"w6"}'
+check "a cancel while Whisper processes gives stopped and no text" 'wait_for "speech: cancel w6 (page)" 10 && sleep 1 && page_has "state w6 stopped" && ! grep -q "speech event: final w6" "$TRACE"'
+act 'test-speech-post:{"type":"speech-settings-set","model":"fast"}'
+check "the Fast model downloads when the user picks it, and loads" 'wait_for "dictation: download sim-fast-1 starts (needed)" 10 && wait_for "dictation: loaded sim-fast-1" 20'
+act test-clear
+speech_round w7
+check "the English-only model decodes English, also with French in the settings" 'page_has "\"text\":\"Hello Zeus. (en) [Celonis, Apolix.]\"" && page_has "\"effectiveLanguage\":\"en\""'
+act 'test-speech-post:{"type":"speech-settings-set","model":"accurate","language":"auto"}'
+check "back to the Accurate model: it loads again from this Mac" 'wait_count "dictation: loaded sim-accurate-1" 2 10 && [ "$(grep -c "^accurate-1.bin$" "$MODELS_SRV/requests.log")" = 1 ]'
+# The dictated text is a draft; without it, the quit asks nothing.
+act test-clear
+sleep 0.3
+stop_app
+# shellcheck disable=SC2046
+launch_app whisper-limit $(whisper_env v1.json) ZEUS_APP_TEST_RECORDING_LIMIT=2
+check "the app loads the model on this Mac at start, without a download" 'wait_for "dictation: loaded sim-accurate-1" 20 && ! grep -q "download sim-accurate-1 starts" "$TRACE"'
+check "the chat opens" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+act 'test-speech-post:{"type":"speech-start","id":"w8","locale":null}'
+check "the recording limit stops the recording and gives the text" 'wait_for "speech: whisper recording 2\.[0-9] s (10-minute limit)" 10 && wait_for "speech event: final w8 " 10 && page_has "\"state w8 processing\""'
+act test-clear
+sleep 0.3
+stop_app
+# shellcheck disable=SC2046
+launch_app whisper-bad $(whisper_env v2-bad.json)
+check "a new model with a wrong checksum fails and Zeus tries again later" 'wait_for "dictation: download sim-accurate-2 failed: The download does not have the expected SHA-256 checksum.; retry in 30 s" 20'
+check "the old model stays in use" 'wait_for "dictation: loaded sim-accurate-1" 20 && [ -f "$MODELS_DIR/sim-accurate-1.bin" ] && [ ! -e "$MODELS_DIR/sim-accurate-2.bin" ]'
+stop_app
+# shellcheck disable=SC2046
+launch_app whisper-swap $(whisper_env v2.json)
+check "after an app update with a new model list, the new model downloads, loads, and replaces the old one" \
+  'wait_for "dictation: loaded sim-accurate-2" 30 && wait_for "dictation: accurate model is now sim-accurate-2, was sim-accurate-1" 5'
+check "the old model file is deleted, and the new one is kept" 'sleep 0.5 && [ ! -e "$MODELS_DIR/sim-accurate-1.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ] && [ -f "$MODELS_DIR/sim-fast-1.bin" ]'
+stop_app
+# shellcheck disable=SC2046
+launch_app whisper-noload $(whisper_env v3.json)
+check "a new model that does not load is removed, and the old model stays in use" \
+  'wait_for "dictation: model sim-accurate-3 does not load" 30 && wait_for "dictation: loaded sim-accurate-2" 10 && [ ! -e "$MODELS_DIR/sim-accurate-3.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ]'
+stop_app
+kill "$MODEL_SERVER_PID" 2>/dev/null || true
+rm -rf "$MODELS_DIR"
+defaults delete "$PREFS_DOMAIN" dictationModel >/dev/null 2>&1 || true
+defaults delete "$PREFS_DOMAIN" dictationLanguage >/dev/null 2>&1 || true
+defaults delete "$PREFS_DOMAIN" dictationCustomWords >/dev/null 2>&1 || true
 
 echo
 echo "Scenario 4: keyboard shortcuts from the Zeus settings file"

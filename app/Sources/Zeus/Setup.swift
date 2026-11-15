@@ -247,6 +247,19 @@ struct SetupView: View {
     }
 
     private var checklist: some View {
+        VStack(spacing: 0) {
+            steps
+            // The dictation model downloads next to the installer: always in view, below the steps.
+            Divider().overlay(Color.primary.opacity(0.12))
+            DictationSetupRow(models: DictationModels.shared)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(RoundedRectangle(cornerRadius: 10).fill(Brand.surface))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12)))
+    }
+
+    private var steps: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 9) {
                 ForEach(model.steps) { step in
@@ -269,8 +282,6 @@ struct SetupView: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Brand.surface))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12)))
     }
 
     @ViewBuilder
@@ -413,6 +424,66 @@ struct SetupView: View {
                 }
                 Button("Try again") { model.install() }.keyboardShortcut(.defaultAction)
             }
+        }
+    }
+}
+
+/// The dictation model in the setup checklist. It downloads next to the installer and never stops the setup:
+/// after a failure, Zeus tries again in the background, and dictation uses Apple's recognizer until the model is ready.
+struct DictationSetupRow: View {
+    @ObservedObject var models: DictationModels
+
+    var body: some View {
+        let model = models.model(for: DictationSettings.shared.role)
+        let state = model.map { models.state(of: $0) } ?? .missing
+        HStack(alignment: .top, spacing: 9) {
+            icon(state).frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title(state)).fontWeight(isActive(state) ? .semibold : .regular)
+                if case let .downloading(received, total) = state, total > 0 {
+                    ProgressView(value: Double(received), total: Double(total)).controlSize(.small)
+                }
+                Text(note(state, model)).font(.caption)
+                    .foregroundStyle(Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func isActive(_ state: DictationModels.State) -> Bool {
+        switch state {
+        case .downloading, .verifying: return true
+        default: return false
+        }
+    }
+
+    private func title(_ state: DictationModels.State) -> String {
+        isActive(state) ? "Downloading dictation model" : "Dictation model"
+    }
+
+    private func note(_ state: DictationModels.State, _ model: DictationModel?) -> String {
+        let size = model.map { ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? ""
+        switch state {
+        case let .downloading(received, total):
+            let done = ByteCountFormatter.string(fromByteCount: received, countStyle: .file)
+            let all = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+            return "\(done) of \(all). Speech to text stays on this Mac."
+        case .verifying: return "Checking the download."
+        case .downloaded: return "\(model?.name ?? "The") model (\(size)) is on this Mac."
+        case let .failed(message): return "\(message) Zeus tries again in the background."
+        case .cancelled: return "Stopped. Zeus downloads it at the next start."
+        case .missing: return "Downloads in the background (\(size))."
+        }
+    }
+
+    @ViewBuilder
+    private func icon(_ state: DictationModels.State) -> some View {
+        switch state {
+        case .downloaded: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .downloading, .verifying: ProgressView().controlSize(.small)
+        case .failed: Image(systemName: "arrow.clockwise.circle").foregroundStyle(.orange)
+        case .missing, .cancelled: Image(systemName: "circle").foregroundStyle(.secondary)
         }
     }
 }

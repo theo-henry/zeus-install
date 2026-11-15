@@ -23,7 +23,10 @@ console.log('Checking for Zeus updates... (simulated)');
 let busy = false;
 // Like the mic of the Zeus chat and Zeus Editor: the dictated text replaces only its own span of the message box.
 const speech = `window.speechEvents=[];let dictationStart=null,dictationLength=0;
+window.speechStatus=null;window.speechSettings=null;window.speechModelStates=[];
 window.zeusSpeech={onEvent(e){
+ if(e.type==='status'){window.speechStatus=e;for(const m of e.models||[]){const s=m.role+':'+m.id+':'+m.state;if(window.speechModelStates.at(-1)!==s&&!window.speechModelStates.includes(s))window.speechModelStates.push(s);}return;}
+ if(e.type==='settings'){window.speechSettings=e;return;}
  window.speechEvents.push([e.type,e.id,e.state||e.code||e.text||(e.locales&&e.locales.map(l=>l.id).join(',')+'/'+e.default)||''].join(' '));
  const box=document.querySelector('textarea');
  if(e.type==='state'&&e.state==='listening'){dictationStart=box.value.length;dictationLength=0;}

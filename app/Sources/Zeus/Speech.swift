@@ -2,48 +2,84 @@ import AVFoundation
 import Speech
 import WebKit
 
-/// Speech to text for the Zeus pages (the chat and Zeus Editor), with Apple's speech recognition on this Mac.
-/// The recognition runs on the Mac only (`requiresOnDeviceRecognition`): no audio leaves the Mac.
+/// Speech to text for the Zeus pages (the chat and Zeus Editor), on this Mac only: no audio leaves the Mac.
 ///
-/// The bridge between a page and the app:
-/// - The app tells each page that it can do speech to text: `window.zeusApp.speech.version === 1`.
-/// - A page posts `{type: "speech-languages"}`, `{type: "speech-start", id, locale}` (`locale` is a BCP-47 id or null
-///   for the default), and `{type: "speech-stop", id}` to `window.webkit.messageHandlers.zeusApp`.
-/// - The app calls `window.zeusSpeech?.onEvent(event)` in that page only, with
-///   `{type: "languages", locales: [{id, name, onDevice: true}], default}`, `{type: "state", id, state: "listening" | "stopped"}`,
-///   `{type: "partial", id, text}`, `{type: "final", id, text}`, and
-///   `{type: "error", id, code: "permission-denied" | "no-on-device" | "unavailable" | "busy" | "failed", message}`.
+/// Two engines:
+/// - Whisper (`WhisperSpeechEngine`, `DictationRuntime`): the dictation model of the settings. It gives the text after Stop.
+/// - Apple's speech recognition (`AppleSpeechEngine`), only while no Whisper model is loaded (the first download,
+///   or the load after the app start). It gives text while the user speaks.
 ///
-/// One recognition runs at a time in the app; a start while one runs gets the error "busy".
-/// After "listening", a recognition always ends with "stopped" (after its "final" text or an error).
-/// An error before "listening" is the only answer to that start.
+/// The bridge between a page and the app is version 2; docs/speech-bridge.md is its contract.
+/// - At document start, `window.zeusApp.speech = {version: 2}`.
+/// - A page posts `{type: "speech-…"}` messages to `window.webkit.messageHandlers.zeusApp`.
+/// - The app calls `window.zeusSpeech?.onEvent(event)` in that page only; the status and settings events go to each
+///   page that sent a speech message.
+///
+/// One recognition runs at a time in the app, from its start until "stopped" (also while Whisper processes).
+/// A start while one runs gets the error "busy". After "listening", a recognition always ends with "stopped"
+/// (after its "final" text or an error). An error before "listening" is the only answer to that start.
 final class SpeechService {
     static let shared = SpeechService()
 
     /// The page bridge: `window.zeusApp.speech` (see `WebViewHandler.pageBridgeScript`).
-    static let pageInfo: [String: Any] = ["version": 1]
+    static let pageInfo: [String: Any] = ["version": 2]
 
-    private let engine: SpeechEngine
+    private let apple: SpeechEngine
+    private let whisper: SpeechEngine
     private var current: Recognition?
+    /// The pages that use speech to text: they get the status and settings events.
+    private let pages = NSHashTable<WKWebView>.weakObjects()
+    private var statusQueued = false
 
     private final class Recognition {
         let id: String
+        let engine: SpeechEngine
+        let engineName: String
         weak var webView: WKWebView?
         var listening = false
-        init(id: String, webView: WKWebView) {
+        var stopAt: Date?
+        init(id: String, engine: SpeechEngine, engineName: String, webView: WKWebView) {
             self.id = id
+            self.engine = engine
+            self.engineName = engineName
             self.webView = webView
         }
     }
 
     private init() {
         #if DEBUG
-        if let mode = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_SPEECH"], !mode.isEmpty {
-            engine = SimulatedSpeechEngine(mode: mode)
-            return
+        let mode = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_SPEECH"] ?? ""
+        if mode == "whisper" {
+            // The whisper path with simulated audio and a simulated model (see `SimulatedTranscriber`).
+            apple = SimulatedSpeechEngine(mode: "1")
+            whisper = WhisperSpeechEngine { TestAudioSource() }
+            DictationRuntime.shared.factory = { _, file in try SimulatedTranscriber(model: file) }
+        } else if !mode.isEmpty {
+            apple = SimulatedSpeechEngine(mode: mode)
+            whisper = WhisperSpeechEngine { TestAudioSource() }
+        } else if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_AUDIO_FILE"] != nil {
+            // The real model, with a sound file instead of the microphone.
+            apple = AppleSpeechEngine()
+            whisper = WhisperSpeechEngine { TestAudioSource() }
+        } else {
+            apple = AppleSpeechEngine()
+            whisper = WhisperSpeechEngine { MicrophoneSource() }
         }
+        #else
+        apple = AppleSpeechEngine()
+        whisper = WhisperSpeechEngine { MicrophoneSource() }
         #endif
-        engine = AppleSpeechEngine()
+        DictationModels.shared.onChange.append { [weak self] in self?.queueStatus() }
+        DictationRuntime.shared.onChange.append { [weak self] in self?.queueStatus() }
+        DictationSettings.shared.onChange.append { [weak self] in
+            self?.queueStatus()
+            self?.broadcastSettings()
+        }
+    }
+
+    /// The engine of a start now: Whisper when its model is loaded, otherwise Apple's recognizer.
+    private var engineNow: (engine: SpeechEngine, name: String) {
+        DictationRuntime.shared.isReady ? (whisper, "whisper") : (apple, "apple")
     }
 
     /// Handles a speech message from a page. Returns false for every other message.
@@ -52,11 +88,13 @@ final class SpeechService {
               type.hasPrefix("speech-") else { return false }
         // Only Zeus pages on this Mac can use the microphone.
         guard let webView, let url = webView.url, ["http", "https"].contains(url.scheme ?? ""), WebViewHandler.isLocal(url) else { return true }
+        pages.add(webView)
         switch type {
         case "speech-languages":
-            engine.languages { [weak webView] languages in
+            let now = engineNow
+            now.engine.languages { [weak webView] languages in
                 guard let webView else { return }
-                Self.send(["type": "languages",
+                Self.send(["type": "languages", "engine": now.name,
                            "locales": languages.locales.map { ["id": $0.id, "name": $0.name, "onDevice": true] },
                            "default": languages.defaultID], to: webView)
             }
@@ -66,7 +104,26 @@ final class SpeechService {
         case "speech-stop":
             guard let id = message["id"] as? String, let current, current.id == id, current.webView === webView else { return true }
             Trace.log("speech: stop \(id) (page)")
-            engine.stop()
+            current.stopAt = current.stopAt ?? Date()
+            current.engine.stop()
+        case "speech-cancel":
+            guard let id = message["id"] as? String, let current, current.id == id, current.webView === webView else { return true }
+            cancelCurrent(reason: "page")
+            Self.send(["type": "state", "id": id, "state": "stopped", "cancelled": true], to: webView)
+        case "speech-status":
+            Self.send(status(), to: webView)
+        case "speech-settings":
+            sendSettings(to: [webView], error: nil)
+        case "speech-settings-set":
+            let words = (message["customWords"] as? [Any]).map { $0.compactMap { $0 as? String } }
+            let result = DictationSettings.shared.apply(model: message["model"] as? String, language: message["language"] as? String,
+                                                        customWords: words)
+            // A change goes to every page through `DictationSettings.onChange`; the sender always gets an answer.
+            if !result.changed || result.error != nil { sendSettings(to: [webView], error: result.error) }
+        case "speech-model-download":
+            if let role = message["model"] as? String { DictationModels.shared.download(role: role) }
+        case "speech-model-cancel":
+            if let role = message["model"] as? String { DictationModels.shared.cancel(role: role) }
         default:
             break
         }
@@ -80,11 +137,15 @@ final class SpeechService {
                        "message": "Speech to text is already on in another Zeus page. Stop it there first."], to: webView)
             return
         }
-        let recognition = Recognition(id: id, webView: webView)
+        let now = engineNow
+        let recognition = Recognition(id: id, engine: now.engine, engineName: now.name, webView: webView)
         current = recognition
         let locale = locale.flatMap { $0.isEmpty ? nil : $0 }
-        Trace.log("speech: start \(id) locale=\(locale ?? "default")")
-        engine.start(locale: locale) { [weak self, weak recognition] event in
+        Trace.log("speech: start \(id) locale=\(locale ?? "default") engine=\(now.name)")
+        // Without a locale, Apple's recognizer takes the fixed language of the dictation settings.
+        let language = DictationSettings.shared.language
+        let engineLocale = locale ?? (now.name == "apple" && language != "auto" ? language : nil)
+        now.engine.start(locale: engineLocale) { [weak self, weak recognition] event in
             guard let self, let recognition, self.current === recognition else { return }
             self.deliver(event, for: recognition)
         }
@@ -96,11 +157,23 @@ final class SpeechService {
         switch event {
         case .listening:
             recognition.listening = true
-            events.append(["type": "state", "id": id, "state": "listening"])
+            events.append(["type": "state", "id": id, "state": "listening", "engine": recognition.engineName])
+        case let .level(level):
+            // Many per second: no trace line.
+            if let webView = recognition.webView { Self.send(["type": "level", "id": id, "level": Double(level)], to: webView) }
+            return
+        case let .processing(limit):
+            recognition.stopAt = recognition.stopAt ?? Date()
+            var item: [String: Any] = ["type": "state", "id": id, "state": "processing"]
+            if limit { item["reason"] = "limit" }
+            events.append(item)
         case let .partial(text):
             events.append(["type": "partial", "id": id, "text": text])
         case let .final(text):
-            events.append(["type": "final", "id": id, "text": text])
+            if let stopAt = recognition.stopAt {
+                Trace.log("speech: final \(id) engine=\(recognition.engineName) stop-to-text=\(Int(Date().timeIntervalSince(stopAt) * 1000)) ms")
+            }
+            events.append(["type": "final", "id": id, "text": text, "engine": recognition.engineName])
         case let .failed(code, message):
             events.append(["type": "error", "id": id, "code": code.rawValue, "message": message])
         case .ended:
@@ -116,14 +189,17 @@ final class SpeechService {
         }
     }
 
-    /// Ends the recognition of this page and gives the page its last text: for a tab that the user leaves.
+    /// Ends the recording of this page and gives the page its last text: for a tab that the user leaves.
+    /// The page keeps the session until its "stopped", also while Whisper processes.
     func stop(in webView: WKWebView?, reason: String) {
         guard let current, let webView, current.webView === webView else { return }
         Trace.log("speech: stop \(current.id) (\(reason))")
-        engine.stop()
+        current.stopAt = current.stopAt ?? Date()
+        current.engine.stop()
     }
 
     /// Ends the recognition of this page at once, without more events: for a page that closes or goes away.
+    /// A Whisper transcription that runs stops too.
     func cancel(in webView: WKWebView?, reason: String) {
         guard let current, let webView, current.webView === webView else { return }
         cancelCurrent(reason: reason)
@@ -139,7 +215,97 @@ final class SpeechService {
         guard let recognition = current else { return }
         Trace.log("speech: cancel \(recognition.id) (\(reason))")
         current = nil
-        engine.cancel()
+        recognition.engine.cancel()
+    }
+
+    // MARK: Status and settings
+
+    private func queueStatus() {
+        guard !statusQueued else { return }
+        statusQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.statusQueued = false
+            let status = self.status()
+            for webView in self.pages.allObjects { Self.send(status, to: webView) }
+        }
+    }
+
+    /// The dictation status: the engine of a start now, the loaded model, and the state of each model of the model list.
+    private func status() -> [String: Any] {
+        let models = DictationModels.shared
+        let runtime = DictationRuntime.shared
+        var status: [String: Any] = [
+            "type": "status",
+            "engine": engineNow.name,
+            "selected": DictationSettings.shared.role,
+            "active": runtime.loaded.map { loaded -> Any in
+                ["role": loaded.role, "id": loaded.id, "name": models.model(for: loaded.role)?.name ?? loaded.role]
+            } ?? NSNull(),
+        ]
+        switch runtime.state {
+        case .idle: status["runtime"] = "idle"
+        case let .loading(id): status["runtime"] = "loading"; status["loading"] = id
+        case .ready: status["runtime"] = "ready"
+        case let .failed(_, message): status["runtime"] = "failed"; status["runtimeError"] = message
+        }
+        status["models"] = models.manifest.models.map { model -> [String: Any] in
+            var item: [String: Any] = [
+                "role": model.role, "id": model.id, "name": model.name, "description": model.description,
+                "bytes": model.bytes, "multilingual": model.multilingual, "license": model.license,
+                "installed": models.installedID(for: model.role) == model.id,
+            ]
+            if let languages = model.languages { item["languages"] = languages }
+            switch models.state(of: model) {
+            case .missing: item["state"] = "missing"
+            case let .downloading(received, total): item["state"] = "downloading"; item["received"] = received; item["total"] = total
+            case .verifying: item["state"] = "verifying"
+            case .downloaded: item["state"] = "ready"
+            case let .failed(message):
+                item["state"] = "failed"
+                item["error"] = message
+                if let retry = models.retryAt[model.id] { item["retryAt"] = Int(retry.timeIntervalSince1970 * 1000) }
+            case .cancelled: item["state"] = "cancelled"
+            }
+            return item
+        }
+        return status
+    }
+
+    private func broadcastSettings() {
+        sendSettings(to: pages.allObjects, error: nil)
+    }
+
+    /// The settings, with the prompt of the custom words counted in tokens of the loaded model.
+    private func sendSettings(to webViews: [WKWebView], error: String?) {
+        let settings = DictationSettings.shared
+        let model = DictationModels.shared.model(for: settings.role)
+        var languages: [[String: Any]] = DictationSettings.languages(of: model).map { ["id": $0.id, "name": $0.name] }
+        if model?.multilingual == true { languages.insert(["id": "auto", "name": "Auto-detect"], at: 0) }
+        let words = settings.customWords
+        let webViews = webViews.map { Weak($0) }
+        DictationRuntime.shared.prompt(words: words) { prompt in
+            var event: [String: Any] = [
+                "type": "settings",
+                "model": settings.role,
+                "models": DictationModels.shared.manifest.models.map { ["role": $0.role, "name": $0.name, "description": $0.description] },
+                "language": settings.language,
+                "effectiveLanguage": settings.effectiveLanguage(for: model) ?? "auto",
+                "languages": languages,
+                "allLanguages": DictationSettings.allLanguages.map { ["id": $0.id, "name": $0.name] },
+                "customWords": words,
+                "prompt": ["limit": DictationSettings.promptTokenLimit, "tokens": prompt.tokens, "included": prompt.included,
+                           "total": words.count, "estimated": prompt.estimated],
+                "recordingLimitSeconds": Int(WhisperSpeechEngine.recordingLimit),
+            ]
+            if let error { event["error"] = error }
+            for webView in webViews.compactMap(\.value) { Self.send(event, to: webView) }
+        }
+    }
+
+    private struct Weak {
+        weak var value: WKWebView?
+        init(_ value: WKWebView) { self.value = value }
     }
 
     /// The trace line of an event: its type, id, and state or error code; of a text only its length.
@@ -148,7 +314,8 @@ final class SpeechService {
         let id = event["id"] as? String ?? "-"
         let detail = event["state"] as? String ?? event["code"] as? String
             ?? (event["text"] as? String).map { "chars=\($0.count)" } ?? ""
-        return "\(type) \(id) \(detail)"
+        let engine = (event["engine"] as? String).map { " engine=\($0)" } ?? ""
+        return "\(type) \(id) \(detail)\(engine)"
     }
 
     private static func send(_ event: [String: Any], to webView: WKWebView) {
@@ -169,6 +336,10 @@ enum SpeechErrorCode: String {
 
 enum SpeechEngineEvent: Equatable {
     case listening
+    /// The loudness of the microphone, 0...1 (Whisper, about 20 times a second).
+    case level(Float)
+    /// The recording has ended and Whisper turns it into text (`limit`: after the 10-minute limit).
+    case processing(limit: Bool)
     case partial(String)
     /// The last text. The recognition then has ended.
     case final(String)
@@ -180,7 +351,7 @@ enum SpeechEngineEvent: Equatable {
     var isEnd: Bool {
         switch self {
         case .final, .failed, .ended: return true
-        case .listening, .partial: return false
+        case .listening, .level, .processing, .partial: return false
         }
     }
 }
@@ -196,7 +367,8 @@ struct SpeechLanguages {
 }
 
 /// A speech recognizer. All calls and callbacks are on the main queue. After `start`, the engine sends at most one
-/// `.listening`, then partial texts, then exactly one end event (`.final`, `.failed`, or `.ended`), unless `cancel` comes first.
+/// `.listening`, then levels or partial texts, at most one `.processing`, then exactly one end event
+/// (`.final`, `.failed`, or `.ended`), unless `cancel` comes first.
 protocol SpeechEngine: AnyObject {
     func languages(completion: @escaping (SpeechLanguages) -> Void)
     /// `locale` nil is the language of this Mac.
@@ -278,7 +450,7 @@ final class AppleSpeechEngine: SpeechEngine {
         stopping = false
         lastText = ""
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let id = locale.map(Self.bcp47) ?? Self.defaultLocale(among: Self.onDeviceLocales())
+            let id = Self.locale(for: locale)
             let recognizer = SFSpeechRecognizer(locale: Locale(identifier: id))
             let onDevice = recognizer?.supportsOnDeviceRecognition == true
             DispatchQueue.main.async { [weak self] in
@@ -291,6 +463,16 @@ final class AppleSpeechEngine: SpeechEngine {
                 self.authorize(generation: generation) { [weak self] in self?.listen(with: recognizer, generation: generation) }
             }
         }
+    }
+
+    /// The locale of a start: a full locale as it is; a language without a region ("fr", a Whisper language of the
+    /// dictation settings) as the on-device locale of that language, with the region of this Mac first; nil as the Mac.
+    private static func locale(for requested: String?) -> String {
+        guard let requested else { return defaultLocale(among: onDeviceLocales()) }
+        let id = bcp47(requested)
+        guard !id.contains("-") else { return id }
+        let same = onDeviceLocales().filter { languageCode($0) == id.lowercased() }
+        return same.first { regionCode($0) == Locale.current.region?.identifier } ?? same.first ?? id
     }
 
     /// Asks for speech recognition and the microphone only when they were never asked for.

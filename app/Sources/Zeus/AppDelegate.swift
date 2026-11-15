@@ -73,7 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func startZeus(restoring: Bool = false) {
-        if setupNeeded {
+        let firstSetup = setupNeeded
+        if firstSetup {
             showSetup(nil)
         } else if restoring, let restore = TabRestore.take(), restore.tabCount > 0 {
             reopenTabs(restore)
@@ -81,6 +82,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             newChat(nil)
         }
         Front.activate()
+        // The dictation model downloads and loads in the background, after the first window opens, so that Zeus opens
+        // as fast as without it. The first setup shows the download at once.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (firstSetup ? 0 : 2)) { Self.startDictation() }
+    }
+
+    /// Gets the dictation model (or its new version after an app update) and loads it; it stays loaded.
+    static func startDictation() {
+        _ = SpeechService.shared
+        DictationModels.shared.start()
+        DictationRuntime.shared.start()
     }
 
     /// The first start, or a Mac where the zeus command or the workspace has gone.
@@ -89,9 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             || !FileManager.default.fileExists(atPath: Paths.zeusDir)
     }
 
-    /// The microphone stops before the app ends.
+    /// The microphone stops and the dictation model is freed before the app ends.
     func applicationWillTerminate(_ notification: Notification) {
         SpeechService.shared.cancelAll(reason: "app quits")
+        DictationRuntime.shared.shutdown()
     }
 
     /// A click on the Dock icon while no window is open.
@@ -399,6 +411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         }
         let controller = SetupWindowController()
+        Self.startDictation()
         controller.model.onOptionsApplied = { [weak self] in self?.statusMenu.update() }
         controller.model.onFinished = { [weak self, weak controller] in
             controller?.window?.close()
@@ -551,7 +564,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             case "test-speech-page", "test-editor-speech-page":
                 let webView = action == "test-speech-page" ? self.chatTabs.last?.webView : EditorWindowController.newestWebView
                 let script = "JSON.stringify({version: window.zeusApp?.speech?.version ?? null, close: typeof window.zeusApp?.closeState, "
-                    + "text: document.querySelector('textarea')?.value ?? null, events: window.speechEvents ?? null})"
+                    + "text: document.querySelector('textarea')?.value ?? null, events: window.speechEvents ?? null, "
+                    + "status: window.speechStatus ?? null, settings: window.speechSettings ?? null, models: window.speechModelStates ?? null})"
                 webView?.evaluateJavaScript(script) { result, error in
                     Trace.log("speech page: \(result ?? error?.localizedDescription ?? "empty")")
                 }
