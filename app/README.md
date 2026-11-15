@@ -103,6 +103,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   [docs/speech-bridge.md](../docs/speech-bridge.md) is the contract of both versions: start, stop, cancel, the status of the models and their downloads, the settings, the audio level, the processing state, and the text.
   A version 2 page starts with `version: 2` and gets the Whisper behaviour above.
   A version 1 page (zeus-editor before its version 2 update) keeps its behaviour: Apple's text while the user speaks, and at Stop the Whisper text when it is ready within 2.8 s, otherwise Apple's text, so that the page gets its text within its 4 s deadline.
+  This hybrid path is transitional; a version 1 session in a language that the loaded model does not decode uses only Apple's recognizer.
   One recognition runs at a time, from its start until it stops (also while Whisper processes): a start while one runs gets "busy".
   The recognition stops (with its final text) when its tab or Zeus Editor tab goes out of view, and ends at once when its tab, window, or page closes, and when the app quits.
   The third-party notices of whisper.cpp, OpenSuperWhisper, Silero VAD, and the Whisper models are in `Resources/THIRD-PARTY-NOTICES.md` (also in the app bundle).
@@ -256,7 +257,9 @@ It presses the app's buttons through the debug test actions and checks the trace
    a start while Whisper processes is busy; a cancel while it processes gives no text; the Fast model downloads when the user picks it and decodes English only;
    the model on the Mac loads at the next start without a download; the recording limit stops a recording and gives its text;
    a new model with a wrong checksum fails and the old model stays in use; a new model list downloads the new model, switches to it, and deletes the old file;
-   a new model that does not load is removed, and the old model stays in use.
+   a new model that does not load is removed, and the old model stays in use;
+   a version 1 page in a language that the English-only model does not decode gets only Apple's text;
+   a re-download of the model on this Mac fetches and checks it again while dictation keeps working, and the runtime loads the new copy.
 4. Keyboard shortcuts: the app reads the changed shortcuts of the settings file at start, gives the default for a reserved shortcut,
    a shortcut without Cmd or Ctrl, and a shortcut of two actions (also after a chain of collisions), and shows the shortcuts in the menu; the chat page has `window.zeusApp.shortcuts`;
    the old shortcut does nothing and the new one opens a tab; a file saved with a rename, a file written in place, and `{type: "settings-changed"}`
