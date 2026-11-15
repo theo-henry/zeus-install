@@ -368,9 +368,11 @@ check "the tab stays open until the user decides" '[ "$(stops)" = 3 ]'
 act test-close-anyway
 check "Close anyway closes the tab that cannot answer" 'wait_count "state: ended" 4 10 && [ "$(stops)" = 4 ]'
 
-# Close anyway must also override a busy chat.
+# Close anyway must also override a busy chat. Its turn is long, so that it is still busy after the screenshot.
+touch "$STATE/long-turn"
 act test-cmd-t
 check "a new tab opens after Close anyway" 'wait_count "state: running(" 5 20 && newest_page_loaded && sleep 1'
+rm -f "$STATE/long-turn"
 act test-draft
 sleep 0.3
 act test-send
