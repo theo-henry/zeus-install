@@ -781,9 +781,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 self.chatTabs.first?.webView.evaluateJavaScript("window.webkit.messageHandlers.zeusApp.postMessage('chat-focus')")
             // Speech to text: the chat page of the last tab (or with "editor-", the newest Zeus Editor page) posts a
             // speech message, as the mic button does; "test-speech-page" writes what the page has into the trace.
+            // A JSON array posts each of its messages at once, one after the other, as quick clicks do.
             case "test-speech-post", "test-editor-speech-post":
                 let webView = action == "test-speech-post" ? self.chatTabs.last?.webView : EditorWindowController.newestWebView
-                webView?.callAsyncJavaScript("window.webkit.messageHandlers.zeusApp.postMessage(JSON.parse(message))",
+                webView?.callAsyncJavaScript(
+                    "for (const m of [].concat(JSON.parse(message))) window.webkit.messageHandlers.zeusApp.postMessage(m)",
                                              arguments: ["message": argument], in: nil, in: .page)
             case "test-speech-page", "test-editor-speech-page":
                 let webView = action == "test-speech-page" ? self.chatTabs.last?.webView : EditorWindowController.newestWebView

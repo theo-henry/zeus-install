@@ -682,8 +682,8 @@ act 'test-speech-post:{"type":"speech-settings-set","language":"xx"}'
 check "an unknown language is refused with an error, and the setting stays" 'sleep 0.5 && page_has "unknown language" && page_has "\"language\":\"fr\""'
 act 'test-speech-post:{"type":"speech-start","id":"w4","locale":null,"version":2}'
 wait_for "speech event: state w4 listening" 10 >/dev/null
-act 'test-speech-post:{"type":"speech-stop","id":"w4"}'
-act 'test-speech-post:{"type":"speech-start","id":"w5","locale":null,"version":2}'
+# The stop and the next start go in one post, so the start comes while Whisper processes, also under load.
+act 'test-speech-post:[{"type":"speech-stop","id":"w4"},{"type":"speech-start","id":"w5","locale":null,"version":2}]'
 check "a start while Whisper processes is busy" 'wait_for "speech event: state w4 processing" 10 && sleep 0.3 && page_has "error w5 busy"'
 check "the processing recording still gives its text" 'wait_for "speech event: final w4 " 10'
 act 'test-speech-post:{"type":"speech-start","id":"w6","locale":null,"version":2}'
