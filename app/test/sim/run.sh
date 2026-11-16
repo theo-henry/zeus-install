@@ -857,6 +857,31 @@ wait_for "mode: now eu" 10 >/dev/null
 wait_count "state: running(" 4 30 >/dev/null
 act mode-standard
 check "with nothing new to hand over, the switch back asks nothing" 'wait_for "handover: nothing to hand over" 20 && wait_count "mode: now standard" 2 10'
+wait_count "state: running(" 5 30 >/dev/null && newest_page_loaded >/dev/null && sleep 1
+STD_COST='{"mode":"standard","currency":"USD","session_total":0.42,"chat_total":0.31,"calls":7,"unpriced_calls":0,"prices_as_of":"2026-11-16"}'
+act "test-cost:$STD_COST"
+wait_for "cost: [0-9]* Session 0.42 USD · Chat total 0.31 USD mode=standard" 10 >/dev/null
+act test-cost-shown
+check "a Standard cost stays hidden by default" 'wait_for "cost shown: -" 10'
+act dev-setting:costStandard=on
+act test-cost-shown
+check "with the developer setting on, Standard shows the session and the chat total" 'wait_for "cost shown: Session 0.42 USD · Chat total 0.31 USD" 10'
+shot 16-cost-standard
+act dev-setting:costStandard=off
+act mode-eu
+wait_count "state: running(" 6 30 >/dev/null && newest_page_loaded >/dev/null && sleep 1
+act "test-cost:${STD_COST/standard/eu}"
+wait_for "cost: [0-9]* .* mode=eu" 10 >/dev/null
+act test-cost-shown
+check "EU shows the session and the chat total by default" 'wait_count "cost shown: Session 0.42 USD · Chat total 0.31 USD" 2 10'
+act dev-setting:costEU=off
+act test-cost-shown
+check "the EU cost hides when its developer setting is off" 'wait_count "cost shown: -" 2 10'
+act dev-setting:costEU=on
+act dev-settings-show
+check "Zeus > Developer > Developer Settings… opens" 'sleep 1 && "$BIN/windows" "$APP_PID" | grep -q "Developer Settings"'
+shot 17-developer-settings
+act dev-settings-close
 stop_app
 
 echo

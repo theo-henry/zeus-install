@@ -577,6 +577,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             case "mode-eu": self.requestSwitch(to: .eu, confirmed: true)
             case "mode-standard": self.requestSwitch(to: .standard, confirmed: true)
             case "handover": self.handover?.testPress(argument)
+            // Developer Settings: "dev-setting:costEU=off", "costStandard", "switch".
+            case "dev-setting":
+                let pair = argument.split(separator: "=").map(String.init)
+                guard pair.count == 2 else { break }
+                let on = pair[1] == "on"
+                switch pair[0] {
+                case "switch": Preferences.showModeSwitch = on
+                case "costEU": Preferences.showCostEU = on
+                case "costStandard": Preferences.showCostStandard = on
+                default: break
+                }
+                Trace.log("developer setting: \(pair[0])=\(on)")
+                ModeSwitch.refresh()
+            case "dev-settings-show": DeveloperSettingsWindow.show()
+            case "dev-settings-close": DeveloperSettingsWindow.close()
+            // A cost report from the chat page of the selected tab, as zeus-editor posts it: "test-cost:<JSON>".
+            case "test-cost":
+                self.keyChatTab?.webView.callAsyncJavaScript("window.webkit.messageHandlers.zeusApp.postMessage('cost:' + json)",
+                                                               arguments: ["json": argument], in: nil, in: .page) { _ in }
+            case "test-cost-shown": Trace.log("cost shown: \(self.chatWindows.map { $0.costText }.joined(separator: " | "))")
             case "test-cmd-t", "test-cmd-j":
                 let key = action == "test-cmd-t" ? "t" : "j"
                 if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
@@ -707,6 +727,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     // MARK: Menu actions
 
+    @objc private func showDeveloperSettings(_ sender: Any?) {
+        DeveloperSettingsWindow.show()
+    }
+
     @objc private func toggleMenuBar(_ sender: Any?) {
         Preferences.showMenuBar.toggle()
         statusMenu.update()
@@ -805,6 +829,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         app.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
         app.addItem(withTitle: "Zeus Setup…", action: #selector(showSetup(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Switch to EU Mode", action: #selector(switchMode(_:)), keyEquivalent: "")
+        let developer = NSMenu(title: "Developer")
+        developer.addItem(withTitle: "Developer Settings…", action: #selector(showDeveloperSettings(_:)), keyEquivalent: "")
+        app.addItem(submenu: developer)
         app.addItem(withTitle: "Show in Menu Bar", action: #selector(toggleMenuBar(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Keep in Dock", action: #selector(keepInDock(_:)), keyEquivalent: "")
         app.addItem(.separator())

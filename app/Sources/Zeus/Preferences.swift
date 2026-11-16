@@ -29,6 +29,26 @@ enum Preferences {
         set { defaults.set(newValue.rawValue, forKey: "mode") }
     }
 
+    /// Developer Settings: the Standard | EU switch in the tab strip (on by default; it always shows while the app is in EU mode).
+    static var showModeSwitch: Bool {
+        get { defaults.object(forKey: "showModeSwitch") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "showModeSwitch") }
+    }
+
+    /// Developer Settings: the session and chat cost in EU mode (on by default, as Zeus Editor shows it outside the app).
+    static var showCostEU: Bool {
+        get { defaults.object(forKey: "showCostEU") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "showCostEU") }
+    }
+
+    /// Developer Settings: the session and chat cost in Standard mode, at the Anthropic API list prices (off by default).
+    static var showCostStandard: Bool {
+        get { defaults.bool(forKey: "showCostStandard") }
+        set { defaults.set(newValue, forKey: "showCostStandard") }
+    }
+
+    static func showCost(in mode: ZeusMode) -> Bool { mode == .eu ? showCostEU : showCostStandard }
+
     /// The dictation settings (see `DictationSettings`).
     static var dictationModel: String? {
         get { defaults.string(forKey: "dictationModel") }

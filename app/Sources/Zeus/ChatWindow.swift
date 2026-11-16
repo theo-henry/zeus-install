@@ -14,6 +14,8 @@ final class ChatTab: NSObject {
     /// The name of the tab: the project of the chat, or a name that the user gave it.
     let tabName = TabName()
     private var shownURL: URL?
+    /// The cost that the chat page of this session reported last (`cost:<JSON>`).
+    private(set) var cost: SessionCost?
     /// The loading screen, above the chat page until the hand-over.
     private var loader: LoaderOverlay?
     private var handingOver = false
@@ -269,6 +271,14 @@ final class ChatTab: NSObject {
             return
         }
         guard let message = body as? String else { return }
+        // "cost:<JSON>": the session cost that Zeus Editor counted (zeus-editor docs/chat.md, "Session cost").
+        if message.hasPrefix("cost:") {
+            guard let reported = SessionCost(json: String(message.dropFirst(5))), reported != cost else { return }
+            cost = reported
+            Trace.log("cost: \(session.pid) \(reported.label) mode=\(reported.mode) shown=\(Preferences.showCost(in: session.mode))")
+            CostDisplay.refresh()
+            return
+        }
         switch message {
         case "chat-ready":
             // After a reload of the page there is no loading screen: the page comes in at once.

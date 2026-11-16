@@ -144,6 +144,9 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         select(tab)
     }
 
+    /// The cost text of the tab strip, "-" when it is hidden (for the test actions).
+    var costText: String { strip.costText }
+
     func select(_ tab: ChatTab) {
         guard tabs.contains(where: { $0 === tab }) else { return }
         let changed = selectedTab !== tab
@@ -282,6 +285,8 @@ final class TabStripView: NSView {
     private let addButton = HoverButton(symbol: "plus", label: "New Tab")
     /// The app-wide Standard | EU switch; shown when this Mac has the EU workspace, or while the app is in EU mode.
     private let modeControl = NSSegmentedControl(labels: ["Standard", "EU"], trackingMode: .selectOne, target: nil, action: nil)
+    /// The cost of the selected tab, when the developer settings show it for the tab's mode.
+    private let costLabel = NSTextField(labelWithString: "")
     private var leadingConstraint: NSLayoutConstraint!
 
     init(controller: ChatWindowController) {
@@ -307,17 +312,27 @@ final class TabStripView: NSView {
         modeControl.setAccessibilityLabel("Claude mode")
         modeControl.toolTip = "Standard: your Claude login. EU: Claude in the EU (Vertex AI), for client data. A switch starts new chats."
         addSubview(modeControl)
+        costLabel.translatesAutoresizingMaskIntoConstraints = false
+        costLabel.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
+        costLabel.textColor = TabColors.dimText
+        costLabel.lineBreakMode = .byTruncatingHead
+        costLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        costLabel.setAccessibilityLabel("Session cost")
+        addSubview(costLabel)
         leadingConstraint = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 80)
         NSLayoutConstraint.activate([
             leadingConstraint,
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             addButton.leadingAnchor.constraint(equalTo: stack.trailingAnchor, constant: 4),
             addButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            addButton.trailingAnchor.constraint(lessThanOrEqualTo: modeControl.leadingAnchor, constant: -12),
+            addButton.trailingAnchor.constraint(lessThanOrEqualTo: costLabel.leadingAnchor, constant: -12),
+            costLabel.trailingAnchor.constraint(equalTo: modeControl.leadingAnchor, constant: -10),
+            costLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             modeControl.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             modeControl.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         NotificationCenter.default.addObserver(self, selector: #selector(updateMode), name: ModeSwitch.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(updateMode), name: CostDisplay.changed, object: nil)
         updateMode()
         for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(windowStyleChanged), name: name, object: nil)
@@ -379,6 +394,7 @@ final class TabStripView: NSView {
             stack.insertArrangedSubview(item, at: index)
         }
         for item in items { item.update(selected: item.tab === controller.selectedTab) }
+        updateCost()
     }
 
     fileprivate func item(of tab: ChatTab) -> TabItemView? {
@@ -390,8 +406,21 @@ final class TabStripView: NSView {
 
     @objc private func updateMode() {
         modeControl.selectedSegment = ZeusMode.current == .eu ? 1 : 0
+        // In EU mode the switch always shows, so that the way back to Standard is never hidden.
         modeControl.isHidden = ZeusMode.current == .standard
-            && !FileManager.default.fileExists(atPath: ZeusMode.eu.workspace + "/scripts/zeus.py")
+            && (!Preferences.showModeSwitch || !FileManager.default.fileExists(atPath: ZeusMode.eu.workspace + "/scripts/zeus.py"))
+        updateCost()
+    }
+
+    var costText: String { costLabel.isHidden ? "-" : costLabel.stringValue }
+
+    /// The cost of the selected tab: "Session 0.42 USD · Chat total 0.31 USD".
+    func updateCost() {
+        let tab = controller?.selectedTab
+        let cost = tab.flatMap { tab in Preferences.showCost(in: tab.session.mode) ? tab.cost : nil }
+        costLabel.stringValue = cost?.label ?? ""
+        costLabel.toolTip = cost?.tooltip
+        costLabel.isHidden = cost == nil
     }
 
     @objc private func modeChanged() {

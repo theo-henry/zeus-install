@@ -116,3 +116,45 @@ enum ModeSwitch {
     static let changed = Notification.Name("io.github.theo-henry.zeus.mode-changed")
     static func refresh() { NotificationCenter.default.post(name: changed, object: nil) }
 }
+
+/// The cost of a session, as Zeus Editor counts it after each reply (zeus-editor docs/chat.md, "Session cost") and the chat page
+/// passes it on as the bridge message `cost:<JSON>`: EU at Vertex EU prices, Standard at the Anthropic API list prices.
+struct SessionCost: Equatable {
+    let mode: String
+    let sessionTotal: Double
+    let chatTotal: Double
+    let calls: Int
+    let unpricedCalls: Int
+    let pricesAsOf: String
+
+    init?(json: String) {
+        guard let data = json.data(using: .utf8), let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let session = (object["session_total"] as? NSNumber)?.doubleValue, let chat = (object["chat_total"] as? NSNumber)?.doubleValue
+        else { return nil }
+        mode = object["mode"] as? String ?? "eu"
+        sessionTotal = session
+        chatTotal = chat
+        calls = object["calls"] as? Int ?? 0
+        unpricedCalls = object["unpriced_calls"] as? Int ?? 0
+        pricesAsOf = object["prices_as_of"] as? String ?? ""
+    }
+
+    static func usd(_ value: Double) -> String { value > 0 && value < 0.01 ? "< 0.01 USD" : String(format: "%.2f USD", value) }
+
+    /// "Session 0.42 USD · Chat total 0.31 USD"
+    var label: String { "Session \(Self.usd(sessionTotal)) · Chat total \(Self.usd(chatTotal))" }
+
+    var tooltip: String {
+        let prices = mode == "eu" ? "Vertex AI EU prices" : "Anthropic API list prices (not a charge on the Claude subscription)"
+        var text = "Estimate at \(prices) of \(pricesAsOf). Session: every chat of this tab's Zeus session. "
+            + "Chat total: the chat on screen. \(calls) model call\(calls == 1 ? "" : "s")"
+        if unpricedCalls > 0 { text += ", \(unpricedCalls) not priced (fast mode or an unknown model)" }
+        return text + "."
+    }
+}
+
+/// The cost labels and the switch follow the developer settings and the tabs' cost reports at once in every window.
+enum CostDisplay {
+    static let changed = Notification.Name("io.github.theo-henry.zeus.cost-changed")
+    static func refresh() { NotificationCenter.default.post(name: changed, object: nil) }
+}
