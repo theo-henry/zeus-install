@@ -6,6 +6,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Start a run by hand (Actions > CI > Run workflow). Use it on main when GitHub lost the run of a merge.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,12 +37,13 @@ jobs:
 
   release:
     name: Release the app
-    # Only a push to main. The job releases when app/, install.sh, or install-app.sh changed since the commit of the
-    # newest app release, so a change that a failed or cancelled run did not release is released by the next run.
+    # Only a push to main or a manual run on main. The job releases when app/, install.sh, or install-app.sh changed
+    # since the commit of the newest app release, so a change that a failed or cancelled run did not release is
+    # released by the next run.
     # install.sh and install-app.sh are included because the app downloads and runs them; a change to the other part
     # of install.sh makes one extra release, which is harmless.
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     # Always a GitHub-hosted runner, never the self-hosted mac-local runner: the release token is a secret.
     runs-on: macos-latest
     timeout-minutes: 30
