@@ -165,7 +165,7 @@ It sends 1 MiB to a raw-mode terminal and checks that every byte arrives, that a
 ## Test the releases and the self-update
 
 ```bash
-app/test/update/run.sh [release] [install] [app] [upgrade] [settings]
+app/test/update/run.sh [release] [globe] [install] [app] [upgrade] [settings]
 ```
 
 GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is made, and nothing is downloaded.
