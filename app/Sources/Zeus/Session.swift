@@ -62,7 +62,8 @@ final class ZeusSession {
     /// Starts `zeus` in the Zeus workspace. `--no-open` stops it from opening the browser; the app shows the page.
     /// An Apolix session starts at once. An EU session first checks the EU setup and the Google Cloud
     /// sign-in; when that check fails, the session fails with the reason and nothing starts on Apolix.
-    init(host: ClaudeHost = .apolix) throws {
+    /// `euVariables` are those of a check that has just passed: the EU session then starts at once.
+    init(host: ClaudeHost = .apolix, euVariables: [String: String]? = nil) throws {
         self.host = host
         startedAt = Date()
         guard FileManager.default.isExecutableFile(atPath: Paths.zeusCommand) else {
@@ -79,6 +80,10 @@ final class ZeusSession {
         case .apolix:
             try spawn(environment: ShellEnvironment.session(host: .apolix))
         case .eu:
+            if let euVariables {
+                try spawn(environment: EUHost.environment(variables: euVariables))
+                return
+            }
             startStatus = "Checking the Google Cloud sign-in for EU…"
             Trace.log("session: EU preflight starts")
             EUHost.preflight { [weak self] result in self?.preflightEnded(result) }
@@ -176,8 +181,8 @@ final class SessionManager {
     var onChange: (() -> Void)?
 
     @discardableResult
-    func start(host: ClaudeHost = .apolix) throws -> ZeusSession {
-        let session = try ZeusSession(host: host)
+    func start(host: ClaudeHost = .apolix, euVariables: [String: String]? = nil) throws -> ZeusSession {
+        let session = try ZeusSession(host: host, euVariables: euVariables)
         add(session)
         return session
     }

@@ -4,9 +4,13 @@ enum Paths {
     /// HOME first, so that a test can run the app against a separate home folder.
     static let home = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
         ?? FileManager.default.homeDirectoryForCurrentUser.path
-    /// The Zeus workspace. ZEUS_APP_WORKSPACE replaces it (for development and tests).
-    static let zeusDir = ProcessInfo.processInfo.environment["ZEUS_APP_WORKSPACE"].flatMap { $0.isEmpty ? nil : $0 }
-        ?? home + "/Code/zeus"
+    /// The Zeus workspace. ZEUS_APP_WORKSPACE replaces it (debug builds, for development and tests).
+    static let zeusDir: String = {
+        #if DEBUG
+        if let workspace = ProcessInfo.processInfo.environment["ZEUS_APP_WORKSPACE"], !workspace.isEmpty { return workspace }
+        #endif
+        return home + "/Code/zeus"
+    }()
     /// ZEUS_APP_ZEUS_COMMAND replaces the zeus command (for tests).
     static let zeusCommand = ProcessInfo.processInfo.environment["ZEUS_APP_ZEUS_COMMAND"] ?? home + "/.local/bin/zeus"
     static let logDir = home + "/Library/Logs/zeus-install"

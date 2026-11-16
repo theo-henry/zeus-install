@@ -183,9 +183,9 @@ Its pages keep running and drawing while other windows cover them.
 The tests in `app/test` set it, so they do not come in front of your work.
 Screenshots use the window number, so they work for windows behind other windows.
 Release builds ignore it.
-`ZEUS_APP_WORKSPACE=/path/to/zeus` replaces the Zeus workspace (`~/Code/zeus`): sessions start there, and the Secure Handoff runs its `scripts/zeus.py`.
+`ZEUS_APP_WORKSPACE=/path/to/zeus` (debug builds) replaces the Zeus workspace (`~/Code/zeus`): sessions start there, and the Secure Handoff runs its `scripts/zeus.py`.
 `ZEUS_APP_ZEUS_COMMAND=/path/to/zeus` replaces the zeus command. The app passes its environment on to `zeus`, so `ZEUS_EDITOR_PORT` and `ZEUS_EDITOR_STATE_DIR` give a development Zeus Editor of its own.
-`ZEUS_APP_EU_ENV="NAME=value NAME=value"` replaces the `claude-eu` alias, `ZEUS_APP_GCLOUD=/path/to/gcloud` replaces `gcloud`, and `ZEUS_APP_PYTHON` replaces `python3` for the Secure Handoff.
+`ZEUS_APP_EU_ENV="NAME=value NAME=value"` replaces the `claude-eu` alias, `ZEUS_APP_GCLOUD=/path/to/gcloud` replaces `gcloud`, and `ZEUS_APP_PYTHON` replaces `python3` for the Secure Handoff (debug builds).
 `ZEUS_APP_TEST_NO_SWITCH_QUESTION=1` and `ZEUS_APP_TEST_NO_OPEN=1` (debug builds) skip the switch question and the opening of the review page in tests.
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.

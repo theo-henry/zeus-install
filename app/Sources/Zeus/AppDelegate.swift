@@ -233,9 +233,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     /// Starts a session on a host. When `zeus` or the workspace is missing, it says so and offers the setup.
-    func startSession(host: ClaudeHost) -> ZeusSession? {
+    func startSession(host: ClaudeHost, euVariables: [String: String]? = nil) -> ZeusSession? {
         do {
-            let session = try SessionManager.shared.start(host: host)
+            let session = try SessionManager.shared.start(host: host, euVariables: euVariables)
             Trace.log("session \(session.pid) started on \(host.rawValue)")
             return session
         } catch {
@@ -269,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func makeTab(_ session: ZeusSession, restore: TabRestore.Tab? = nil) -> ChatTab {
         let tab = ChatTab(session: session, restore: restore)
         tab.onClosed = { [weak self] closed in self?.chatTabs.removeAll { $0 === closed } }
-        tab.startSession = { [weak self] host in self?.startSession(host: host) }
+        tab.startSession = { [weak self] host, euVariables in self?.startSession(host: host, euVariables: euVariables) }
         tab.onRunSetup = { [weak self, weak tab] in
             tab?.requestClose()
             self?.showSetup(nil)
@@ -384,8 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             let frame = NSRectFromString(saved.frame)
             if frame.width > 0, frame.height > 0 { host.window?.setFrame(frame, display: false) }
             var selected: ChatTab?
-            for var state in saved.tabs {
-                if state.host == nil { state.sessionID = nil }
+            for state in saved.tabs {
                 do {
                     let session = try SessionManager.shared.start(host: state.host ?? .apolix)
                     Trace.log("session \(session.pid) started on \(session.host.rawValue) (restore)")

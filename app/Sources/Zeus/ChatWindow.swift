@@ -75,7 +75,7 @@ final class ChatTab: NSObject {
     var onRunSetup: (() -> Void)?
     var onClosed: ((ChatTab) -> Void)?
     /// Starts a session on a host for this tab; nil when it cannot start (the app says why).
-    var startSession: ((ClaudeHost) -> ZeusSession?)?
+    var startSession: ((ClaudeHost, [String: String]?) -> ZeusSession?)?
 
     init(session: ZeusSession, restore: TabRestore.Tab? = nil) {
         self.session = session
@@ -371,9 +371,33 @@ final class ChatTab: NSObject {
         host?.tabStateChanged(self)
     }
 
+    /// A tab whose session runs or starts keeps it until the EU check has passed: when the check fails,
+    /// the tab stays as it is and says why.
     private func finishSwitch(to target: ClaudeHost) {
-        switching = false
-        replaceSession(host: target)
+        guard target == .eu, session.isAlive else {
+            switching = false
+            replaceSession(host: target)
+            return
+        }
+        Trace.log("session: EU preflight starts")
+        EUHost.preflight { [weak self] result in
+            guard let self, !self.closed else { return }
+            switch result {
+            case let .success(variables):
+                Trace.log("session: EU preflight passed")
+                self.switching = false
+                self.replaceSession(host: target, euVariables: variables)
+            case let .failure(error):
+                Trace.log("session: EU start refused: \(error.localizedDescription)")
+                self.cancelSwitch()
+                guard let window = self.view.window else { return }
+                let alert = NSAlert()
+                alert.messageText = "This tab stays on \(self.session.host.title)"
+                alert.informativeText = "Zeus did not start on EU. " + error.message
+                alert.addButton(withTitle: "OK")
+                Front.beginSheet(alert, for: window) { _ in }
+            }
+        }
     }
 
     /// Asks before a running chat stops. A tab whose chat does not run switches at once.
@@ -407,9 +431,10 @@ final class ChatTab: NSObject {
     }
 
     /// Stops this tab's session and starts a new one on `host` in its place. Also used for "Try again".
-    func replaceSession(host target: ClaudeHost) {
+    /// `euVariables` are those of an EU check that has just passed.
+    func replaceSession(host target: ClaudeHost, euVariables: [String: String]? = nil) {
         // Start first: when the new session cannot start, the tab keeps the one it has.
-        guard let next = startSession?(target) else {
+        guard let next = startSession?(target, euVariables) else {
             host?.tabStateChanged(self)
             return
         }

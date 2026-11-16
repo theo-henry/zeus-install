@@ -10,8 +10,8 @@ final class DeveloperSettingsWindow: NSWindowController, NSWindowDelegate {
         let controller = shared ?? DeveloperSettingsWindow()
         shared = controller
         controller.showWindow(nil)
-        QuietWindows.show(controller.window)
-        QuietWindows.activate()
+        Front.show(controller.window)
+        Front.activate()
     }
 
     static func close() { shared?.close() }

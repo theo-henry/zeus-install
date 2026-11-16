@@ -980,17 +980,26 @@ touch "$STATE/gcloud-fail"
 act switch-host:apolix
 check "the first tab switches to Apolix" 'wait_count "state: running(" 5 30'
 act switch-host:eu
-check "without a Google Cloud sign-in the EU start is refused" 'wait_for "EU start refused" 30'
-check "the tab shows the failure" 'wait_for "state: failed(" 10'
+check "without a Google Cloud sign-in the switch to EU is refused" 'wait_for "EU start refused" 30'
 sleep 2
-check "nothing starts on Apolix instead" '[ "$(starts)" = 5 ]'
+check "the tab keeps its running Apolix session, and nothing starts instead" \
+  '[ "$(starts)" = 5 ] && [ "$(stops)" = 3 ] && wait_bar "apolix switch=true pill=false"'
 shot_frame 24-eu-refused
 rm -f "$STATE/gcloud-fail"
-act "test-retry"
-check "Try again starts on EU again after the sign-in" 'wait_count "EU preflight passed" 3 30 && wait_count "state: running(" 6 30 && start_has 6 "\"host\":\"eu\""'
+act switch-host:eu
+check "after the sign-in the switch to EU goes through" \
+  'wait_count "EU preflight passed" 3 30 && wait_count "state: running(" 6 30 && start_has 6 "\"host\":\"eu\"" && wait_stops 4'
 check "the app remembers EU for the next tab" '[ "$(defaults read "$PREFS_DOMAIN" lastHost 2>/dev/null)" = eu ]'
+touch "$STATE/gcloud-fail"
+act test-cmd-t
+check "a new EU tab without a Google Cloud sign-in shows the failure" 'wait_count "EU start refused" 2 30 && wait_for "state: failed(" 10'
+sleep 2
+check "nothing starts on Apolix instead" '[ "$(starts)" = 6 ]'
+rm -f "$STATE/gcloud-fail"
+act "test-retry"
+check "Try again starts on EU again after the sign-in" 'wait_count "EU preflight passed" 4 30 && wait_count "state: running(" 7 30 && start_has 7 "\"host\":\"eu\""'
 stop_app
-check "every session stopped when the app quit" '[ "$(stops)" = 6 ]'
+check "every session stopped when the app quit" '[ "$(stops)" = 7 ]'
 fi
 
 if runs 7; then

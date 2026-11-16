@@ -10,7 +10,7 @@ struct TabRestore: Codable {
     struct Tab: Codable {
         /// The Claude Code session of the chat, from the launcher. Nil for a tab that had not started yet.
         var sessionID: String?
-        /// The Claude host of the session. Nil in a file from a version without the host switch.
+        /// The Claude host of the session. Nil in a file from a version without the host switch, whose sessions all ran on Apolix.
         var host: ClaudeHost?
         var project: String?
         /// The name that the user gave the tab.

@@ -116,6 +116,9 @@ enum EUHost {
     /// The variables of an EU session from the alias variables, or the reason why they are not safe.
     static func variables(from alias: [String: String]) -> Result<[String: String], HostError> {
         var result = alias.filter { !forbidden.contains($0.key) }
+        if let expanded = result.keys.sorted().first(where: { key in result[key]!.contains { $0 == "$" || $0 == "`" } }) {
+            return .failure(HostError(message: "The \(aliasName) alias uses a shell variable or command for \(expanded). Write the value itself in the alias."))
+        }
         let vertex = (result["CLAUDE_CODE_USE_VERTEX"] ?? "").lowercased()
         guard ["1", "true", "yes"].contains(vertex) else {
             return .failure(HostError(message: "The \(aliasName) alias does not set CLAUDE_CODE_USE_VERTEX=1, so it is not a Vertex AI setup."))
@@ -137,11 +140,13 @@ enum EUHost {
         return .success(result)
     }
 
-    /// Reads the alias from the user's login shell. ZEUS_APP_EU_ENV ("A=1 B=2") replaces the alias (for tests).
+    /// Reads the alias from the user's login shell. ZEUS_APP_EU_ENV ("A=1 B=2") replaces the alias (debug builds, for tests).
     static func loadVariables() -> Result<[String: String], HostError> {
+        #if DEBUG
         if let override = ProcessInfo.processInfo.environment["ZEUS_APP_EU_ENV"], !override.isEmpty {
             return variables(from: assignments(in: override))
         }
+        #endif
         let marker = "__ZEUS_ALIAS__"
         let script = "printf '\(marker)'; alias \(aliasName) 2>/dev/null; printf '\(marker)'"
         guard let output = Shell.run(ShellEnvironment.loginShell, ["-ilc", script], timeout: 10)?.output,
@@ -178,9 +183,13 @@ enum EUHost {
     }
 
     /// `gcloud auth application-default print-access-token` must succeed. The token itself is never kept.
-    /// ZEUS_APP_GCLOUD replaces the gcloud command (for tests).
+    /// ZEUS_APP_GCLOUD replaces the gcloud command (debug builds, for tests).
     static func checkCredentials() -> Result<Void, HostError> {
+        #if DEBUG
         let gcloud = ProcessInfo.processInfo.environment["ZEUS_APP_GCLOUD"] ?? "gcloud"
+        #else
+        let gcloud = "gcloud"
+        #endif
         let login = "Run `gcloud auth application-default login` in Terminal, then try again."
         guard let run = Shell.run("/usr/bin/env", [gcloud, "auth", "application-default", "print-access-token"],
                                   environment: ShellEnvironment.make(), timeout: 30, keepOutput: false)

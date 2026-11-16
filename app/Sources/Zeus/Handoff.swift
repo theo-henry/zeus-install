@@ -58,8 +58,13 @@ enum HandoffCLI {
         static func == (lhs: Scan, rhs: Scan) -> Bool { lhs.project == rhs.project && lhs.hash == rhs.hash }
     }
 
-    /// The Python of the workspace's Zeus. ZEUS_APP_PYTHON replaces it (for tests).
-    private static var python: String { ProcessInfo.processInfo.environment["ZEUS_APP_PYTHON"] ?? "python3" }
+    /// The Python of the workspace's Zeus. ZEUS_APP_PYTHON replaces it (debug builds, for tests).
+    private static var python: String {
+        #if DEBUG
+        if let python = ProcessInfo.processInfo.environment["ZEUS_APP_PYTHON"] { return python }
+        #endif
+        return "python3"
+    }
     private static var script: String { Paths.zeusDir + "/scripts/zeus.py" }
 
     /// The environment of a Zeus call: the app's, without any variable that would make it look like a Claude Code session.
@@ -105,17 +110,10 @@ enum HandoffCLI {
         return .success(object)
     }
 
-    /// The whole output as one JSON object, else its last line that is one.
+    /// The whole output as one JSON object.
     private static func json(_ text: String) -> [String: Any]? {
-        func parse(_ text: Substring) -> [String: Any]? {
-            guard let data = text.data(using: .utf8) else { return nil }
-            return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let whole = parse(Substring(trimmed)) { return whole }
-        return trimmed.split(separator: "\n").reversed().lazy.compactMap { line in
-            line.hasPrefix("{") ? parse(line) : nil
-        }.first
+        guard let data = text.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     /// The projects whose EU work has no released handoff yet.
@@ -131,9 +129,8 @@ enum HandoffCLI {
     }
 
     private static func stages(_ object: [String: Any]) -> [Stage] {
-        (object["stages"] as? [Any] ?? []).compactMap { item -> Stage? in
-            if let label = item as? String { return label.isEmpty ? nil : Stage(id: label, label: label) }
-            guard let entry = item as? [String: Any], let label = entry["label"] as? String, !label.isEmpty else { return nil }
+        (object["stages"] as? [[String: Any]] ?? []).compactMap { entry -> Stage? in
+            guard let label = entry["label"] as? String, !label.isEmpty else { return nil }
             return Stage(id: entry["id"] as? String ?? label, label: label, blocked: entry["status"] as? String == "blocked")
         }
     }
@@ -188,9 +185,8 @@ enum HandoffCLI {
     }
 
     static func release(_ scan: Scan) -> Result<Void, Failure> {
-        // "released" is the path of the released file (or true); an error says false.
         call(["handoff", "release", scan.project.id, scan.hash, "--json"], timeout: 60).flatMap { object in
-            object["released"] as? Bool == true || !((object["released"] as? String) ?? "").isEmpty ? .success(())
+            object["released"] as? Bool == true ? .success(())
                 : .failure(Failure(message: "Zeus did not confirm the release of \(scan.project.name).", fix: nil))
         }
     }
