@@ -172,8 +172,9 @@ GitHub is simulated (`app/test/sim/payload/gh`): no repo, release, or tag is mad
 Each app case stops all its app copies and fails after `ZEUS_UPDATE_TEST_CASE_LIMIT` seconds (default 300), and the whole test stops after `ZEUS_UPDATE_TEST_LIMIT` seconds (default 3600).
 `ZEUS_UPDATE_TEST_CASES="settings-rollback"` runs only those cases of the `settings` part, and `ZEUS_UPDATE_TEST_TRACES=<folder>` keeps the trace of each app case.
 
-1. `release`: `app/release.sh` in a temporary copy of this repo stops for a working tree with changes, a commit that is not the newest main commit,
+1. `release`: `app/release.sh` in a temporary copy of this repo stops for a working tree with changes, a zeus-editor that cannot be checked, a commit that is not the newest main commit,
    a wrong or a too low version, and an existing tag; otherwise it builds the app for both architectures and makes the next `app-v` release with a valid zip and checksum.
+   The `globe` part tests `app/check-globe-sync.sh` with a stubbed `gh`: the same files pass; a different globe, `--ink-900`, status page colour, or `LoaderPage.background` is refused; so is a zeus-editor that `gh` cannot read.
 2. `install`: `install-app.sh` on a simulated new Mac stops after step 5 without access and downloads nothing;
    with access, it installs the newest `app-v` release (not drafts, pre-releases, or other tags), and it stops for a wrong checksum or version, or without an app release.
 3. `app`: the app updates itself from 1.0.0 to 1.1.0, restarts in the new version, and keeps the user state;

@@ -193,6 +193,8 @@ app/release.sh 1.2.0      # or a version that you choose, higher than the newest
 ```
 
 The script stops when the working tree has changes or when the checkout is not the newest commit of `origin/main`.
+It also stops when `app/Resources/globe.js` or the loader colour differ from zeus-editor (`app/check-globe-sync.sh`, see `app/README.md`).
+CI skips this check with `ZEUS_SKIP_GLOBE_CHECK=1`, because its token cannot read the private zeus-editor repo.
 It builds the app with `app/build.sh`, checks the zip (bundle identifier, version, and signature), and makes the release with `gh`.
 The release is not marked as the latest release of the zeus repo.
 No GitHub token is stored in the app or in the files of this repo.
