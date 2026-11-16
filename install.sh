@@ -78,6 +78,8 @@ PATH_LINE='export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"'
 LOG_DIR="$HOME/Library/Logs/zeus-install"
 SUMMARY=()
 WORK_DIR=""
+# Set in an EU step (eu_step): a failure there is a warning, not the end of the setup.
+EU_STEP=""
 
 # App mode (Zeus.app). The skill plugins are installed for the user, like the Zeus Editor plugin in step 10.
 APP_MODE=""
@@ -117,9 +119,19 @@ step() {
 
 fail() {
   emit "failed $CURRENT_STEP $1"
+  local line
+  if [ -n "$EU_STEP" ]; then
+    printf '\n\033[1;33mWarning:\033[0m %s\n' "$1" >&2
+    shift
+    for line in "$@"; do
+      printf '    %s\n' "$line" >&2
+    done
+    printf '\n    EU mode is not ready on this Mac; the Zeus app tells what is missing. The setup goes on.\n' >&2
+    printf '    To set up EU mode later, run the setup again. Completed steps are skipped.\n' >&2
+    exit 1
+  fi
   printf '\n\033[1;31mStopped:\033[0m %s\n' "$1" >&2
   shift
-  local line
   for line in "$@"; do
     printf '    %s\n' "$line" >&2
   done
@@ -889,10 +901,32 @@ install_eu_plugins() {
   record "done" "Zeus plugins of EU mode"
 }
 
+# eu_step <function> <name>: runs one EU step in a subshell, so that its failure stops only that step. EU mode is for
+# some users only: a failed EU step never stops the Standard setup or the app install. The app reports the missing
+# parts when the user switches to EU mode (EUSetup.missing).
+eu_step() {
+  local summary="$WORK_DIR/eu-step-summary" status line
+  : >"$summary"
+  set +e
+  (
+    set -e
+    EU_STEP=1
+    SUMMARY=()
+    "$1"
+    if [ "${#SUMMARY[@]}" -gt 0 ]; then printf '%s\n' "${SUMMARY[@]}" >"$summary"; fi
+  )
+  status=$?
+  set -e
+  while IFS= read -r line; do SUMMARY+=("$line"); done <"$summary"
+  if [ "$status" -ne 0 ]; then
+    SUMMARY+=("$(printf '%-9s %s' "warning" "$2 (not set up; EU mode only)")")
+  fi
+}
+
 install_eu() {
-  install_gcloud
-  clone_eu_workspace
-  install_eu_plugins
+  eu_step install_gcloud "Google Cloud CLI"
+  eu_step clone_eu_workspace "EU workspace"
+  eu_step install_eu_plugins "Zeus plugins of EU mode"
 }
 
 # Step 12 (app mode) - The Zeus skill plugins, for the current user, like the Zeus Editor plugin.

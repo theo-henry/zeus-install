@@ -137,6 +137,9 @@ The installer does not use `sudo`.
 Your Mac password can be necessary only for the Apple pop-up in step 1.
 The installer asks you to accept the Anaconda license before it installs Anaconda.
 Logs for Anaconda, the GitHub CLI, and the Claude Code update are in `~/Library/Logs/zeus-install`.
+A failed EU step (12 to 14, or 14 to 16 in the app) does not stop the installer.
+It is a warning, the other steps continue, and the Zeus app is installed.
+The app shows what EU mode is missing when you switch to EU mode; run the setup again to finish it.
 
 ## After the install
 
@@ -191,7 +194,7 @@ gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99
 
 ### Use EU mode in the app
 
-- The mode switch is at the right of the tab bar (`Standard | EU`), in the Zeus menu, and in the menu bar icon.
+- The mode switch is at the right of the tab bar (`Standard | EU`).
   A green EU pill shows in EU mode.
 - A switch closes all the tabs of the current mode and stops their sessions before the other mode starts.
   The app asks first when a tab has unsent text or Zeus is working.
@@ -206,12 +209,12 @@ gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99
 EU work never goes to Standard by itself.
 A person releases it in the app:
 
-1. In EU mode, select Zeus > Hand Over EU Work…, or **Hand Over First…** when you switch to Standard.
+1. In EU mode, click **Standard** in the mode switch, then click **Hand Over First…**.
 2. Click **Ask Zeus in this chat**.
    The EU chat writes the handover summary of its project.
    Then click **Review…** next to the project.
 3. Review the summary and the files.
-   The app scans them for client data.
+   The app scans them for client data with the Zeus scripts of the Standard workspace, which EU Claude can not change.
    You can edit the summary, remove files, and accept a finding.
    An e-mail address or an IBAN can not be accepted: remove the file, or change the text in EU mode.
 4. Click **Release to Standard**.

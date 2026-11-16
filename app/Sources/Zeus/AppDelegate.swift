@@ -438,7 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     // MARK: Mode
 
-    /// The `Standard | EU` switch of the title bar, the menu, and the menu bar item. A switch asks first; from EU it
+    /// The `Standard | EU` switch of the title bar. A switch asks first; from EU it
     /// offers the handover first. Then it ends every session of the old mode, keeps its tabs for a switch back, and
     /// starts the new mode with the tabs that it had (or one new tab). EU needs its setup on this Mac first.
     func requestMode(_ target: ZeusMode) {
@@ -476,7 +476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 || response == .alertSecondButtonReturn && target == .standard
             if target == .standard, response == .alertFirstButtonReturn {
                 self.endSwitch("handover first")
-                self.showHandover(nil)
+                self.showHandover()
                 return
             }
             guard switching else { self.endSwitch("cancelled"); return }
@@ -570,7 +570,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func refreshModeViews() {
         chatWindows.forEach { $0.modeChanged() }
-        statusMenu.update()
     }
 
     private func askForEUSetup(_ missing: [String]) {
@@ -621,8 +620,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
-    /// Hand Over EU Work…: the handover window (EU mode only).
-    @objc func showHandover(_ sender: Any?) {
+    /// The handover window (EU mode only), from the "Hand Over First…" choice of the switch to Standard.
+    func showHandover() {
         guard ZeusMode.current == .eu else { return }
         if let handoverWindow {
             Front.show(handoverWindow.window)
@@ -649,9 +648,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         Front.activate()
         Trace.log("handover: window opened")
     }
-
-    @objc private func chooseStandard(_ sender: Any?) { requestMode(.standard) }
-    @objc private func chooseEU(_ sender: Any?) { requestMode(.eu) }
 
     // MARK: Test actions
 
@@ -819,7 +815,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 guard let tab = self.chatTabs.last else { break }
                 let store = tab.webView.configuration.websiteDataStore
                 Trace.log("web data: \(tab.mode.rawValue) persistent=\(store.isPersistent) default=\(store === WKWebsiteDataStore.default())")
-            case "test-handover": self.showHandover(nil)
+            case "test-handover": self.showHandover()
             // Asks the last EU tab, the tab that the other test actions (test-pick-project) use.
             case "test-handover-ask":
                 guard let model = self.handoverWindow?.model, let chat = model.chats.last else { Trace.log("handover: no chat"); break }
@@ -838,7 +834,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             case "test-handover-state":
                 guard let model = self.handoverWindow?.model else { Trace.log("handover state: no window"); break }
                 let findings = model.review?.findings.map { "\($0.kind)\($0.blocking ? "!" : "")\($0.accepted ? "+" : "")" } ?? []
-                Trace.log("handover state: phase=\(model.phase) projects=\(model.projects.map { "\($0.project):\($0.open)" }) chats=\(model.chats.count) files=\(model.review?.files.map { "\($0.path)\($0.include ? "" : "-")" } ?? []) findings=\(findings) open=\(model.openFindings.count) release=\(model.canRelease) message=\(model.message ?? "-")")
+                var phase = "\(model.phase)"
+                if case .failed = model.phase { phase = "failed" }
+                Trace.log("handover state: phase=\(phase) projects=\(model.projects.map { "\($0.project):\($0.open)" }) chats=\(model.chats.count) files=\(model.review?.files.map { "\($0.path)\($0.include ? "" : "-")" } ?? []) findings=\(findings) open=\(model.openFindings.count) release=\(model.canRelease) message=\(model.message ?? "-")")
             case "test-rename-open": self.chatTabs.last.map { $0.host?.startRename($0) }
             case "test-rename-save": self.chatTabs.last.map { $0.host?.endRename($0, name: argument) }
             case "toggle-menubar": self.toggleMenuBar(nil)
@@ -934,12 +932,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return !pinned
         case #selector(reloadPage(_:)), #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualSize(_:)), #selector(openSettings(_:)):
             return keyWebView != nil
-        case #selector(chooseStandard(_:)), #selector(chooseEU(_:)):
-            let mode: ZeusMode = menuItem.action == #selector(chooseEU(_:)) ? .eu : .standard
-            menuItem.state = ZeusMode.current == mode ? .on : .off
-            return !isSwitchingMode && !updating
-        case #selector(showHandover(_:)):
-            return ZeusMode.current == .eu && !isSwitchingMode
         default:
             break
         }
@@ -953,11 +945,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         app.addItem(withTitle: "About Zeus", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
         app.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
-        app.addItem(.separator())
-        app.addItem(withTitle: "Standard Mode", action: #selector(chooseStandard(_:)), keyEquivalent: "")
-        app.addItem(withTitle: "EU Mode", action: #selector(chooseEU(_:)), keyEquivalent: "")
-        app.addItem(withTitle: "Hand Over EU Work…", action: #selector(showHandover(_:)), keyEquivalent: "")
-        app.addItem(.separator())
         app.addItem(withTitle: "Zeus Setup…", action: #selector(showSetup(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Show in Menu Bar", action: #selector(toggleMenuBar(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Keep in Dock", action: #selector(keepInDock(_:)), keyEquivalent: "")

@@ -4,8 +4,8 @@ import Foundation
 import SwiftUI
 
 /// The EU to Standard handover (zeus references/eu-mode.md, "Handover"). EU Claude writes a summary of its work on a fixed
-/// template; the app builds the handover and scans it for data values with the Zeus commands of the EU workspace, outside
-/// Claude; the user reviews the summary, the files, and each finding here; and on Release the app, not Claude, copies the
+/// template; the app builds the handover and scans it for data values with the Zeus commands of the Standard workspace,
+/// outside Claude and out of reach of EU Claude, pointed at the EU workspace; the user reviews the summary, the files, and each finding here; and on Release the app, not Claude, copies the
 /// files into the Standard workspace and writes `released.json`. EU Claude can not write into the Standard workspace, so
 /// it can not make a release. A finding is accepted only here, never by Claude, and e-mail and IBAN findings can not be
 /// accepted. EU chats and EU work files never open in Standard: only the released files cross.
@@ -37,11 +37,16 @@ enum Handover {
     }
 }
 
-/// The app contract of the zeus handoff commands (I2): `python3 scripts/zeus.py handoff <command> --json` in the EU
-/// workspace. Exit codes: 0 ok, 2 user error, 3 findings (scan), 4 internal error; every answer is one JSON object.
+/// The app contract of the zeus handoff commands (I2): `python3 scripts/zeus.py --workspace <EU workspace> handoff <command>
+/// --json`. Exit codes: 0 ok, 2 user error, 3 findings (scan), 4 internal error; every answer is one JSON object.
+/// The script is the one of the Standard workspace, which EU Claude can not write: EU Claude can change the scripts of
+/// the EU workspace, and so the scan. `-E -s` keep PYTHONPATH and the user site folder out, and a script run puts only the
+/// folder of its script on the import path, not the working folder: no module of the EU workspace loads.
 struct HandoffCLI {
     let workspace: String
     let profile: EUProfile
+    /// The Standard workspace, whose `scripts/zeus.py` runs.
+    let scriptsWorkspace: String
 
     struct Failure: Error, LocalizedError {
         let message: String
@@ -52,7 +57,8 @@ struct HandoffCLI {
     func run(_ arguments: [String]) throws -> (code: Int32, json: [String: Any]) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", "scripts/zeus.py", "--workspace", workspace, "handoff"] + arguments + ["--json"]
+        let script = (scriptsWorkspace as NSString).appendingPathComponent("scripts/zeus.py")
+        process.arguments = ["python3", "-E", "-s", script, "--workspace", workspace, "handoff"] + arguments + ["--json"]
         process.currentDirectoryURL = URL(fileURLWithPath: workspace)
         var env = ShellEnvironment.make()
         // The app's calls have no Claude session; the EU workspace and the profile decide.
@@ -67,9 +73,17 @@ struct HandoffCLI {
         process.standardError = errors
         process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { throw Failure(message: "Zeus could not run python3: \(error.localizedDescription)") }
-        // Read before the wait: a large answer fills the pipe.
+        // Read both pipes before the wait, and at the same time: a large answer or a large error output fills its pipe.
+        var errorData = Data()
+        let errorsRead = DispatchGroup()
+        errorsRead.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errorData = errors.fileHandleForReading.readDataToEndOfFile()
+            errorsRead.leave()
+        }
         let data = output.fileHandleForReading.readDataToEndOfFile()
-        let errorText = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        errorsRead.wait()
+        let errorText = String(decoding: errorData, as: UTF8.self)
         process.waitUntilExit()
         let code = process.terminationStatus
         Trace.log("handoff \(arguments.first ?? "-"): exit \(code)")
@@ -161,7 +175,7 @@ final class HandoverModel: ObservableObject {
     init(profile: EUProfile = .load(), standardWorkspace: String = Paths.zeusDir) {
         self.profile = profile
         self.standardWorkspace = standardWorkspace
-        cli = HandoffCLI(workspace: profile.workspace, profile: profile)
+        cli = HandoffCLI(workspace: profile.workspace, profile: profile, scriptsWorkspace: standardWorkspace)
     }
 
     deinit { pollTimer?.invalidate() }

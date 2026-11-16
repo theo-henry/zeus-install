@@ -1,7 +1,7 @@
 # EU mode scenario of the app on a simulated Mac (app/test/sim/run.sh --eu). Sourced by run.sh: it uses its helpers
 # (act, check, need, wait_for, launch_app, shot, ...) and its simulated tools. No Google or Anthropic service is called:
 # `zeus --eu` is the simulated zeus (payload/zeus.mjs), gcloud is payload/gcloud, and the zeus handoff commands of the
-# EU workspace are payload/zeus_handoff.py, which keeps the app contract of the real ones (zeus references/eu-mode.md).
+# Standard workspace are payload/zeus_handoff.py, which keeps the app contract of the real ones (zeus references/eu-mode.md).
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
 # shellcheck disable=SC2016,SC2034,SC2154
 
@@ -35,8 +35,19 @@ eu_sandbox() {
     printf '{"project_id": "acme"}\n' >"$SANDBOX/Code/$workspace/clients/acme/project.json"
   done
   local eu="$SANDBOX/Code/zeus-eu"
-  mkdir -p "$eu/scripts" "$eu/clients/acme/work/view" "$eu/clients/acme/out"
-  cp "$SIM_DIR/payload/zeus_handoff.py" "$eu/scripts/zeus.py"
+  mkdir -p "$SANDBOX/Code/zeus/scripts" "$eu/scripts" "$eu/clients/acme/work/view" "$eu/clients/acme/out"
+  cp "$SIM_DIR/payload/zeus_handoff.py" "$SANDBOX/Code/zeus/scripts/zeus.py"
+  # EU Claude can write the EU workspace: a changed zeus.py there, and modules next to it and in the working folder,
+  # would report a clean scan. The app must never run or import them; each one leaves a mark when it runs.
+  local planted
+  for planted in "$eu/scripts/zeus.py" "$eu/scripts/json.py" "$eu/json.py"; do
+    cat >"$planted" <<PY
+import sys
+open("$STATE/eu-code-ran", "a").write(__file__ + "\\n")
+print('{"projects": [], "findings": [], "clean": true}')
+sys.exit(0)
+PY
+  done
   printf '{"title": "ACME orders", "kpi": "PU_COUNT(orders)"}\n' >"$eu/clients/acme/work/view/spec.json"
   printf 'id,customer\n1,ACME\n' >"$eu/clients/acme/out/rows.csv"
   # The summary that EU Zeus writes when the app asks for it (payload/zeus.mjs, the control "send").
@@ -201,7 +212,9 @@ eu_scenario() {
   check "the app builds and scans the handover" 'wait_handover "phase=review" 20'
   check "only the listed files that may cross are in it" 'handover_has "files=[\"summary.md\", \"files/work/view/spec.json\"]"'
   check "the scan findings show, and the e-mail address blocks" 'handover_has "findings=[\"email!\", \"known-value\"]" && handover_has "release=false"'
-  check "the handoff commands run in the EU workspace, outside Claude, with the EU profile" \
+  check "the handoff commands run the Standard copy of zeus.py, pointed at the EU workspace, and no code of the EU workspace" \
+    'python3 -c "import json,os,sys; home=os.path.realpath(sys.argv[2]); calls=[json.loads(x) for x in open(sys.argv[1])]; sys.exit(0 if calls and all(c[\"script\"]==home+\"/Code/zeus/scripts/zeus.py\" and not any(p==home+\"/Code/zeus-eu\" or p.startswith(home+\"/Code/zeus-eu/\") for p in c[\"path\"]) for c in calls) else 1)" "$STATE/handoff.log" "$SANDBOX" && [ ! -e "$STATE/eu-code-ran" ]'
+  check "the handoff commands run outside Claude, with the EU profile" \
     'grep -q "\"args\": \[\"--workspace\", \"[^\"]*/Code/zeus-eu\", \"handoff\", \"build\", \"acme\", \"--json\"\]" "$STATE/handoff.log" && ! grep -q "\"ZEUS_MODE\": \"eu\"\|\"CLAUDE_CODE_USE_VERTEX\": \"1\"\|\"CLAUDE_CONFIG_DIR\": \"/" "$STATE/handoff.log" && grep -q "\"ZEUS_EU_PROFILE\": \"[^\"]*/zeus-editor/sim/eu-profile.json\"" "$STATE/handoff.log"'
   shot eu-10-handover-review
   act test-handover-accept-all
@@ -224,7 +237,7 @@ eu_scenario() {
   check "released.json records the files, the removed file, and the accepted findings" \
     'python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if [f[\"path\"] for f in r[\"files\"]]==[\"summary.md\"] and r[\"removed\"]==[\"files/work/view/spec.json\"] and sorted(f[\"kind\"] for f in r[\"accepted_findings\"])==[\"number\"] and r[\"summary_edited_in_app\"] and r[\"project\"]==\"acme\" else 1)" "$released/released.json"'
   check "the EU handover is closed" '[ -f "$SANDBOX/Code/zeus-eu/clients/acme/handoff/$id/released.json" ] && act test-handover-refresh && wait_handover "projects=[\"acme:false\"]" 10'
-  check "no EU chat or other EU file is in the Standard workspace" '[ "$(find "$SANDBOX/Code/zeus" -type f -not -path "*/.git/*" | sed "s|^$SANDBOX/Code/zeus/||" | sort | tr "\n" " ")" = "clients/acme/handoff/from-eu/$id/released.json clients/acme/handoff/from-eu/$id/summary.md clients/acme/project.json " ]'
+  check "no EU chat or other EU file is in the Standard workspace" '[ "$(find "$SANDBOX/Code/zeus" -type f -not -path "*/.git/*" | sed "s|^$SANDBOX/Code/zeus/||" | sort | tr "\n" " ")" = "clients/acme/handoff/from-eu/$id/released.json clients/acme/handoff/from-eu/$id/summary.md clients/acme/project.json scripts/zeus.py " ]'
 
   # EU to Standard without a handover: the EU tabs stop, are kept for the way back, and never resume in Standard.
   eu_sessions="$(awk '$2=="session" {print $3}' "$STATE/sessions" | sort -u)"

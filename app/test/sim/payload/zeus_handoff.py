@@ -1,10 +1,11 @@
-"""Simulated `scripts/zeus.py` of the EU workspace: only the handoff commands of the Zeus app contract (I2).
+"""Simulated `scripts/zeus.py` of the Standard workspace: only the handoff commands of the Zeus app contract (I2).
 
 The real commands are in the private zeus repo (scripts/handoff.py, scripts/handoff_scan.py, references/eu-mode.md).
 This fixture keeps their contract: the arguments, one JSON object per answer, the exit codes (0 ok, 2 user error,
 3 findings, 4 internal error), the handover folders, the manifest, and the finding fields. Its scan finds e-mail
 addresses (blocking), the known value ACME, and numbers with three or more digits. Each call is logged in
-$ZEUS_SIM_STATE/handoff.log with the environment that matters (the app runs it outside Claude).
+$ZEUS_SIM_STATE/handoff.log with the script path, the import path, and the environment that matters (the app runs it
+outside Claude, from the Standard workspace, pointed at the EU workspace).
 """
 import hashlib
 import json
@@ -31,7 +32,8 @@ def log(args):
     if state:
         with open(Path(state) / "handoff.log", "a", encoding="utf-8") as handle:
             keep = {k: os.environ.get(k) for k in ("ZEUS_MODE", "ZEUS_EU_PROFILE", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CONFIG_DIR")}
-            handle.write(json.dumps({"args": args, "cwd": os.getcwd(), "env": keep}) + "\n")
+            handle.write(json.dumps({"args": args, "cwd": os.getcwd(), "script": os.path.realpath(__file__),
+                                     "path": [os.path.realpath(x) for x in sys.path if x], "env": keep}) + "\n")
 
 
 def sha(path):

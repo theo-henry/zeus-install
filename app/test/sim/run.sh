@@ -859,6 +859,27 @@ check "nothing after step 5 is installed" '[ ! -d "$SANDBOX/.local/node" ] && [ 
 stop_app
 
 echo
+echo "Scenario 5b: an EU step fails, and the Standard setup still completes"
+# EU mode is for some users only: a failed EU step is a warning. The app tells what EU mode misses when the user switches.
+start_app eu-step-fails ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL=1
+check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
+act setup-install
+wait_for "setup event: ask 2 " 40 >/dev/null && act setup-answer-yes
+wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && act setup-enter
+check "step 14 fails: the Google Cloud CLI download fails" 'wait_for "setup event: failed 14 The download of google-cloud-cli-" 120 && [ ! -e "$SANDBOX/google-cloud-sdk" ]'
+check "the later EU steps still run" 'wait_for "setup event: done 15 " 30 && wait_for "setup event: done 16 " 30'
+check "the setup completes without an error" 'wait_for "setup ended: check=false code=0" 20 && [ "$(grep -c "setup event: failed " "$TRACE")" = 1 ]'
+shot 7b-eu-step-failed
+act setup-start
+check "Standard mode starts" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+act test-mode:eu
+check "EU mode names the missing Google Cloud CLI" 'wait_for "mode: EU setup missing: .*the Google Cloud CLI" 10'
+act test-alert:1
+check "in Terminal use, a failed EU step is a warning, and the steps after it run" \
+  'out="$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; install_eu; echo after-eu; printf \"%s\\n\" \"\${SUMMARY[@]}\"" _ "$REPO_DIR/install.sh" 2>&1)" && printf "%s" "$out" | grep -q "^after-eu$" && printf "%s" "$out" | grep -q "Warning:.*google-cloud-cli" && printf "%s" "$out" | grep -q "^warning   Google Cloud CLI (not set up; EU mode only)$" && ! printf "%s" "$out" | grep -q "Stopped:"'
+stop_app
+
+echo
 if [ "$FAILURES" -eq 0 ]; then
   printf '\033[32mAll checks passed.\033[0m\n'
 else

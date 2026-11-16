@@ -28,6 +28,8 @@ case "$url" in
     rm -rf "$work"
     ;;
   *google-cloud-cli-*-darwin-*.tar.gz)
+    # ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL: the download fails, as without a connection to dl.google.com.
+    if [ -n "${ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL:-}" ]; then echo "simulated curl: (6) Could not resolve host" >&2; exit 6; fi
     work="$(mktemp -d)"
     mkdir -p "$work/google-cloud-sdk/bin"
     cp "$P/gcloud" "$work/google-cloud-sdk/bin/gcloud"

@@ -47,7 +47,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The chat page tells the app its project with `window.webkit.messageHandlers.zeusApp.postMessage({type: "project", name})` (`name` is null without a project);
   for chat pages that do not send it, the app reads the project button of the chat.
   Cmd+J shows or hides the live terminal of the tab, for login prompts, slash commands, or debugging.
-- **Standard | EU.** The mode switch at the right of the tab bar, the Zeus menu, and the menu bar icon switch between Standard mode and EU mode
+- **Standard | EU.** The mode switch at the right of the tab bar switches between Standard mode and EU mode
   (`Sources/Zeus/EUMode.swift`). EU mode runs `zeus --eu --no-open` in `~/Code/zeus-eu` (from the EU launch profile `eu-profile.json` of Zeus Editor),
   shows a green EU pill, and shows the session cost estimate in USD from the `cost:` messages of the chat page.
   A switch closes and stops every session of the old mode before the new mode starts, and asks first about unsent text or busy tabs.
@@ -55,9 +55,11 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   Each mode has its own web data store, and the terminal of a tab runs in the environment of its mode.
   When EU mode does not start, the tab shows the `zeus:` message with **Sign in to Google Cloud** (it runs the gcloud sign-in in the tab's terminal),
   **Run the Zeus setup**, **Try again**, and **Switch to Standard**. An `eu-error:` message (Vertex AI 403, 404, or 429) shows a question with the fix.
-- **EU handover.** Zeus > Hand Over EU Work… (or **Hand Over First…** at the switch to Standard) opens the handover window (`Sources/Zeus/Handover.swift`).
+- **EU handover.** **Hand Over First…** at the switch to Standard opens the handover window (`Sources/Zeus/Handover.swift`).
   **Ask Zeus in this chat** sends the summary request to an EU tab, with the project that the tab shows.
-  The app runs the handoff commands of `scripts/zeus.py` in the EU workspace, shows the summary, the files, and the scan findings,
+  The app runs the handoff commands of `scripts/zeus.py` of the Standard workspace (`~/Code/zeus`, which EU Claude can not write) with `--workspace` set to the EU workspace.
+  It runs `python3 -E -s`, so no module of the EU workspace loads, and EU Claude can not change the scan.
+  The app shows the summary, the files, and the scan findings,
   and lets the user edit the summary, remove files, and accept findings. E-mail and IBAN findings can not be accepted.
   **Release to Standard** scans again, then the app copies the checked files to `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/`
   and writes `released.json`. Claude never releases a handover.
@@ -283,12 +285,14 @@ It presses the app's buttons through the debug test actions and checks the trace
    apply at once; a damaged file gives the defaults without a crash; a symbol key shortcut with Shift works in a Zeus Editor window;
    Settings… calls `openSettings` in the chat page, also when it comes while a new tab still loads its chat page.
 5. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
+   An EU step that fails (the Google Cloud CLI download) is a warning: the later steps run, the setup completes,
+   and a switch to EU mode names the missing Google Cloud CLI. In Terminal use, the steps after a failed EU step also run.
 
 `--eu` runs the EU mode scenario (`app/test/sim/eu.sh`) with a simulated `gcloud`, EU `zeus`, and handoff `scripts/zeus.py`:
 the setup question when EU mode is not set up; a switch stops every Standard session before `zeus --eu --no-open` starts in `~/Code/zeus-eu`;
 the EU pill, the EU web data store, and the cost label; a 429 error question; a failed start that needs the Google sign-in,
 the sign-in in the terminal, and the retry; a 403 failure; the handover request that names the project of the tab, the handover with findings, an accepted finding, an edited summary, a removed file,
-the release, and `released.json`; the switch back resumes the Standard tabs and never an EU tab; and a restart in EU mode.
+the release, and `released.json`; the handoff commands run the Standard `scripts/zeus.py` and never a script or module of the EU workspace; the switch back resumes the Standard tabs and never an EU tab; and a restart in EU mode.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
 permission for the terminal only for the screenshots.
