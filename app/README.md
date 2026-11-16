@@ -128,16 +128,16 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The EU figure is an estimate from Google Cloud list prices; the Apolix figure is the value at API list prices, not a charge on the subscription.
 - **Blind build mode** (off). Every session that the app starts, on both hosts, gets `ZEUS_BLIND_MODE=1`; with the setting off, the variable is absent (an inherited one is removed). Zeus enforces what it means: sessions outside the EU see no row values and cannot read raw data files.
 
-### The EU handoff when a tab switches from EU to Apolix
+### The Secure Handoff when a tab switches from EU to Apolix
 
-Before the EU session stops, the app (not Claude) asks the workspace's Zeus which projects need a handoff: `python3 <workspace>/scripts/zeus.py --workspace <workspace> handoff pending --json`, in the workspace, without the variables of a Claude Code session.
-With none, the switch goes on as above, and the loading screen of the Apolix session says "Nothing to hand off — this EU session didn't work on a client project." for about 1.2 s while the session starts (no step, no sheet). Otherwise the tab shows **Handing off data securely** on the loading screen while Zeus runs `handoff build <project> --json` and `handoff scan <project> --json` (off the main thread, with time limits),
+Before the EU session stops, the app (not Claude) asks the workspace's Zeus which projects need a Secure Handoff (every project with EU work, sandbox demo projects too): `python3 <workspace>/scripts/zeus.py --workspace <workspace> handoff pending --json`, in the workspace, without the variables of a Claude Code session.
+With none, the switch goes on as above, and the loading screen of the Apolix session says "No Secure Handoff needed — this EU session didn't work on a project." for about 1.2 s while the session starts (no step, no sheet). Otherwise the tab shows **Secure Handoff** with "Handing off data securely — removing and aggregating sensitive information" on the loading screen while Zeus runs `handoff build <project> --json` and `handoff scan <project> --json` (off the main thread, with time limits),
 and shows each step as Zeus starts it (its `{"stage", "label"}` progress lines on stderr), each for a moment, then ticks them off; a blocked review step shows as failed.
 When `pending` says `draft_ready` (Zeus built the draft when the EU session ended, and it is still current), only `handoff scan` runs: collect, strip, and aggregate show as done, "prepared when the EU session ended". If that scan fails, the full build runs. Then a summary sheet shows what goes over (counts), the scan result, and any findings (masked previews from Zeus), with:
 
 - **Release and continue on Apolix**: `handoff release <project> <hash> --json`, then the Apolix session starts. Disabled while the scan has findings or after an error.
 - **Open review page**: the HTML review page of the scan.
-- **Continue without handoff**: Apolix starts without a release.
+- **Continue without Secure Handoff**: Apolix starts without a release.
 - **Stay on EU**: the EU session keeps running.
 
 An error of Zeus shows in the sheet with its fix; it never starts Apolix by itself and never blocks a later switch to EU.
@@ -183,9 +183,9 @@ Its pages keep running and drawing while other windows cover them.
 The tests in `app/test` set it, so they do not come in front of your work.
 Screenshots use the window number, so they work for windows behind other windows.
 Release builds ignore it.
-`ZEUS_APP_WORKSPACE=/path/to/zeus` replaces the Zeus workspace (`~/Code/zeus`): sessions start there, and the handoff runs its `scripts/zeus.py`.
+`ZEUS_APP_WORKSPACE=/path/to/zeus` replaces the Zeus workspace (`~/Code/zeus`): sessions start there, and the Secure Handoff runs its `scripts/zeus.py`.
 `ZEUS_APP_ZEUS_COMMAND=/path/to/zeus` replaces the zeus command. The app passes its environment on to `zeus`, so `ZEUS_EDITOR_PORT` and `ZEUS_EDITOR_STATE_DIR` give a development Zeus Editor of its own.
-`ZEUS_APP_EU_ENV="NAME=value NAME=value"` replaces the `claude-eu` alias, `ZEUS_APP_GCLOUD=/path/to/gcloud` replaces `gcloud`, and `ZEUS_APP_PYTHON` replaces `python3` for the handoff.
+`ZEUS_APP_EU_ENV="NAME=value NAME=value"` replaces the `claude-eu` alias, `ZEUS_APP_GCLOUD=/path/to/gcloud` replaces `gcloud`, and `ZEUS_APP_PYTHON` replaces `python3` for the Secure Handoff.
 `ZEUS_APP_TEST_NO_SWITCH_QUESTION=1` and `ZEUS_APP_TEST_NO_OPEN=1` (debug builds) skip the switch question and the opening of the review page in tests.
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.
@@ -307,8 +307,8 @@ It presses the app's buttons through the debug test actions and checks the trace
 6. Developer Settings and the host switch: a tab starts on Apolix; the cost on connect shows only when its setting is on; the switch to EU checks the Google Cloud sign-in, stops the Apolix session,
    and starts `zeus` with the EU variables and without keys, proxies, or region overrides; blind build mode reaches new sessions only; the cost of each report reaches the title bar;
    the host bar follows the selected tab; without a sign-in the EU start is refused and nothing starts on Apolix; **Try again** starts on EU after the sign-in.
-7. The EU handoff with a simulated `scripts/zeus.py` (`payload/handoff-zeus.py`): a clean scan ticks off its stages in under 3 s and releases before the EU session stops;
-   a scan with findings disables Release and **Stay on EU** keeps EU; a failed build or pending check asks, and **Continue without handoff** starts Apolix without a release; a draft prepared when the EU session ended is scanned, not built; with no EU work the step is skipped and the loading screen says so.
+7. The Secure Handoff with a simulated `scripts/zeus.py` (`payload/handoff-zeus.py`): a clean scan ticks off its stages in under 3 s and releases before the EU session stops;
+   a scan with findings disables Release and **Stay on EU** keeps EU; a failed build or pending check asks, and **Continue without Secure Handoff** starts Apolix without a release; a draft prepared when the EU session ended is scanned, not built; with no EU work the step is skipped and the loading screen says so.
 
 `ZEUS_SIM_SCENARIOS="6 7"` runs only the named scenarios (2 and 3 run with 1).
 

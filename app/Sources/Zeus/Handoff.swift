@@ -168,7 +168,7 @@ enum HandoffCLI {
     /// The Scan of a `scan` answer; `built` are the stages before the scan's own.
     private static func summarize(_ project: Project, _ object: [String: Any], built: [Stage]) -> Result<Scan, Failure> {
         guard let hash = object["hash"] as? String, !hash.isEmpty else {
-            return .failure(Failure(message: "The scan of \(project.name) gave no handoff hash.", fix: nil))
+            return .failure(Failure(message: "The scan of \(project.name) gave no Secure Handoff hash.", fix: nil))
         }
         let findings = (object["findings"] as? [[String: Any]] ?? []).map { item in
             Finding(kind: item["kind"] as? String ?? "finding", location: item["where"] as? String ?? "",
@@ -200,19 +200,19 @@ enum HandoffCLI {
 /// It checks which projects need a handoff; with none, the loading screen of the Apolix session says so for a moment
 /// (nothingToHandOff, shown by ChatTab), without a step or a sheet. Otherwise the tab shows the
 /// handoff step on the loading screen while Zeus builds and scans each handoff, then a summary sheet:
-/// release and continue on Apolix, open the review page, continue without handoff, or stay on EU.
+/// release and continue on Apolix, open the review page, continue without Secure Handoff, or stay on EU.
 /// No error starts Apolix by itself: the consultant always picks.
 final class HandoffFlow {
     enum Outcome { case noHandoffNeeded, switchNow, stay }
 
-    static let title = "Handing off data securely"
-    static let subtitle = "Removing and aggregating sensitive information"
+    static let title = "Secure Handoff"
+    static let subtitle = "Handing off data securely — removing and aggregating sensitive information"
     /// The stage that shows while Zeus builds and scans, before it names its own stages.
     static let firstStage = "Collecting the EU work"
     /// The stage that shows while Zeus scans a draft that it prepared when the EU session ended.
-    static let preparedScanStage = "Scanning the prepared handoff"
+    static let preparedScanStage = "Scanning the prepared Secure Handoff"
     /// The note on the loading screen when no project needs a handoff.
-    static let nothingToHandOff = "Nothing to hand off — this EU session didn't work on a client project."
+    static let nothingToHandOff = "No Secure Handoff needed — this EU session didn't work on a project."
 
     private weak var tab: ChatTab?
     private var overlay: LoaderOverlay?
@@ -492,10 +492,10 @@ final class HandoffSummaryModel: ObservableObject {
     var hasReview: Bool { scans.contains { $0.reviewPage != nil } }
 
     var title: String {
-        if error != nil && scans.isEmpty { return "The handoff did not complete" }
+        if error != nil && scans.isEmpty { return "The Secure Handoff did not complete" }
         if releaseFailed { return "The release did not complete" }
         if findings > 0 || !scans.allSatisfy(\.ok) { return "The scan found sensitive values" }
-        return "Handoff ready"
+        return "Secure Handoff ready"
     }
 
     var subtitle: String {
@@ -594,7 +594,7 @@ private struct HandoffSummaryView: View {
                     .disabled(!model.canRelease || model.releasing)
                 }
                 HStack(spacing: 6) {
-                    Button("Continue without handoff") { model.onContinue?() }
+                    Button("Continue without Secure Handoff") { model.onContinue?() }
                         .buttonStyle(.plain)
                         .foregroundStyle(Color(red: 91/255, green: 140/255, blue: 1))
                         .disabled(model.releasing)

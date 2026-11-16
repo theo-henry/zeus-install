@@ -969,7 +969,7 @@ check "a new tab starts on the host picked last" 'wait_count "state: running(" 3
 check "blind build mode off: the new session has no ZEUS_BLIND_MODE" 'start_has 3 "\"blind\":null"'
 act switch-host:apolix
 check "EU to Apolix without EU work to hand off asks Zeus and skips the handoff step" 'wait_for "handoff: none pending" 20'
-check "the loading screen says that there was nothing to hand off" 'wait_for "handoff: note shown: Nothing to hand off" 10'
+check "the loading screen says that there was nothing to hand off" 'wait_for "handoff: note shown: No Secure Handoff needed" 10'
 check "the Apolix session starts in the new tab" 'wait_count "state: running(" 4 30 && start_has 4 "\"host\":\"apolix\""'
 check "the host bar follows the selected tab" 'wait_bar "apolix switch=true pill=false"'
 act test-select-first
@@ -1043,7 +1043,7 @@ sleep 0.5
 check "a failed handoff starts nothing by itself" '[ "$(starts)" = 3 ]'
 shot_frame 33-handoff-error
 act test-handoff:continue
-check "Continue without handoff starts Apolix without a release" 'wait_count "state: running(" 4 30 && start_has 4 "\"host\":\"apolix\"" && [ "$(grep -c "handoff release" "$STATE/handoff-calls")" = 1 ]'
+check "Continue without Secure Handoff starts Apolix without a release" 'wait_count "state: running(" 4 30 && start_has 4 "\"host\":\"apolix\"" && [ "$(grep -c "handoff release" "$STATE/handoff-calls")" = 1 ]'
 act switch-host:eu
 check "after a failed handoff, the switch back to EU works" 'wait_count "state: running(" 5 30 && start_has 5 "\"host\":\"eu\""'
 wait_count "page loaded: http://127.0.0.1" 5 20 >/dev/null
@@ -1067,7 +1067,7 @@ sleep 1.5
 echo none >"$STATE/handoff-mode"
 act switch-host:apolix
 check "with no EU work to hand off, the switch skips the step" 'wait_for "handoff: none pending" 20 && wait_count "state: running(" 8 30 && start_has 8 "\"host\":\"apolix\""'
-check "and says so on the loading screen" 'wait_count "handoff: note shown: Nothing to hand off" 2 10'
+check "and says so on the loading screen" 'wait_count "handoff: note shown: No Secure Handoff needed" 2 10'
 stop_app
 fi
 
