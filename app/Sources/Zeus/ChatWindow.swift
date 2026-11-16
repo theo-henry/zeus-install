@@ -485,7 +485,7 @@ final class ChatTab: NSObject {
     func askForHandoverSummary(completion: @escaping (Bool) -> Void) {
         guard session.mode == .eu else { completion(false); return }
         let launchID = session.launchID, chatURL = session.chatURL, mode = session.mode, pid = session.pid
-        let text = Self.handoverPrompt
+        let text = Self.handoverPrompt(project: tabName.project)
         DispatchQueue.global(qos: .userInitiated).async {
             var sent = false
             if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: chatURL, mode: mode) {
@@ -499,10 +499,15 @@ final class ChatTab: NSObject {
         }
     }
 
-    static let handoverPrompt = "The user hands over the EU work of this chat's project to Standard mode. Write the handover summary: "
-        + "run `python3 scripts/zeus.py handoff summary <this chat's project> --json`, fill each section of the file that it names "
-        + "without client data values, then save it with the command that it prints. Do nothing else. "
-        + "The user reviews and releases the handover in the Zeus app."
+    /// The request names the project that the chat page shows: a project picked in the page is not yet the project of
+    /// the Claude session until the next message, so "this chat's project" alone can be unknown to Zeus.
+    static func handoverPrompt(project: String?) -> String {
+        let named = project.flatMap { Handover.validProject($0) ? $0 : nil }
+        return "The user hands over the EU work of " + (named.map { "the project \($0)" } ?? "this chat's project") + " to Standard mode. "
+            + "Write the handover summary: run `python3 scripts/zeus.py handoff summary \(named ?? "<this chat's project>") --json`, "
+            + "fill each section of the file that it names without client data values, then save it with the command that it prints. "
+            + "Do nothing else. The user reviews and releases the handover in the Zeus app."
+    }
 
     /// Settings… (Cmd+,): opens the settings pop-up of the chat page. A tab that still starts or loads its chat
     /// page opens it when the page has loaded, so that the shortcut is not lost behind the loading screen.

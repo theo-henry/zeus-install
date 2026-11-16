@@ -56,7 +56,8 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   When EU mode does not start, the tab shows the `zeus:` message with **Sign in to Google Cloud** (it runs the gcloud sign-in in the tab's terminal),
   **Run the Zeus setup**, **Try again**, and **Switch to Standard**. An `eu-error:` message (Vertex AI 403, 404, or 429) shows a question with the fix.
 - **EU handover.** Zeus > Hand Over EU Work… (or **Hand Over First…** at the switch to Standard) opens the handover window (`Sources/Zeus/Handover.swift`).
-  It runs the handoff commands of `scripts/zeus.py` in the EU workspace, shows the summary, the files, and the scan findings,
+  **Ask Zeus in this chat** sends the summary request to an EU tab, with the project that the tab shows.
+  The app runs the handoff commands of `scripts/zeus.py` in the EU workspace, shows the summary, the files, and the scan findings,
   and lets the user edit the summary, remove files, and accept findings. E-mail and IBAN findings can not be accepted.
   **Release to Standard** scans again, then the app copies the checked files to `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/`
   and writes `released.json`. Claude never releases a handover.
@@ -286,7 +287,7 @@ It presses the app's buttons through the debug test actions and checks the trace
 `--eu` runs the EU mode scenario (`app/test/sim/eu.sh`) with a simulated `gcloud`, EU `zeus`, and handoff `scripts/zeus.py`:
 the setup question when EU mode is not set up; a switch stops every Standard session before `zeus --eu --no-open` starts in `~/Code/zeus-eu`;
 the EU pill, the EU web data store, and the cost label; a 429 error question; a failed start that needs the Google sign-in,
-the sign-in in the terminal, and the retry; a 403 failure; the handover with findings, an accepted finding, an edited summary, a removed file,
+the sign-in in the terminal, and the retry; a 403 failure; the handover request that names the project of the tab, the handover with findings, an accepted finding, an edited summary, a removed file,
 the release, and `released.json`; the switch back resumes the Standard tabs and never an EU tab; and a restart in EU mode.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording

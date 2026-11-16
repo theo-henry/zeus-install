@@ -820,8 +820,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 let store = tab.webView.configuration.websiteDataStore
                 Trace.log("web data: \(tab.mode.rawValue) persistent=\(store.isPersistent) default=\(store === WKWebsiteDataStore.default())")
             case "test-handover": self.showHandover(nil)
+            // Asks the last EU tab, the tab that the other test actions (test-pick-project) use.
             case "test-handover-ask":
-                guard let model = self.handoverWindow?.model, let chat = model.chats.first else { Trace.log("handover: no chat"); break }
+                guard let model = self.handoverWindow?.model, let chat = model.chats.last else { Trace.log("handover: no chat"); break }
                 model.ask(chat)
             case "test-handover-refresh": self.handoverWindow?.model.refresh()
             case "test-handover-open": self.handoverWindow?.model.open(argument)

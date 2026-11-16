@@ -598,12 +598,11 @@ struct HandoverView: View {
                 }
                 .frame(minWidth: 360)
             }
-            Text(review.note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("Back") { model.back() }
                 Spacer()
                 if !model.blockingFindings.isEmpty {
-                    Text("An e-mail address, IBAN, or changed file blocks the release. Change it in EU mode or remove the file.")
+                    Text("An e-mail address, IBAN, or changed file blocks the release. Edit the summary, change the file in EU mode, or remove the file.")
                         .font(.caption).foregroundStyle(.red)
                 } else if !model.openFindings.isEmpty {
                     Text("\(model.openFindings.count) finding\(model.openFindings.count == 1 ? "" : "s") to check.").font(.caption)
@@ -634,7 +633,10 @@ struct HandoverView: View {
         let shown = review.findings.filter { included.contains($0.file) }
         return box {
             Text(shown.isEmpty ? "Scan: no findings" : "Scan findings (\(shown.count))").fontWeight(.semibold)
-            Text("The scan finds values that EU Zeus showed and common data patterns. It does not know values that you typed or that came from a file or a screenshot: read the summary and the files yourself.")
+            // The scan's own note says what it can not find; the app's words stand in only when the scan gives none.
+            Text(review.note.isEmpty
+                 ? "The scan finds values that EU Zeus showed and common data patterns. It does not know values that you typed or that came from a file or a screenshot: read the summary and the files yourself."
+                 : review.note)
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             ForEach(shown) { finding in
                 VStack(alignment: .leading, spacing: 2) {
@@ -643,7 +645,9 @@ struct HandoverView: View {
                     Text(finding.excerpt.isEmpty ? "-" : finding.excerpt).font(.custom("Menlo", size: 11))
                         .fixedSize(horizontal: false, vertical: true)
                     if finding.blocking {
-                        Text("Can not be accepted. Change it in EU mode, or remove the file.").font(.caption).foregroundStyle(.red)
+                        Text(finding.file == "summary.md"
+                             ? "Can not be accepted. Edit the summary, then click Save and Scan."
+                             : "Can not be accepted. Change it in EU mode, or remove the file.").font(.caption).foregroundStyle(.red)
                     } else {
                         Toggle("Not a data value", isOn: Binding(
                             get: { model.review?.findings.first { $0.id == finding.id }?.accepted ?? false },

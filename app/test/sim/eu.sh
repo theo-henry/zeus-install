@@ -188,11 +188,14 @@ eu_scenario() {
 
   # The handover: EU Zeus writes the summary on request, the app builds and scans it outside Claude, and the user
   # releases it. Findings block the release until the user resolves each; an e-mail address can not be accepted.
+  # The user picks the project acme in the chat page. It is not yet the Claude session's project, so the request names it.
+  act test-pick-project:acme
+  wait_for "tab name: acme project=acme" 10
   act test-handover
   need "the handover window opens" 'wait_for "handover: window opened" 10 && wait_handover "phase=list projects=[\"acme:false\"]" 20'
   shot eu-9-handover-list
   act test-handover-ask
-  check "the app asks EU Zeus in a chat to write the summary" 'wait_for "handover: summary asked in [0-9]* sent=true" 10 && grep -q " send The_user_hands_over_the_EU_work" "$STATE/sessions"'
+  check "the app asks EU Zeus in a chat to write the summary of the tab's project" 'wait_for "handover: summary asked in [0-9]* sent=true" 10 && grep -q " send The_user_hands_over_the_EU_work_of_the_project_acme_to" "$STATE/sessions"'
   check "the saved summary shows up by itself" 'wait_handover "projects=[\"acme:true\"]" 20 && grep -q "A handover summary is ready to review." "$TRACE"'
   act test-handover-open:acme
   check "the app builds and scans the handover" 'wait_handover "phase=review" 20'
