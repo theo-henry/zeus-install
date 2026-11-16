@@ -78,8 +78,9 @@ PATH_LINE='export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"'
 LOG_DIR="$HOME/Library/Logs/zeus-install"
 SUMMARY=()
 WORK_DIR=""
-# Set in an EU step (eu_step): a failure there is a warning, not the end of the setup.
+# The name of the EU step that runs (eu_step): a failure there is a warning, not the end of the setup.
 EU_STEP=""
+EU_STEP_REPORTED=""
 
 # App mode (Zeus.app). The skill plugins are installed for the user, like the Zeus Editor plugin in step 10.
 APP_MODE=""
@@ -128,6 +129,7 @@ fail() {
     done
     printf '\n    EU mode is not ready on this Mac; the Zeus app tells what is missing. The setup goes on.\n' >&2
     printf '    To set up EU mode later, run the setup again. Completed steps are skipped.\n' >&2
+    EU_STEP_REPORTED=1
     exit 1
   fi
   printf '\n\033[1;31mStopped:\033[0m %s\n' "$1" >&2
@@ -910,7 +912,8 @@ eu_step() {
   set +e
   (
     set -e
-    EU_STEP=1
+    EU_STEP="$2"
+    trap 'eu_step_exit $?' EXIT
     SUMMARY=()
     "$1"
     if [ "${#SUMMARY[@]}" -gt 0 ]; then printf '%s\n' "${SUMMARY[@]}" >"$summary"; fi
@@ -920,6 +923,13 @@ eu_step() {
   while IFS= read -r line; do SUMMARY+=("$line"); done <"$summary"
   if [ "$status" -ne 0 ]; then
     SUMMARY+=("$(printf '%-9s %s' "warning" "$2 (not set up; EU mode only)")")
+  fi
+}
+
+# The EXIT trap of an EU step: a failed command without its own message (no fail) still reports the step as failed.
+eu_step_exit() {
+  if [ "$1" -ne 0 ] && [ -z "$EU_STEP_REPORTED" ]; then
+    fail "$EU_STEP could not be set up (exit code $1)." "See the output above."
   fi
 }
 

@@ -287,6 +287,7 @@ It presses the app's buttons through the debug test actions and checks the trace
 5. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
    An EU step that fails (the Google Cloud CLI download) is a warning: the later steps run, the setup completes,
    and a switch to EU mode names the missing Google Cloud CLI. In Terminal use, the steps after a failed EU step also run.
+   An EU step that stops on a command without its own message (an EU config folder that can not be made) is also reported as failed.
 
 `--eu` runs the EU mode scenario (`app/test/sim/eu.sh`) with a simulated `gcloud`, EU `zeus`, and handoff `scripts/zeus.py`:
 the setup question when EU mode is not set up; a switch stops every Standard session before `zeus --eu --no-open` starts in `~/Code/zeus-eu`;
