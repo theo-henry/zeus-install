@@ -130,7 +130,11 @@ shot_frame() {
   sleep 0.8
   local frame
   frame="$("$BIN/frame" "$APP_PID")"
-  [ -n "$frame" ] && screencapture -x -R"$frame" "$SHOTS/$1.png"
+  # A screenshot is evidence, not a check: a failed capture must not end the test.
+  if [ -z "$frame" ] || ! screencapture -x -R"$frame" "$SHOTS/$1.png"; then
+    echo "    (screenshot $1 not saved)"
+  fi
+  return 0
 }
 
 # wait_for <trace pattern> [seconds]
@@ -154,6 +158,21 @@ wait_count() {
     waited=$((waited + 1))
     if [ "$waited" -ge $((limit * 2)) ]; then
       echo "    (timed out waiting for $count x: $pattern)"
+      return 1
+    fi
+  done
+}
+
+# window_count_is <count> [seconds]: waits until the app shows that many windows on the screen; the window server
+# can list a window that the app just closed for a moment. On a timeout it prints the windows it sees.
+window_count_is() {
+  local waited=0 limit="${2:-5}"
+  until [ "$("$BIN/windows" "$APP_PID" | wc -l | tr -d " ")" = "$1" ]; do
+    sleep 0.5
+    waited=$((waited + 1))
+    if [ "$waited" -ge $((limit * 2)) ]; then
+      echo "    (the app shows other windows than $1:)"
+      "$BIN/windows" "$APP_PID" | sed "s/^/      window /"
       return 1
     fi
   done
@@ -949,7 +968,7 @@ check "the EU session has no API key, token, base URL, Bedrock key, or region ov
 check "the EU session turns off nonessential traffic" 'start_has 2 "\"quiet\":\"1\""'
 check "blind build mode reaches the new session" 'start_has 2 "\"blind\":\"1\""'
 check "the access token is in no trace or output of the app" '! grep -rq "ya29" "$TRACE" "$WORK/host/app.out"'
-check "the window count stays one" '[ "$("$BIN/windows" "$APP_PID" | wc -l | tr -d " ")" = 1 ]'
+check "the window count stays one" 'window_count_is 1'
 check "the EU tab shows the EU pill and the switch" 'wait_bar "eu switch=true pill=true"'
 wait_count "page loaded: http://127.0.0.1" 2 20 >/dev/null
 sleep 1
@@ -998,6 +1017,9 @@ check "nothing starts on Apolix instead" '[ "$(starts)" = 6 ]'
 rm -f "$STATE/gcloud-fail"
 act "test-retry"
 check "Try again starts on EU again after the sign-in" 'wait_count "EU preflight passed" 4 30 && wait_count "state: running(" 7 30 && start_has 7 "\"host\":\"eu\""'
+# The quit waits for the new chat page: a page that is still loading cannot answer the quit check, and the app then asks.
+wait_for "page loaded: $(grep -o "state: running([^)]*" "$TRACE" | tail -1 | sed "s/state: running(//")" 20 >/dev/null || true
+sleep 1
 stop_app
 check "every session stopped when the app quit" '[ "$(stops)" = 7 ]'
 fi
