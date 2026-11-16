@@ -19,6 +19,15 @@ struct SessionCost: Equatable {
     var unpricedModels: [String]
     /// US dollars for one euro, when the editor converted list prices in dollars; nil otherwise.
     var usdPerEuro: Double?
+    /// Everything the chat that runs now ever used: its whole transcript and its subagents, across
+    /// days, resumes, and app restarts. Nil from an editor that does not report it.
+    var chatTotal: Double?
+    var chatCalls: Int
+    var chatInput: Int
+    var chatCacheRead: Int
+    var chatCacheWrite: Int
+    var chatOutput: Int
+    var chatUnpricedCalls: Int
 
     /// From the JSON text of a "cost:" message of the chat page; nil when it is not a cost report.
     init?(json: String) {
@@ -39,6 +48,14 @@ struct SessionCost: Equatable {
         unpricedCalls = count(object["unpriced_calls"])
         unpricedModels = (object["unpriced_models"] as? [String] ?? []).prefix(5).map { String($0.prefix(60)) }
         usdPerEuro = (object["usd_per_eur"] as? Double).flatMap { $0 > 0 ? $0 : nil }
+        chatTotal = (object["chat_total"] as? Double).flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        let chatTokens = object["chat_tokens"] as? [String: Any] ?? [:]
+        chatCalls = count(object["chat_calls"])
+        chatInput = count(chatTokens["input"])
+        chatCacheRead = count(chatTokens["cache_read"])
+        chatCacheWrite = count(chatTokens["cache_write_5m"]) + count(chatTokens["cache_write_1h"])
+        chatOutput = count(chatTokens["output"])
+        chatUnpricedCalls = count(object["chat_unpriced_calls"])
     }
 
     private static func amount(_ value: Double, _ currency: String) -> String {
@@ -53,19 +70,36 @@ struct SessionCost: Equatable {
         return formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 
-    /// The label in the title bar, such as "≈ €1.84". A "+" says that some calls have no price.
+    /// The label in the title bar: "Session €0.37 · Chat €2.10", the tab's session since it started
+    /// and the whole chat that runs now; "≈ €1.84" from an editor that reports no chat total. A "+"
+    /// says that some calls have no price.
     var label: String {
-        "≈ " + SessionCost.amount(total, currency) + (unpricedCalls > 0 ? "+" : "")
+        let session = SessionCost.amount(total, currency) + (unpricedCalls > 0 ? "+" : "")
+        guard let chatTotal else { return "≈ " + session }
+        return "Session " + session + " · Chat " + SessionCost.amount(chatTotal, currency) + (chatUnpricedCalls > 0 ? "+" : "")
+    }
+
+    private static func tokenLine(_ calls: Int, _ input: Int, _ read: Int, _ write: Int, _ output: Int) -> String {
+        "\(calls) model calls: \(tokens(input)) input, \(tokens(read)) cache read, \(tokens(write)) cache write, \(tokens(output)) output"
     }
 
     /// The tooltip: the chat that runs now, the tokens, and what the figure means on this host.
     func tooltip(on host: ClaudeHost) -> String {
-        var lines = [
-            "This tab’s session on \(host.title): \(label)",
-            "The chat that runs now: ≈ \(SessionCost.amount(chat, currency))",
-            "Tokens in \(calls) model calls: \(SessionCost.tokens(input)) input, \(SessionCost.tokens(cacheRead)) cache read, "
-                + "\(SessionCost.tokens(cacheWrite)) cache write, \(SessionCost.tokens(output)) output",
-        ]
+        var lines: [String]
+        if let chatTotal {
+            lines = [
+                "Session (this tab on \(host.title) since it started): ≈ \(SessionCost.amount(total, currency))",
+                "  " + SessionCost.tokenLine(calls, input, cacheRead, cacheWrite, output),
+                "Chat (everything the chat that runs now used, also on earlier days): ≈ \(SessionCost.amount(chatTotal, currency))",
+                "  " + SessionCost.tokenLine(chatCalls, chatInput, chatCacheRead, chatCacheWrite, chatOutput),
+            ]
+        } else {
+            lines = [
+                "This tab’s session on \(host.title): \(label)",
+                "The chat that runs now: ≈ \(SessionCost.amount(chat, currency))",
+                "Tokens in " + SessionCost.tokenLine(calls, input, cacheRead, cacheWrite, output),
+            ]
+        }
         if unpricedCalls > 0 {
             lines.append("\(unpricedCalls) calls have no price and are not in the amount: \(unpricedModels.joined(separator: ", "))")
         }

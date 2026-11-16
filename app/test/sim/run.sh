@@ -926,14 +926,14 @@ check "an inherited ZEUS_BLIND_MODE never reaches a session" 'start_has 1 "\"bli
 check "no Google Cloud check runs for Apolix" '[ ! -f "$STATE/gcloud-calls" ]'
 wait_count "page loaded: http://127.0.0.1" 1 20 >/dev/null
 act test-retina
-check "the cost of the chat page reaches the app on connect" 'wait_for "cost: ≈ \$0.42 on apolix shown=false" 10'
+check "the cost of the chat page reaches the app on connect" 'wait_for "cost: Session \$0.42 · Chat \$2.10 on apolix shown=false" 10'
 check "the Apolix cost is hidden by default, and so are the switch and the pill" 'wait_bar "apolix switch=false pill=false cost=-"'
 act dev-settings-show
 sleep 1.5
 shot 20-developer-settings
 act dev-settings-close
 act "dev-setting:costApolix=on"
-check "the Apolix cost shows at once when its setting turns on" 'wait_bar "apolix switch=false pill=false cost=≈ \$0.42"'
+check "the Apolix cost shows at once when its setting turns on" 'wait_bar "apolix switch=false pill=false cost=Session \$0.42 · Chat \$2.10"'
 act "dev-setting:switch=on"
 check "the host switch shows at once when its setting turns on" 'wait_bar "apolix switch=true pill=false"'
 shot_frame 21-apolix-titlebar

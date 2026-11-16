@@ -52,7 +52,7 @@ window.zeusGlobe={
 document.getElementById('zeus-message').focus();
 requestAnimationFrame(()=>requestAnimationFrame(()=>window.webkit?.messageHandlers?.zeusApp?.postMessage('chat-ready')));
 // Like zeus-editor: the session cost on connect, as the script message "cost:<JSON>" (docs/chat.md, "Session cost").
-window.webkit?.messageHandlers?.zeusApp?.postMessage('cost:'+JSON.stringify(${JSON.stringify({host: process.env.ZEUS_CLAUDE_HOST || 'apolix', currency: process.env.ZEUS_CLAUDE_HOST === 'eu' ? 'EUR' : 'USD', total: 0.42, chat: 0.42, calls: 2, tokens: {input: 1200, cache_read: 5000, cache_write_5m: 800, cache_write_1h: 0, output: 300}})}));
+window.webkit?.messageHandlers?.zeusApp?.postMessage('cost:'+JSON.stringify(${JSON.stringify({host: process.env.ZEUS_CLAUDE_HOST || 'apolix', currency: process.env.ZEUS_CLAUDE_HOST === 'eu' ? 'EUR' : 'USD', total: 0.42, chat: 0.42, calls: 2, session_total: 0.42, chat_total: 2.1, chat_calls: 9, chat_tokens: {input: 9000, cache_read: 40000, cache_write_5m: 3000, cache_write_1h: 0, output: 1500}, tokens: {input: 1200, cache_read: 5000, cache_write_5m: 800, cache_write_1h: 0, output: 300}})}));
 // The project menu and the project button of the Zeus chat (zeus-editor src/chat/client/main.js).
 for(const option of document.querySelectorAll('.project-menu [role="option"]'))option.onclick=()=>{document.querySelector('.project-pill .pill-text').textContent=option.textContent;fetch('/project',{method:'POST',body:option.textContent});};
 // Like the settings pop-up of the Zeus chat: the app menu item Settings… (Cmd+,) opens it.

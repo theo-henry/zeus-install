@@ -319,6 +319,8 @@ final class ChatTab: NSObject {
         case "close": host?.close(self)
         // "Go to the chat" in Zeus Editor: the chat of this tab must come to the front with the keyboard in it.
         case "chat-focus": host?.bringToFront(self)
+        // "Open terminal" on a chat card for a question that Claude Code asks only in the terminal.
+        case "show-terminal": if terminal.webView.isHidden { toggleTerminal() }
         default: break
         }
     }
