@@ -176,6 +176,7 @@ The runs of `main` run one at a time, and a run never stops a running run, so tw
 The job never runs on the self-hosted runner.
 If a newer commit is already on `main`, the job of the older commit does not release and shows a notice: the run of the newer commit releases all app changes since the newest app release.
 Because each run compares with the newest app release, a change is also released by the next push to `main` when a job failed or did not release.
+If GitHub lost the run of a push to `main`, start it by hand: in Actions, open CI, choose Run workflow, and select `main`.
 
 The job needs the Actions secret `ZEUS_RELEASE_TOKEN` in this repo: a fine-grained personal access token with access to only the repo `theo-henry/zeus` and the permission Contents: read and write.
 The token cannot do anything else.
