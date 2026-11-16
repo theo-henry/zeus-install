@@ -280,6 +280,8 @@ final class TabStripView: NSView {
     private weak var controller: ChatWindowController?
     private let stack = NSStackView()
     private let addButton = HoverButton(symbol: "plus", label: "New Tab")
+    /// The app-wide Standard | EU switch; shown when this Mac has the EU workspace, or while the app is in EU mode.
+    private let modeControl = NSSegmentedControl(labels: ["Standard", "EU"], trackingMode: .selectOne, target: nil, action: nil)
     private var leadingConstraint: NSLayoutConstraint!
 
     init(controller: ChatWindowController) {
@@ -297,14 +299,26 @@ final class TabStripView: NSView {
         addButton.target = self
         addButton.action = #selector(newTab)
         addSubview(addButton)
+        modeControl.translatesAutoresizingMaskIntoConstraints = false
+        modeControl.controlSize = .small
+        modeControl.segmentStyle = .rounded
+        modeControl.target = self
+        modeControl.action = #selector(modeChanged)
+        modeControl.setAccessibilityLabel("Claude mode")
+        modeControl.toolTip = "Standard: your Claude login. EU: Claude in the EU (Vertex AI), for client data. A switch starts new chats."
+        addSubview(modeControl)
         leadingConstraint = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 80)
         NSLayoutConstraint.activate([
             leadingConstraint,
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             addButton.leadingAnchor.constraint(equalTo: stack.trailingAnchor, constant: 4),
             addButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            addButton.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+            addButton.trailingAnchor.constraint(lessThanOrEqualTo: modeControl.leadingAnchor, constant: -12),
+            modeControl.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            modeControl.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+        NotificationCenter.default.addObserver(self, selector: #selector(updateMode), name: ModeSwitch.changed, object: nil)
+        updateMode()
         for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(windowStyleChanged), name: name, object: nil)
         }
@@ -373,6 +387,17 @@ final class TabStripView: NSView {
 
     func select(_ tab: ChatTab) { controller?.select(tab) }
     func close(_ tab: ChatTab) { controller?.close(tab) }
+
+    @objc private func updateMode() {
+        modeControl.selectedSegment = ZeusMode.current == .eu ? 1 : 0
+        modeControl.isHidden = ZeusMode.current == .standard
+            && !FileManager.default.fileExists(atPath: ZeusMode.eu.workspace + "/scripts/zeus.py")
+    }
+
+    @objc private func modeChanged() {
+        Front.show(window)
+        NSApp.sendAction(#selector(AppDelegate.switchMode(_:)), to: nil, from: modeControl)
+    }
 
     @objc private func newTab() {
         Front.show(window)

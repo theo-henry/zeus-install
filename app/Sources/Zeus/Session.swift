@@ -11,6 +11,8 @@ final class ZeusSession {
     }
 
     let id = UUID()
+    /// The mode of this session's Claude Code (`ZeusMode`); fixed from its start to its end.
+    let mode: ZeusMode
     let pid: pid_t
     let startedAt: Date
     let log = TerminalLog()
@@ -54,8 +56,11 @@ final class ZeusSession {
 
     var isAlive: Bool { state == .starting || chatURL != nil }
 
-    /// Starts `zeus` in ~/Code/zeus. `--no-open` stops it from opening the browser; the app shows the page.
-    init() throws {
+    /// Starts `zeus` in the workspace of the mode: `zeus --no-open` in ~/Code/zeus, or `zeus --eu --no-open` in ~/Code/zeus-eu.
+    /// `zeus --eu` builds the EU environment itself from Zeus Editor's EU profile and checks the Google Cloud access; when that
+    /// check fails, it stops with a message, and the tab shows it. It never starts Standard instead.
+    init(mode: ZeusMode = .current) throws {
+        self.mode = mode
         startedAt = Date()
         let env = ShellEnvironment.make()
         guard FileManager.default.isExecutableFile(atPath: Paths.zeusCommand) else {
@@ -63,14 +68,15 @@ final class ZeusSession {
                 "The zeus command is not installed (\(Paths.zeusCommand)). Run the Zeus setup."])
         }
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: Paths.zeusDir, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw NSError(domain: "Zeus", code: 2, userInfo: [NSLocalizedDescriptionKey:
-                "The Zeus workspace is not in ~/Code/zeus. Run the Zeus setup."])
+        guard FileManager.default.fileExists(atPath: mode.workspace, isDirectory: &isDirectory), isDirectory.boolValue else {
+            let place = mode == .eu ? "The EU Zeus workspace is not in \(mode.workspace)." : "The Zeus workspace is not in ~/Code/zeus."
+            throw NSError(domain: "Zeus", code: 2, userInfo: [NSLocalizedDescriptionKey: place + " Run the Zeus setup."])
         }
-        let process = try PTYProcess(executable: Paths.zeusCommand, arguments: ["--no-open"],
-                                     environment: env, directory: Paths.zeusDir)
+        let process = try PTYProcess(executable: Paths.zeusCommand, arguments: mode.arguments,
+                                     environment: env, directory: mode.workspace)
         self.process = process
         pid = process.pid
+        Trace.log("session \(process.pid) mode: \(mode.rawValue)")
         #if DEBUG
         capture = PTYCapture(pid: process.pid)
         #endif

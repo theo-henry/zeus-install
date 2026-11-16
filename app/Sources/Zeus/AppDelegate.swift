@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The update check at launch runs, or an update from the settings installs; only its loading screen shows,
     /// and no Zeus session opens until it ends.
     private var updating = false
+    /// A Standard | EU switch is in progress: its question, the handover, or the restart of the tabs.
+    private var switching = false
+    private var handover: HandoverFlow?
     #if DEBUG
     /// The user's pasteboard before the paste test actions, given back by "test-pasteboard-restore".
     private var savedPasteboard: [NSPasteboardItem]?
@@ -282,6 +285,118 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         return window
     }
 
+    // MARK: Standard | EU
+
+    /// The Standard | EU control of a tab strip, or a menu item: switch the whole app to the other mode.
+    @objc func switchMode(_ sender: Any?) {
+        let target: ZeusMode
+        if let control = sender as? NSSegmentedControl {
+            target = control.selectedSegment == 1 ? .eu : .standard
+        } else {
+            target = ZeusMode.current == .eu ? .standard : .eu
+        }
+        requestSwitch(to: target)
+    }
+
+    /// `confirmed`: the test actions skip the question.
+    func requestSwitch(to target: ZeusMode, confirmed: Bool = false) {
+        guard target != ZeusMode.current, !updating, !switching else { ModeSwitch.refresh(); return }
+        if target == .eu, !FileManager.default.fileExists(atPath: ZeusMode.eu.workspace + "/scripts/zeus.py") {
+            let alert = NSAlert()
+            alert.messageText = "EU mode is not set up on this Mac"
+            alert.informativeText = "EU mode needs its own Zeus workspace in \(ZeusMode.eu.workspace). Run the Zeus setup, then switch again."
+            alert.addButton(withTitle: "OK")
+            ModeSwitch.refresh()
+            if let window = keyChatWindow?.window ?? chatWindows.last?.window { Front.beginSheet(alert, for: window) { _ in } } else { alert.runModal() }
+            return
+        }
+        switching = true
+        if confirmed {
+            Trace.log("mode: switch to \(target.rawValue) confirmed")
+            if ZeusMode.current == .eu, target == .standard { runHandover() } else { applyMode(target) }
+            return
+        }
+        busyTabCount { [weak self] busy in self?.confirmSwitch(to: target, busy: busy) }
+    }
+
+    private func confirmSwitch(to target: ZeusMode, busy: Int) {
+        let alert = NSAlert()
+        alert.messageText = target == .eu ? "Switch to EU mode?" : "Switch to Standard mode?"
+        var text = target == .eu
+            ? "New chats run on Claude in the EU (Vertex AI), for work with client data. "
+            : "First, Zeus hands over the EU work: you review what crosses to Standard and release it. "
+        text += "The open chats end, because a chat never moves between modes."
+        if busy > 0 { text += " \(busy) chat\(busy == 1 ? " is" : "s are") still working and will stop." }
+        alert.informativeText = text
+        alert.addButton(withTitle: "Switch to \(target.title)")
+        alert.addButton(withTitle: "Cancel")
+        let decide: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self else { return }
+            guard response == .alertFirstButtonReturn else {
+                self.switching = false
+                ModeSwitch.refresh()
+                return
+            }
+            Trace.log("mode: switch to \(target.rawValue) confirmed")
+            if ZeusMode.current == .eu, target == .standard { self.runHandover() } else { self.applyMode(target) }
+        }
+        if let window = keyChatWindow?.window ?? chatWindows.last?.window {
+            Front.beginSheet(alert, for: window, completion: decide)
+        } else {
+            Front.activate()
+            decide(alert.runModal())
+        }
+    }
+
+    /// EU to Standard: the handover first. Standard starts only after a release, or when the user switches without one.
+    private func runHandover() {
+        let tab = keyChatTab ?? chatTabs.last
+        let flow = HandoverFlow(tab: tab, window: keyChatWindow?.window ?? chatWindows.last?.window)
+        handover = flow
+        flow.start { [weak self, weak tab] outcome in
+            guard let self else { return }
+            self.handover = nil
+            switch outcome {
+            case .noHandoverNeeded, .switchNow:
+                self.applyMode(.standard)
+            case .stay:
+                self.switching = false
+                ModeSwitch.refresh()
+            case let .askSummary(project):
+                self.switching = false
+                ModeSwitch.refresh()
+                if let tab { tab.draftMessage(HandoverFlow.summaryRequest(project)) } else {
+                    self.newChat(nil)
+                    self.chatTabs.last?.draftMessage(HandoverFlow.summaryRequest(project))
+                }
+            }
+        }
+    }
+
+    /// Ends every chat of the old mode and starts one new chat in each chat window, in the new mode.
+    private func applyMode(_ target: ZeusMode) {
+        ZeusMode.current = target
+        Trace.log("mode: now \(target.rawValue)")
+        ModeSwitch.refresh()
+        SpeechService.shared.cancelAll(reason: "mode switch")
+        let old = chatTabs
+        let windows = chatWindows.filter { !$0.tabs.isEmpty }
+        var started = 0
+        for window in windows {
+            do {
+                let session = try SessionManager.shared.start()
+                Trace.log("session \(session.pid) started (\(target.rawValue))")
+                window.add(makeTab(session))
+                started += 1
+            } catch {
+                Trace.log("session not started: \(error.localizedDescription)")
+            }
+        }
+        for tab in old { tab.closeForUpdate() }
+        switching = false
+        if started == 0 { newChat(nil) }
+    }
+
     // MARK: Update from the settings
 
     /// The chat pages of all tabs, for the update events.
@@ -459,6 +574,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             case "setup-answer-yes": model?.answerQuestion(true)
             case "setup-enter": model?.send("")
             case "setup-show": self.showSetup(nil)
+            case "mode-eu": self.requestSwitch(to: .eu, confirmed: true)
+            case "mode-standard": self.requestSwitch(to: .standard, confirmed: true)
+            case "handover": self.handover?.testPress(argument)
             case "test-cmd-t", "test-cmd-j":
                 let key = action == "test-cmd-t" ? "t" : "j"
                 if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
@@ -667,6 +785,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             let pinned = DockPin.isPinned()
             menuItem.state = pinned ? .on : .off
             return !pinned
+        case #selector(switchMode(_:)):
+            menuItem.title = ZeusMode.current == .eu ? "Switch to Standard Mode" : "Switch to EU Mode"
+            return !updating && !switching
         case #selector(reloadPage(_:)), #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualSize(_:)), #selector(openSettings(_:)):
             return keyWebView != nil
         default:
@@ -683,6 +804,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         app.addItem(.separator())
         app.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
         app.addItem(withTitle: "Zeus Setup…", action: #selector(showSetup(_:)), keyEquivalent: "")
+        app.addItem(withTitle: "Switch to EU Mode", action: #selector(switchMode(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Show in Menu Bar", action: #selector(toggleMenuBar(_:)), keyEquivalent: "")
         app.addItem(withTitle: "Keep in Dock", action: #selector(keepInDock(_:)), keyEquivalent: "")
         app.addItem(.separator())

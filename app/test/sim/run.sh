@@ -821,7 +821,46 @@ shot 13-shortcuts
 stop_app
 
 echo
-echo "Scenario 5: the account has no access to one private repo"
+echo "Scenario 5: the Standard | EU switch and the handover to Standard with Keep and Mask"
+EU_WS="$SANDBOX/Code/zeus-eu"
+mkdir -p "$EU_WS/scripts"
+cp "$SIM_DIR/payload/handover-zeus.py" "$EU_WS/scripts/zeus.py"
+rm -f "$STATE/handover-calls"
+launch_app handover ZEUS_APP_EU_WORKSPACE="$EU_WS"
+need "the app opens a Standard chat" 'wait_for "page loaded: http://127.0.0.1" 30'
+act mode-eu
+check "the switch to EU starts zeus --eu in the EU workspace" \
+  'wait_for "mode: now eu" 10 && wait_for "mode: eu" 20 && sleep 1 && grep -q "\"--eu\"" "$STATE/zeus-started" && grep -q "/Code/zeus-eu\"" "$STATE/zeus-started"'
+check "the Standard chat ends and one EU chat runs" 'wait_count "state: running(" 2 30 && newest_page_loaded'
+act mode-standard
+check "the switch back runs the handover: build and scan in the EU workspace" \
+  'wait_for "handover: pilot built 20261116T100000Z-abc123 files=2 findings=3 groups=2" 30 && grep -q "^build pilot" "$STATE/handover-calls" && grep -q "^scan 20261116T100000Z-abc123" "$STATE/handover-calls"'
+shot 14-handover-sheet
+act handover:release
+check "Release stays off while a group is undecided" 'wait_for "handover: release is disabled" 10 && ! grep -q "^mask" "$STATE/handover-calls"'
+act handover:keep
+act handover:release
+check "Release stays off while the e-mail group is not masked" 'wait_count "handover: release is disabled" 2 10'
+act handover:mask
+shot 15-handover-masked
+act handover:release
+check "Release masks the masked groups, scans again, and releases" \
+  'wait_for "handover: released pilot 20261116T100000Z-abc123 files=2 kept=0 masked=2" 30 && grep -q "^mask 20261116T100000Z-abc123 --group gemail000000002 --group gliteral0000001" "$STATE/handover-calls"'
+RELEASED="$SANDBOX/Code/zeus/clients/pilot/handoff/from-eu/20261116T100000Z-abc123"
+check "the released files are in the Standard workspace, masked, with released.json" \
+  '[ -f "$RELEASED/summary.md" ] && grep -q "\[masked email #1\]" "$RELEASED/files/work/overview/query.sql" && ! grep -q "jane@example.com\|0000412" "$RELEASED/files/work/overview/query.sql" && grep -q "\"masked\"" "$RELEASED/released.json"'
+check "released.json holds groups and kinds, never a value" '! grep -q "0000412\|jane" "$RELEASED/released.json"'
+check "the EU handover is closed" '[ -f "$EU_WS/clients/pilot/handoff/20261116T100000Z-abc123/released.json" ]'
+check "the app is in Standard mode with a new chat in ~/Code/zeus" 'wait_for "mode: now standard" 10 && wait_count "state: running(" 3 30 && sleep 1 && ! grep -q "\"--eu\"" "$STATE/zeus-started"'
+act mode-eu
+wait_for "mode: now eu" 10 >/dev/null
+wait_count "state: running(" 4 30 >/dev/null
+act mode-standard
+check "with nothing new to hand over, the switch back asks nothing" 'wait_for "handover: nothing to hand over" 20 && wait_count "mode: now standard" 2 10'
+stop_app
+
+echo
+echo "Scenario 6: the account has no access to one private repo"
 start_app noaccess ZEUS_SIM_NO_ACCESS=theo-henry/celonis-pql
 check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 act setup-install

@@ -166,6 +166,39 @@ final class ChatTab: NSObject {
         handingOver = false
     }
 
+    /// Lays a view over the chat page, as the loading screen does (the handover step when the app switches from EU).
+    func cover(with overlay: NSView) {
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(overlay, positioned: .above, relativeTo: webView)
+        NSLayoutConstraint.activate([
+            overlay.leadingAnchor.constraint(equalTo: webView.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: webView.trailingAnchor),
+            overlay.topAnchor.constraint(equalTo: webView.topAnchor),
+            overlay.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
+        ])
+    }
+
+    /// Puts a message into the message box of the chat page, for the user to read and send (it sends nothing).
+    func draftMessage(_ text: String) {
+        let script = """
+            for (let i = 0; i < 150; i++) {
+              const box = document.getElementById('zeus-message');
+              if (box) {
+                box.value = text;
+                box.dispatchEvent(new Event('input', { bubbles: true }));
+                box.focus();
+                return true;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            return false;
+            """
+        let pid = session.pid
+        webView.callAsyncJavaScript(script, arguments: ["text": text], in: nil, in: .page) { result in
+            Trace.log("draft: \(pid) message box filled=\((try? result.get()) as? Bool ?? false)")
+        }
+    }
+
     /// Removes the loading screen. When it had the keyboard focus, the chat page gets it.
     private func dismiss(_ loader: LoaderOverlay, over duration: TimeInterval) {
         loader.remove(over: duration) { [weak self] in

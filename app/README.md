@@ -107,6 +107,20 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   One recognition runs at a time, from its start until it stops (also while Whisper processes): a start while one runs gets "busy".
   The recognition stops (with its final text) when its tab or Zeus Editor tab goes out of view, and ends at once when its tab, window, or page closes, and when the app quits.
   The third-party notices of whisper.cpp, OpenSuperWhisper, Silero VAD, and the Whisper models are in `Resources/THIRD-PARTY-NOTICES.md` (also in the app bundle).
+- **Standard | EU.** One app-wide mode (`Sources/Zeus/Mode.swift`; zeus `references/eu-mode.md`, zeus-editor `docs/chat.md`, "EU mode").
+  Standard starts `zeus --no-open` in `~/Code/zeus`; EU starts `zeus --eu --no-open` in `~/Code/zeus-eu`, and `zeus --eu` builds the EU environment and checks the Google Cloud access itself.
+  The switch is in the tab strip and in the Zeus menu; it shows when this Mac has the EU workspace (`~/Code/zeus-eu/scripts/zeus.py`), or while the app is in EU mode.
+  A switch asks first, then ends every open chat and starts one new chat in each window: a chat never moves between modes.
+  Tabs that the app opens again after an update start in the app's mode.
+- **Handover from EU to Standard** (`Sources/Zeus/Handover.swift`). Before a switch from EU, the app runs `handoff pending` in the EU workspace.
+  With nothing new, Standard starts at once. Otherwise the tab shows "Handing off data securely" on the loading screen while `handoff build` and `handoff scan` run, then the release sheet:
+  - a project with EU work but no summary gets **Ask EU Claude to write it**, which puts the request into the EU chat's message box (the user sends it) and stays in EU;
+  - each finding group (one kind and value, in every file) gets **Keep** (not client data) or **Mask** (replaced in what crosses); e-mail and IBAN groups offer only Mask; **Mask all** decides every group;
+  - **Release and switch to Standard** stays off until every group is decided. It runs `handoff mask` for the masked groups, scans again,
+    checks that only kept groups are left, copies the files with matching hashes into `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/`
+    with `released.json` (groups and kinds, never a value), writes `released.json` into the EU handover too, and switches;
+  - **Stay in EU** and **Switch without a handover** end the sheet without a release.
+  Each new Standard chat then reads the latest released summary first (zeus session start).
 - **Links.** Pages on 127.0.0.1 stay in the app (pop-ups open in a new app window). Other links open in the default browser.
 
 ## Build
@@ -266,7 +280,11 @@ It presses the app's buttons through the debug test actions and checks the trace
    the old shortcut does nothing and the new one opens a tab; a file saved with a rename, a file written in place, and `{type: "settings-changed"}`
    apply at once; a damaged file gives the defaults without a crash; a symbol key shortcut with Shift works in a Zeus Editor window;
    Settings… calls `openSettings` in the chat page, also when it comes while a new tab still loads its chat page.
-5. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
+5. The Standard | EU switch, with a simulated EU `scripts/zeus.py` (`app/test/sim/payload/handover-zeus.py`): the switch to EU starts `zeus --eu` in `~/Code/zeus-eu`;
+   the switch back builds and scans the handover; Release stays off while a group is undecided or the e-mail group is kept; Release masks, scans again,
+   copies the masked files with `released.json` into the Standard workspace, closes the EU handover, and starts Standard; with nothing new, the next switch back asks nothing.
+   The test actions skip the switch question, which is not tested.
+6. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
 permission for the terminal only for the screenshots.

@@ -13,7 +13,8 @@ enum Paths {
         ProcessInfo.processInfo.environment["ZEUS_EDITOR_STATE_DIR"] ?? home + "/.zeus-editor"
     }
 
-    static var launchesDir: String { editorStateDir + "/chat/launches" }
+    /// The launch records of the current mode: each mode has its own Zeus Editor state.
+    static var launchesDir: String { ZeusMode.current.editorStateDir + "/chat/launches" }
 
     static var appSupport: String {
         let dir = home + "/Library/Application Support/Zeus"

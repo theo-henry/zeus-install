@@ -23,6 +23,12 @@ enum Preferences {
         set { defaults.set(newValue, forKey: "showMenuBar") }
     }
 
+    /// The app-wide mode (`ZeusMode`): Standard unless the consultant switched to EU.
+    static var mode: ZeusMode {
+        get { defaults.string(forKey: "mode").flatMap(ZeusMode.init(rawValue:)) ?? .standard }
+        set { defaults.set(newValue.rawValue, forKey: "mode") }
+    }
+
     /// The dictation settings (see `DictationSettings`).
     static var dictationModel: String? {
         get { defaults.string(forKey: "dictationModel") }
