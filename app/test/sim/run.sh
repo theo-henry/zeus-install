@@ -917,7 +917,7 @@ GCLOUD
 
 # The n-th start of zeus has this text (zeus-starts.jsonl of the simulated zeus).
 start_has() { sed -n "${1}p" "$STATE/zeus-starts.jsonl" 2>/dev/null | grep -q -- "$2"; }
-starts() { wc -l <"$STATE/zeus-starts.jsonl" 2>/dev/null | tr -d ' ' || echo 0; }
+starts() { wc -l 2>/dev/null <"$STATE/zeus-starts.jsonl" | tr -d ' ' || echo 0; }
 # The last line of the host bar in the trace has this text.
 bar_has() { grep "host bar: " "$TRACE" | tail -1 | grep -qF -- "$1"; }
 wait_bar() { # wait_bar <text> [seconds]
@@ -1101,6 +1101,36 @@ echo none >"$STATE/handoff-mode"
 act switch-host:apolix
 check "with no EU work to hand off, the switch skips the step" 'wait_for "handoff: none pending" 20 && wait_count "state: running(" 8 30 && start_has 8 "\"host\":\"apolix\""'
 check "and says so on the loading screen" 'wait_for "handoff: note shown: No Secure Handoff needed" 10'
+stop_app
+fi
+
+# Scenario 8 runs only when named (ZEUS_SIM_SCENARIOS="8"): an unsafe alias must refuse EU, with no Apolix fallback.
+if runs 8; then
+echo
+echo "Scenario 8: an unsafe claude-eu alias refuses EU and never falls back to Apolix"
+# unsafe_alias <name> <alias line>: a Mac whose claude-eu alias is this line, with the host switch on and EU picked last.
+unsafe_alias() {
+  prepare_mac "$1"
+  printf '%s\n' "$2" >"$SANDBOX/.zshrc"
+  cp "$SANDBOX/.zshrc" "$SANDBOX/.bashrc"
+  defaults write "$PREFS_DOMAIN" developerHostSwitch -bool true
+  defaults write "$PREFS_DOMAIN" lastHost eu
+  launch_app "$1" ZEUS_APP_GCLOUD="$GCLOUD_SIM" ZEUS_APP_TEST_NO_SWITCH_QUESTION=1
+}
+# alias claude-eu prints a shell variable unexpanded, so the project would be the text "$GCP_PROJECT".
+unsafe_alias alias-var "alias claude-eu='CLAUDE_CODE_USE_VERTEX=1 CLOUD_ML_REGION=europe-west4 ANTHROPIC_VERTEX_PROJECT_ID=\$GCP_PROJECT claude'"
+check "an alias with a shell variable is refused and names the variable" \
+  'wait_for "EU start refused: The claude-eu alias uses a shell variable or command for ANTHROPIC_VERTEX_PROJECT_ID" 30 && wait_for "state: failed(" 10'
+sleep 2
+check "nothing starts, on EU or on Apolix" '[ "$(starts)" = 0 ]'
+shot 40-alias-variable-refused
+stop_app
+unsafe_alias alias-us "alias claude-eu='CLAUDE_CODE_USE_VERTEX=1 CLOUD_ML_REGION=us-east5 ANTHROPIC_VERTEX_PROJECT_ID=sim-project claude'"
+check "an alias with a region outside the EU is refused" \
+  'wait_for "EU start refused: The claude-eu alias sets CLOUD_ML_REGION to \"us-east5\"" 30 && wait_for "state: failed(" 10'
+sleep 2
+check "nothing starts on Apolix instead" '[ "$(starts)" = 0 ]'
+shot 41-alias-region-refused
 stop_app
 fi
 

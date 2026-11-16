@@ -118,10 +118,13 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   - **EU** is Claude on Google Cloud Vertex AI in the EU. The session gets the variables of the `claude-eu` alias of your shell profile
     (`CLAUDE_CODE_USE_VERTEX`, `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, the model variables), plus `ZEUS_CLAUDE_HOST=eu` and
     `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. It starts without `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
-    Bedrock and Foundry variables, and `VERTEX_REGION_*` overrides, also when the alias sets one. The app refuses an alias whose region is not `eu` or `europe-*`.
-  - Claude Code cannot change host while it runs. A click on the switch stops the session of the tab and starts a new one on the other host in the same tab (a running chat is asked about first).
+    Bedrock and Foundry variables, and `VERTEX_REGION_*` overrides, also when the alias sets one. The app refuses an alias whose region is not `eu` or `europe-*`,
+    and an alias value with a shell variable or command (`$` or a backtick): the app reads the alias as text and does not expand it.
+  - Claude Code cannot change host while it runs. A click on the switch starts a new session on the other host in the same tab and stops the old one (a running chat is asked about first).
     The loading screen covers the old chat page before its session stops. The chats stay in the chat history; a chat that ran on EU continues only on EU.
-  - Before every EU start, the app runs `gcloud auth application-default print-access-token`. When that fails, the tab shows the reason and **Try again**. It never starts on Apolix instead. The token is not kept or logged.
+  - Before every EU start, the app reads the alias and runs `gcloud auth application-default print-access-token`. On a switch, this check runs while the old session still runs:
+    when it fails, the tab keeps its session and a sheet says why. When it fails for a tab without a running session, the tab shows the reason and **Try again**.
+    It never starts on Apolix instead. The token is not kept or logged.
   - An EU tab shows a green **EU** pill in the title bar, also when the switch is hidden. With the switch shown, a new tab starts on the host picked last; with the switch hidden, on Apolix.
 - **Show session cost in EU windows** (on) and **Show session cost in Apolix windows** (off). The title bar shows two figures, such as `Session €0.37 · Chat €2.10`: **Session** is what the tab's session used since it started, and **Chat** is everything the chat that runs now ever used (its whole transcript and its subagents, also on earlier days, across resumes and app restarts). The tooltip has the tokens of both. An older editor that reports no chat total shows `≈ €1.84` as before.
   The chat page posts `cost:<JSON>` to `window.webkit.messageHandlers.zeusApp` on connect and after each reply (zeus-editor, `docs/chat.md`, "Session cost"); the app shows a report only when its `host` is the tab's host.
@@ -187,6 +190,7 @@ Release builds ignore it.
 `ZEUS_APP_ZEUS_COMMAND=/path/to/zeus` replaces the zeus command. The app passes its environment on to `zeus`, so `ZEUS_EDITOR_PORT` and `ZEUS_EDITOR_STATE_DIR` give a development Zeus Editor of its own.
 `ZEUS_APP_EU_ENV="NAME=value NAME=value"` replaces the `claude-eu` alias, `ZEUS_APP_GCLOUD=/path/to/gcloud` replaces `gcloud`, and `ZEUS_APP_PYTHON` replaces `python3` for the Secure Handoff (debug builds).
 `ZEUS_APP_TEST_NO_SWITCH_QUESTION=1` and `ZEUS_APP_TEST_NO_OPEN=1` (debug builds) skip the switch question and the opening of the review page in tests.
+`ZEUS_APP_QUIET_WINDOWS=1` (debug builds) keeps the app from taking the focus and puts its windows on screen `ZEUS_APP_TEST_SCREEN` (1-based, default 1). `app/test/sim/run.sh` sets it, with the screen from `ZEUS_SIM_SCREEN`.
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.
 The web pages can be inspected with Safari's Develop menu.
