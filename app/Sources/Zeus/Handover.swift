@@ -297,7 +297,8 @@ final class HandoverFlow {
         self.completion = completion
         Trace.log("handover: pending check")
         queue.async { [weak self] in
-            let result = HandoverCLI.pending().map { pending in
+            let pending = HandoverCLI.pending()
+            let result = pending.map { pending in
                 pending.compactMap { entry -> ProjectHandover? in
                     if entry.open { return ProjectHandover(project: entry.project, needsSummary: false) }
                     // EU work after the last release (or with no release yet) and no summary for it.
@@ -306,7 +307,11 @@ final class HandoverFlow {
                     return ProjectHandover(project: entry.project, needsSummary: true)
                 }
             }
-            DispatchQueue.main.async { self?.pendingEnded(result) }
+            let reason = (try? pending.get()).map(Self.nothingReason) ?? ""
+            DispatchQueue.main.async {
+                self?.nothingReason = reason
+                self?.pendingEnded(result)
+            }
         }
     }
 
@@ -320,6 +325,37 @@ final class HandoverFlow {
         completion = nil
     }
 
+    /// Why nothing needs to cross, for the last line of the handover step.
+    private var nothingReason = ""
+
+    /// "no project was used, so these EU chats stay in EU", or "everything was handed over already (16 Nov, 18:40)".
+    static func nothingReason(_ pending: [HandoverCLI.Pending]) -> String {
+        if pending.isEmpty {
+            return "no project was used, so these EU chats stay in EU"
+        }
+        let released = pending.compactMap { HandoverCLI.lastRelease($0.project) }.max()
+        if let released {
+            let format = DateFormatter()
+            format.dateFormat = "d MMM, HH:mm"
+            return "everything was handed over already (\(format.string(from: released)))"
+        }
+        return "the EU projects have no work to hand over"
+    }
+
+    /// The handover step plays also when nothing needs to cross: its last line says so and why; then Standard starts.
+    private func showNothing() {
+        guard tab != nil else { finish(.noHandoverNeeded); return }
+        showStep()
+        stage("Checking the EU work")
+        Trace.log("handover: no work: \(nothingReason)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            guard let self, !self.ended else { return }
+            self.stage("No work to hand over: \(self.nothingReason)")
+            self.overlay?.markStage(self.stageCount - 1, "done")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in self?.finish(.noHandoverNeeded) }
+        }
+    }
+
     private func pendingEnded(_ result: Result<[ProjectHandover], HandoverCLI.Failure>) {
         guard !ended else { return }
         switch result {
@@ -328,7 +364,7 @@ final class HandoverFlow {
             showSheet(error: failure.message)
         case let .success(found) where found.isEmpty:
             Trace.log("handover: nothing to hand over")
-            finish(.noHandoverNeeded)
+            showNothing()
         case let .success(found):
             Trace.log("handover: \(found.map { "\($0.project)\($0.needsSummary ? "(no summary)" : "")" }.joined(separator: " "))")
             projects = found

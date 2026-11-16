@@ -122,7 +122,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
 - **Developer Settings** (Zeus > Developer > Developer Settings…, `Sources/Zeus/DeveloperSettings.swift`): show the Standard | EU switch (on; it always shows in EU mode),
   show the session and chat total in EU (on), and in Standard (off). Each change shows at once in every window.
 - **Handover from EU to Standard** (`Sources/Zeus/Handover.swift`). Before a switch from EU, the app runs `handoff pending` in the EU workspace.
-  With nothing new, Standard starts at once. Otherwise the tab shows "Handing off data securely" on the loading screen while `handoff build` and `handoff scan` run, then the release sheet:
+  With nothing new, the handover step still plays and its last line says why nothing crosses (the EU chats used no project, or everything was handed over already), then Standard starts. Otherwise the tab shows "Handing off data securely" on the loading screen while `handoff build` and `handoff scan` run, then the release sheet:
   - a project with EU work but no summary gets **Ask EU Claude to write it**, which puts the request into the EU chat's message box (the user sends it) and stays in EU;
   - each finding group (one kind and value, in every file) shows the value in its line, read from the handover's copy on this Mac (the scan output itself stays masked), with the file names only, and gets **Keep** (not client data) or **Mask** (replaced in what crosses); e-mail and IBAN groups offer only Mask; **Mask all** decides every group;
   - **Release and switch to Standard** stays off until every group is decided. It runs `handoff mask` for the masked groups, scans again,
@@ -291,7 +291,7 @@ It presses the app's buttons through the debug test actions and checks the trace
    Settings… calls `openSettings` in the chat page, also when it comes while a new tab still loads its chat page.
 5. The Standard | EU switch, with a simulated EU `scripts/zeus.py` (`app/test/sim/payload/handover-zeus.py`): the switch to EU starts `zeus --eu` in `~/Code/zeus-eu`;
    the switch back builds and scans the handover; Release stays off while a group is undecided or the e-mail group is kept; Release masks, scans again,
-   copies the masked files with `released.json` into the Standard workspace, closes the EU handover, and starts Standard; with nothing new, the next switch back asks nothing.
+   copies the masked files with `released.json` into the Standard workspace, closes the EU handover, and starts Standard; with nothing new, the next switch back still plays the handover step and says why nothing crosses.
    The app clones a missing `~/Code/zeus-eu` (scenario 1); EU mode shows the green badge, Standard does not.
    A Standard cost stays hidden until its developer setting is on, then shows "Session €… · Chat total €…" (a fixed test rate, `ZEUS_APP_EURO_RATE`); EU shows it by default and hides it when its setting is off;
    Zeus > Developer > Developer Settings… opens.
