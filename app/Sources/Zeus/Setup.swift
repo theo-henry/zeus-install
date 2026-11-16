@@ -36,6 +36,9 @@ final class SetupModel: ObservableObject {
         Step(id: 11, name: "The zeus command", note: ""),
         Step(id: 12, name: "Zeus skill plugins", note: "YAML builder, OCPM, and PQL."),
         Step(id: 13, name: "Claude login", note: "Your browser opens. You log in to Claude."),
+        Step(id: 14, name: "Google Cloud CLI", note: "For EU mode. Installed in ~/google-cloud-sdk."),
+        Step(id: 15, name: "EU workspace", note: "Copied to ~/Code/zeus-eu, or updated there."),
+        Step(id: 16, name: "Zeus plugins of EU mode", note: "Installed or updated in ~/.zeus/eu/claude."),
     ]
     @Published var phase: Phase = .checking
     @Published var logText = ""

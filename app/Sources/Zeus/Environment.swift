@@ -5,15 +5,29 @@ enum Paths {
     static let home = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
         ?? FileManager.default.homeDirectoryForCurrentUser.path
     static let zeusDir = home + "/Code/zeus"
-    /// ZEUS_APP_ZEUS_COMMAND replaces the zeus command (for tests).
-    static let zeusCommand = ProcessInfo.processInfo.environment["ZEUS_APP_ZEUS_COMMAND"] ?? home + "/.local/bin/zeus"
+    /// Debug builds: ZEUS_APP_ZEUS_COMMAND replaces the zeus command (for tests). A release build never takes it, so
+    /// that no setting outside the app can send a Zeus session, also an EU session, to another program.
+    static let zeusCommand: String = {
+        #if DEBUG
+        if let command = ProcessInfo.processInfo.environment["ZEUS_APP_ZEUS_COMMAND"], !command.isEmpty { return command }
+        #endif
+        return home + "/.local/bin/zeus"
+    }()
     static let logDir = home + "/Library/Logs/zeus-install"
 
-    static var editorStateDir: String {
-        ProcessInfo.processInfo.environment["ZEUS_EDITOR_STATE_DIR"] ?? home + "/.zeus-editor"
+    /// The Zeus workspace of a mode: `~/Code/zeus`, or the EU workspace of the EU profile.
+    static func workspace(for mode: ZeusMode, profile: EUProfile? = nil) -> String {
+        mode == .eu ? (profile ?? .load()).workspace : zeusDir
     }
 
-    static var launchesDir: String { editorStateDir + "/chat/launches" }
+    /// The Zeus Editor state folder of a mode. Standard: `~/.zeus-editor` (zeus-editor src/paths.js); EU: the EU editor
+    /// state of the EU profile, which `zeus --eu` uses (it ignores ZEUS_EDITOR_STATE_DIR from outside).
+    static func editorStateDir(for mode: ZeusMode) -> String {
+        if mode == .eu { return EUProfile.load().editorStateDir }
+        return ProcessInfo.processInfo.environment["ZEUS_EDITOR_STATE_DIR"] ?? home + "/.zeus-editor"
+    }
+
+    static func launchesDir(for mode: ZeusMode) -> String { editorStateDir(for: mode) + "/chat/launches" }
 
     static var appSupport: String {
         let dir = home + "/Library/Application Support/Zeus"
@@ -21,9 +35,11 @@ enum Paths {
         return dir
     }
 
-    /// The installer inside the app. ZEUS_APP_INSTALLER replaces it (for tests).
+    /// The installer inside the app. Debug builds: ZEUS_APP_INSTALLER replaces it (for tests).
     static var installer: String? {
+        #if DEBUG
         if let path = ProcessInfo.processInfo.environment["ZEUS_APP_INSTALLER"] { return path }
+        #endif
         return Bundle.main.path(forResource: "install", ofType: "sh")
     }
 }

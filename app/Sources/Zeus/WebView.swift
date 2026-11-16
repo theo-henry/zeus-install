@@ -24,9 +24,10 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
     }
 
-    static func makeConfiguration() -> WKWebViewConfiguration {
+    /// Each mode has its own web data (`ModeWebData`): an EU page never shares cookies or storage with a Standard page.
+    static func makeConfiguration(mode: ZeusMode) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
+        configuration.websiteDataStore = ModeWebData.store(for: mode)
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
         // Pop-ups (Zeus Editor pages) get this configuration too, so every Zeus page can use speech to text
@@ -69,10 +70,10 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
             """, injectionTime: .atDocumentStart, forMainFrameOnly: true)
     }()
 
-    /// A pop-up gets the configuration of the page that opened it, which already has the bridge.
-    func makeWebView(configuration: WKWebViewConfiguration? = nil) -> WKWebView {
+    /// A pop-up gets the configuration of the page that opened it, which already has the bridge and the web data of its mode.
+    func makeWebView(configuration: WKWebViewConfiguration? = nil, mode: ZeusMode = .standard) -> WKWebView {
         let configuration = configuration ?? {
-            let fresh = WebViewHandler.makeConfiguration()
+            let fresh = WebViewHandler.makeConfiguration(mode: mode)
             fresh.userContentController.add(ScriptBridge(handler: self), name: "zeusApp")
             return fresh
         }()

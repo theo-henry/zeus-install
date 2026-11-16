@@ -95,6 +95,7 @@ Links to other websites open in your default browser. Zeus Editor pages stay in 
 The app runs its own copy of `install.sh` in app mode (`ZEUS_INSTALL_APP=1`).
 In app mode, the installer prints `@@zeus` status lines for the checklist, `--check` only reports which steps are done,
 and two more steps run: the Zeus skill plugins (step 12) and the Claude login (step 13).
+Steps 14 to 16 set up EU mode (see [EU mode](#eu-mode)).
 To build the app, see [app/README.md](app/README.md).
 
 ## Install in Terminal only
@@ -127,16 +128,22 @@ The installer skips each step that is already done.
 | 9 | Copy of the zeus repo to `~/Code/zeus`, or an update of an existing copy (fast-forward only, local work is never discarded) | The copy is already up to date or already has the Zeus version that Zeus Editor needs, or it cannot update safely. Then the installer tells you how Zeus gets the update. |
 | 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. |
 | 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
-| 12 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
+| 12 | Google Cloud CLI 593.0.0 in `~/google-cloud-sdk`, for the Google sign-in of EU mode. The installer checks the SHA-256 of the official macOS archive and does not change your shell profile. | `gcloud` is already installed (on your `PATH`, in `~/google-cloud-sdk`, or from Homebrew). |
+| 13 | Copy of the zeus repo to `~/Code/zeus-eu`, the EU workspace, or an update of an existing copy (fast-forward only) | The copy is already up to date, or it cannot update safely. |
+| 14 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, and the first-start settings of that folder | Never skipped. Installed plugins are updated. |
+| 15 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
 
 The installer does not use `sudo`.
 Your Mac password can be necessary only for the Apple pop-up in step 1.
 The installer asks you to accept the Anaconda license before it installs Anaconda.
 Logs for Anaconda, the GitHub CLI, and the Claude Code update are in `~/Library/Logs/zeus-install`.
+A failed EU step (12 to 14, or 14 to 16 in the app) does not stop the installer.
+It is a warning, the other steps continue, and the Zeus app is installed.
+The app shows what EU mode is missing when you switch to EU mode; run the setup again to finish it.
 
 ## After the install
 
-When step 12 installed the Zeus app, it opens. Follow its setup window; it does the steps below for you.
+When step 15 installed the Zeus app, it opens. Follow its setup window; it does the steps below for you.
 Without the app:
 
 1. Close Terminal and open a new Terminal window.
@@ -162,10 +169,65 @@ claude plugin install celonis-pql@celonis-pql --scope user
    The `zeus` command starts Claude Code with the Zeus Editor and opens the chat page.
    When the Zeus Editor plugin is not installed, the command tells you to run the install line again.
 
+## EU mode
+
+EU mode runs Zeus with Claude on Google Vertex AI in the EU (location `eu`), for clients whose data must stay in the EU.
+The model is Claude Sonnet 5.5.
+Web search is available; web fetch and MCP servers are off.
+EU mode has its own workspace (`~/Code/zeus-eu`), its own Claude Code folder (`~/.zeus/eu/claude`), and its own Zeus Editor state (`~/.zeus/eu/editor`).
+Nothing of EU mode goes into `~/Code/zeus` or `~/.claude`.
+
+### Set up EU mode
+
+1. Run the install line or Zeus > Zeus Setup… in the app.
+   The EU steps are the same on every Mac (steps 12 to 14, or 14 to 16 in the app).
+2. Ask the Zeus maintainer to give your Google account access to the EU project.
+   The maintainer gives the account the Vertex AI User role on the project `project-4bf0bacd-fec4-406b-a99`.
+3. Sign in to Google one time.
+   In the app, the EU start page shows **Sign in to Google Cloud** when it is necessary.
+   In Terminal, use these two commands:
+
+```text
+gcloud auth application-default login
+gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99
+```
+
+### Use EU mode in the app
+
+- The mode switch is at the right of the tab bar (`Standard | EU`).
+  A green EU pill shows in EU mode.
+- A switch closes all the tabs of the current mode and stops their sessions before the other mode starts.
+  The app asks first when a tab has unsent text or Zeus is working.
+  The tabs of each mode come back when you switch back to that mode.
+  An EU tab never opens in Standard mode, and a Standard tab never opens in EU mode.
+- Each mode has its own web data (cookies and storage) and its own terminal environment.
+- In EU mode, the tab bar shows an estimate of the session cost in USD.
+- When the EU start fails, the app shows why and what to do: sign in to Google Cloud, run the Zeus setup, try again, or switch to Standard.
+
+### Hand over EU work to Standard
+
+EU work never goes to Standard by itself.
+A person releases it in the app:
+
+1. In EU mode, click **Standard** in the mode switch, then click **Hand Over First…**.
+2. Click **Ask Zeus in this chat**.
+   The EU chat writes the handover summary of its project.
+   Then click **Review…** next to the project.
+3. Review the summary and the files.
+   The app scans them for client data with the Zeus scripts of the Standard workspace, which EU Claude can not change.
+   You can edit the summary, remove files, and accept a finding.
+   An e-mail address or an IBAN can not be accepted: remove the file, or change the text in EU mode.
+4. Click **Release to Standard**.
+   The app copies the released files into `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/` and writes `released.json` there.
+   The Standard project must already exist.
+
+The "Zeus feedback" section of the handover summary goes to Standard with the release.
+Standard Zeus sends it, not EU mode.
+
 ## Release the Zeus app (maintainer)
 
 The app releases are in the private zeus repo, with tags `app-v<version>` and the assets `Zeus.zip` and `Zeus.zip.sha256`.
-The install line, step 12, and the self-update of the app use the newest of these releases.
+The install line, step 15, and the self-update of the app use the newest of these releases.
 Drafts, pre-releases, and the other releases of the zeus repo are not used.
 
 CI makes a release by itself.

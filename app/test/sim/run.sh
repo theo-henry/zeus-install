@@ -6,8 +6,9 @@
 # home folder, Claude Code, and GitHub login are not used. The test presses the app's buttons through
 # its debug test actions (active only with ZEUS_APP_TRACE) and checks the trace.
 #
-# Usage: app/test/sim/run.sh [screenshot-folder]
+# Usage: app/test/sim/run.sh [--eu] [screenshot-folder]
 # With a folder, it saves a screenshot of each app window state there (the app's windows only).
+# --eu runs only the EU mode scenario (app/test/run-all.sh runs both parts, each with its own time limit).
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
 # shellcheck disable=SC2016,SC2034
@@ -16,6 +17,8 @@ set -euo pipefail
 SIM_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SIM_DIR/../.." && pwd)"
 REPO_DIR="$(dirname "$APP_DIR")"
+PART=main
+if [ "${1:-}" = "--eu" ]; then PART=eu; shift; fi
 SHOTS="${1:-}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
@@ -213,12 +216,25 @@ stop_app() {
   if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-$(basename "$(dirname "$TRACE")").log"; fi
 }
 
+# shellcheck source=app/test/sim/eu.sh
+source "$SIM_DIR/eu.sh"
+if [ "$PART" = eu ]; then
+  eu_scenario
+  echo
+  if [ "$FAILURES" -eq 0 ]; then
+    printf '\033[32mAll checks passed.\033[0m\n'
+    exit 0
+  fi
+  printf '\033[31m%s checks failed.\033[0m\n' "$FAILURES"
+  exit 1
+fi
+
 echo
 echo "Scenario 1: a new Mac, full setup, chat, close"
 start_app new ZEUS_SIM_START_DELAY=2500
 need "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
-need "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
+need "the check finds 15 steps to do on a new Mac (got $todo)" '[ "$todo" = 15 ]'
 shot 1-check
 
 act setup-install
@@ -245,9 +261,18 @@ check "step 13: the Claude login starts" 'wait_for "setup event: running 13 " 10
 sleep 1.5
 shot 4-claude-login
 check "step 13: the Claude login completes" 'wait_for "setup event: done 13 " 30'
+check "step 14: the Google Cloud CLI installs in ~/google-cloud-sdk" 'wait_for "setup event: done 14 " 30 && [ -x "$SANDBOX/google-cloud-sdk/bin/gcloud" ]'
+check "step 15: the EU workspace is cloned in ~/Code/zeus-eu" 'wait_for "setup event: done 15 " 30 && [ -d "$SANDBOX/Code/zeus-eu/.git" ]'
+check "step 16: the Zeus plugins install in the EU Claude Code folder" 'wait_for "setup event: done 16 " 30 && grep -q "zeus-editor@zeus-editor" "$SANDBOX/.zeus/eu/claude/plugins/installed_plugins.json" && grep -q "celonis-pql@celonis-pql" "$SANDBOX/.zeus/eu/claude/plugins/installed_plugins.json"'
+check "the EU plugins are installed apart from the Standard plugins" '[ "$(ls "$STATE" | grep -c "^eu-plugin-")" = 4 ] && [ "$(ls "$STATE" | grep -c "^plugin-")" = 4 ]'
+check "EU Claude Code starts without the first-start questions in the EU workspace" \
+  'python3 -c "import json,os,sys; c=json.load(open(sys.argv[1])); p=c[\"projects\"][os.path.realpath(sys.argv[2])]; sys.exit(0 if c[\"hasCompletedOnboarding\"] and p[\"hasTrustDialogAccepted\"] and p[\"hasClaudeMdExternalIncludesWarningShown\"] and not p[\"hasClaudeMdExternalIncludesApproved\"] else 1)" "$SANDBOX/.zeus/eu/claude/.claude.json" "$SANDBOX/Code/zeus-eu"'
+check "the EU setup changes no shell profile" '! grep -qs "google-cloud-sdk\|zeus-eu\|CLOUDSDK\|CLAUDE_CONFIG_DIR\|\.zeus/eu" "$SANDBOX/.zprofile" "$SANDBOX/.zshrc" "$SANDBOX/.bash_profile" "$SANDBOX/.bashrc"'
 check "the setup finishes" 'wait_for "setup ended: check=false code=0" 20'
 shot 5-finished
 check "the installer wrote only into the simulated home folder" '[ -x "$SANDBOX/.local/bin/zeus" ] && [ -d "$SANDBOX/Code/zeus/.git" ]'
+check "install.sh --check then finds the EU steps done" \
+  '[ "$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check 2>&1 | grep -c "@@zeus state 1[456] ok")" = 3 ]'
 
 act setup-start
 if [ -n "$SHOTS" ]; then
@@ -657,8 +682,8 @@ act 'test-speech-post:{"type":"speech-settings-set","language":"xx"}'
 check "an unknown language is refused with an error, and the setting stays" 'sleep 0.5 && page_has "unknown language" && page_has "\"language\":\"fr\""'
 act 'test-speech-post:{"type":"speech-start","id":"w4","locale":null,"version":2}'
 wait_for "speech event: state w4 listening" 10 >/dev/null
-act 'test-speech-post:{"type":"speech-stop","id":"w4"}'
-act 'test-speech-post:{"type":"speech-start","id":"w5","locale":null,"version":2}'
+# The stop and the next start go in one post, so the start comes while Whisper processes, also under load.
+act 'test-speech-post:[{"type":"speech-stop","id":"w4"},{"type":"speech-start","id":"w5","locale":null,"version":2}]'
 check "a start while Whisper processes is busy" 'wait_for "speech event: state w4 processing" 10 && sleep 0.3 && page_has "error w5 busy"'
 check "the processing recording still gives its text" 'wait_for "speech event: final w4 " 10'
 act 'test-speech-post:{"type":"speech-start","id":"w6","locale":null,"version":2}'
@@ -831,6 +856,32 @@ check "step 5 fails and names the missing access" 'wait_for "setup event: failed
 check "the setup stops with an error" 'wait_for "setup ended: check=false code=1" 20'
 shot 7-no-access
 check "nothing after step 5 is installed" '[ ! -d "$SANDBOX/.local/node" ] && [ ! -d "$SANDBOX/Code/zeus" ]'
+stop_app
+
+echo
+echo "Scenario 5b: an EU step fails, and the Standard setup still completes"
+# EU mode is for some users only: a failed EU step is a warning. The app tells what EU mode misses when the user switches.
+start_app eu-step-fails ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL=1
+check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
+act setup-install
+wait_for "setup event: ask 2 " 40 >/dev/null && act setup-answer-yes
+wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && act setup-enter
+check "step 14 fails: the Google Cloud CLI download fails" 'wait_for "setup event: failed 14 The download of google-cloud-cli-" 120 && [ ! -e "$SANDBOX/google-cloud-sdk" ]'
+check "the later EU steps still run" 'wait_for "setup event: done 15 " 30 && wait_for "setup event: done 16 " 30'
+check "the setup completes without an error" 'wait_for "setup ended: check=false code=0" 20 && [ "$(grep -c "setup event: failed " "$TRACE")" = 1 ]'
+shot 7b-eu-step-failed
+act setup-start
+check "Standard mode starts" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+act test-mode:eu
+check "EU mode names the missing Google Cloud CLI" 'wait_for "mode: EU setup missing: .*the Google Cloud CLI" 10'
+act test-alert:1
+check "in Terminal use, a failed EU step is a warning, and the steps after it run" \
+  'out="$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; install_eu; echo after-eu; printf \"%s\\n\" \"\${SUMMARY[@]}\"" _ "$REPO_DIR/install.sh" 2>&1)" && printf "%s" "$out" | grep -q "^after-eu$" && printf "%s" "$out" | grep -q "Warning:.*google-cloud-cli" && printf "%s" "$out" | grep -q "^warning   Google Cloud CLI (not set up; EU mode only)$" && ! printf "%s" "$out" | grep -q "Stopped:"'
+blocked="$WORK/eu-config-blocked"
+mkdir -p "$blocked/.zeus"
+: >"$blocked/.zeus/eu"
+check "an EU step that fails without its own message (an EU config folder that can not be made) is reported failed, and the setup goes on" \
+  'out="$(env HOME="$blocked" PATH="$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_INSTALL_APP=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; eu_step install_eu_plugins \"Zeus plugins of EU mode\"; echo after-eu; printf \"%s\\n\" \"\${SUMMARY[@]}\"" _ "$REPO_DIR/install.sh" 2>&1)" && [ "$(printf "%s\n" "$out" | grep -c "^@@zeus failed ")" = 1 ] && printf "%s" "$out" | grep -q "^@@zeus failed 16 Zeus plugins of EU mode could not be set up" && printf "%s" "$out" | grep -q "^after-eu$" && printf "%s" "$out" | grep -q "^warning   Zeus plugins of EU mode (not set up; EU mode only)$"'
 stop_app
 
 echo

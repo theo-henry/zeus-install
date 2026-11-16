@@ -6,8 +6,12 @@ import Foundation
 /// sessions, and the new copy (or the old copy after a roll back) opens the same tabs again.
 /// Each tab gets a new `zeus` session that resumes the Claude Code session of the tab (`LaunchControl`),
 /// its project, its name, its open terminal, and the unsent text of its message box and of its terminal.
+/// The same record keeps the tabs of a mode while the app runs in the other mode (`ModeTabs`).
+/// Each tab has its mode: a tab opens again only in the same mode, so an EU chat never resumes in Standard.
 struct TabRestore: Codable {
     struct Tab: Codable {
+        /// The mode of the tab. Nil in a file from before EU mode: a Standard tab.
+        var mode: ZeusMode?
         /// The Claude Code session of the chat, from the launcher. Nil for a tab that had not started yet.
         var sessionID: String?
         var project: String?
@@ -19,6 +23,20 @@ struct TabRestore: Codable {
         var terminalDraft: String?
         var terminalVisible: Bool
         var selected: Bool
+
+        init(mode: ZeusMode? = nil, sessionID: String? = nil, project: String? = nil, customName: String? = nil,
+             draft: String? = nil, terminalDraft: String? = nil, terminalVisible: Bool, selected: Bool) {
+            self.mode = mode
+            self.sessionID = sessionID
+            self.project = project
+            self.customName = customName
+            self.draft = draft
+            self.terminalDraft = terminalDraft
+            self.terminalVisible = terminalVisible
+            self.selected = selected
+        }
+
+        var tabMode: ZeusMode { mode ?? .standard }
     }
 
     struct Window: Codable {
@@ -34,6 +52,13 @@ struct TabRestore: Codable {
 
     var tabCount: Int { windows.reduce(0) { $0 + $1.tabs.count } }
 
+    /// Only the tabs of this mode, and only the windows that keep a tab.
+    func only(_ mode: ZeusMode) -> TabRestore {
+        var copy = self
+        copy.windows = windows.map { Window(frame: $0.frame, tabs: $0.tabs.filter { $0.tabMode == mode }) }.filter { !$0.tabs.isEmpty }
+        return copy
+    }
+
     private static var url: URL { URL(fileURLWithPath: Paths.appSupport + "/restore.json") }
     /// A file older than this is left from an update that did not finish, and is not used.
     private static let maximumAge: TimeInterval = 15 * 60
@@ -46,17 +71,52 @@ struct TabRestore: Codable {
 
     static func remove() { try? FileManager.default.removeItem(at: url) }
 
-    /// The tabs for this version of the app, read once: the file is removed.
-    static func take() -> TabRestore? {
+    /// The tabs for this version of the app and this mode, read once: the file is removed.
+    /// A tab of the other mode does not open.
+    static func take(mode: ZeusMode) -> TabRestore? {
         defer { remove() }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let data = try? Data(contentsOf: url), let restore = try? decoder.decode(TabRestore.self, from: data) else { return nil }
+        guard let data = try? Data(contentsOf: url), let restore = decode(data) else { return nil }
         guard restore.version == Updater.currentVersion, Date().timeIntervalSince(restore.createdAt) < maximumAge else {
             Trace.log("restore: not used (for \(restore.version), written \(restore.createdAt))")
             return nil
         }
-        return restore
+        let kept = restore.only(mode)
+        if kept.tabCount < restore.tabCount {
+            Trace.log("restore: \(restore.tabCount - kept.tabCount) tabs of another mode not opened in \(mode.rawValue)")
+        }
+        return kept
+    }
+
+    fileprivate static func decode(_ data: Data) -> TabRestore? {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(TabRestore.self, from: data)
+    }
+}
+
+/// The tabs of the mode that the app left at a mode switch, so that a switch back opens them again with their chats.
+/// One file per mode: `~/Library/Application Support/Zeus/tabs-<mode>.json`. Only tabs of that mode go in it.
+enum ModeTabs {
+    private static func url(_ mode: ZeusMode) -> URL { URL(fileURLWithPath: Paths.appSupport + "/tabs-\(mode.rawValue).json") }
+
+    static func save(_ restore: TabRestore, mode: ZeusMode) {
+        let kept = restore.only(mode)
+        guard kept.tabCount > 0 else { try? FileManager.default.removeItem(at: url(mode)); return }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        do {
+            try encoder.encode(kept).write(to: url(mode), options: .atomic)
+        } catch {
+            Trace.log("mode tabs: not written: \(error.localizedDescription)")
+        }
+    }
+
+    /// The kept tabs of this mode, read once: the file is removed.
+    static func take(_ mode: ZeusMode) -> TabRestore? {
+        defer { try? FileManager.default.removeItem(at: url(mode)) }
+        guard let data = try? Data(contentsOf: url(mode)), let restore = TabRestore.decode(data) else { return nil }
+        let kept = restore.only(mode)
+        return kept.tabCount > 0 ? kept : nil
     }
 }
 
@@ -71,10 +131,11 @@ enum LaunchControl {
     }
 
     /// Off the main queue: the endpoint of the session's launch, or nil when the session has no chat URL or record.
-    static func endpoint(launchID: String?, chatURL: URL?) -> Endpoint? {
+    /// The launch record is in the Zeus Editor state folder of the session's mode.
+    static func endpoint(launchID: String?, chatURL: URL?, mode: ZeusMode) -> Endpoint? {
         guard let launchID, !launchID.contains("/"), let fragment = chatURL?.fragment,
               let token = URLComponents(string: "x:?" + fragment)?.queryItems?.first(where: { $0.name == "k" })?.value,
-              let data = try? Data(contentsOf: URL(fileURLWithPath: Paths.launchesDir + "/\(launchID).json")),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: Paths.launchesDir(for: mode) + "/\(launchID).json")),
               let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let socket = record["socket"] as? String else { return nil }
         return Endpoint(socket: socket, token: token)

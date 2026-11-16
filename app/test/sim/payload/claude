@@ -1,20 +1,42 @@
 #!/bin/bash
 # Simulated Claude Code CLI: plugins and login, with state in $ZEUS_SIM_STATE.
+# With CLAUDE_CONFIG_DIR (EU mode: ~/.zeus/eu/claude), the plugins are those of that folder, as with the real CLI:
+# they are kept apart from the Standard plugins, and the folder gets plugins/installed_plugins.json.
 S="$ZEUS_SIM_STATE"
+prefix="plugin-"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  prefix="eu-plugin-"
+  printf '%s\n' "$*" >>"$S/eu-claude.log"
+fi
 case "${1:-}" in
   plugin)
     case "${2:-}" in
       list)
         echo "Installed plugins:"
-        for f in "$S"/plugin-*; do [ -f "$f" ] && printf '\n  ❯ %s\n    Scope: user\n' "$(cat "$f")"; done
+        for f in "$S/$prefix"*; do [ -f "$f" ] && printf '\n  ❯ %s\n    Scope: user\n' "$(cat "$f")"; done
         ;;
       install)
         name="$3"
-        echo "$name" >"$S/plugin-${name//[@\/]/_}"
-        if [[ "$name" == zeus-editor@* ]]; then
-          dist="$HOME/.claude/plugins/cache/zeus-editor/zeus-editor/sim/dist"
-          mkdir -p "$dist"
-          cp "$ZEUS_SIM_PAYLOAD/zeus.mjs" "$dist/zeus.mjs"
+        echo "$name" >"$S/$prefix${name//[@\/]/_}"
+        if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+          mkdir -p "$CLAUDE_CONFIG_DIR/plugins"
+          {
+            printf '{"version": 2, "plugins": {'
+            first=1
+            for f in "$S/$prefix"*; do
+              [ -f "$f" ] || continue
+              [ "$first" = 1 ] || printf ','
+              first=0
+              printf '"%s": [{"scope": "user"}]' "$(cat "$f")"
+            done
+            printf '}}\n'
+          } >"$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"
+        elif [[ "$name" == zeus-editor@* ]]; then
+          root="$HOME/.claude/plugins/cache/zeus-editor/zeus-editor/sim"
+          mkdir -p "$root/dist"
+          cp "$ZEUS_SIM_PAYLOAD/zeus.mjs" "$root/dist/zeus.mjs"
+          # The EU launch profile ships with Zeus Editor, next to dist/.
+          cp "$ZEUS_SIM_PAYLOAD/eu-profile.json" "$root/eu-profile.json"
         fi
         echo "✔ Installed $name (simulated)"
         ;;

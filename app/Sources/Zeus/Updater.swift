@@ -15,8 +15,14 @@ import Foundation
 /// The user's state (settings, workspace, sessions) is outside the app bundle and does not change.
 enum Updater {
     static let tagPrefix = "app-v"
-    /// ZEUS_APP_REPO replaces the repo (for tests), as in install.sh.
-    static var repo: String { ProcessInfo.processInfo.environment["ZEUS_APP_REPO"] ?? "theo-henry/zeus" }
+    /// Debug builds: ZEUS_APP_REPO replaces the repo (for tests), as in install.sh. A release build always updates from
+    /// the Zeus repo.
+    static var repo: String {
+        #if DEBUG
+        if let repo = ProcessInfo.processInfo.environment["ZEUS_APP_REPO"], !repo.isEmpty { return repo }
+        #endif
+        return "theo-henry/zeus"
+    }
     static let checkTimeout: TimeInterval = 5
     /// The check that the user starts in the settings waits longer than the check at launch.
     static let userCheckTimeout: TimeInterval = 20

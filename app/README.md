@@ -47,6 +47,22 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The chat page tells the app its project with `window.webkit.messageHandlers.zeusApp.postMessage({type: "project", name})` (`name` is null without a project);
   for chat pages that do not send it, the app reads the project button of the chat.
   Cmd+J shows or hides the live terminal of the tab, for login prompts, slash commands, or debugging.
+- **Standard | EU.** The mode switch at the right of the tab bar switches between Standard mode and EU mode
+  (`Sources/Zeus/EUMode.swift`). EU mode runs `zeus --eu --no-open` in `~/Code/zeus-eu` (from the EU launch profile `eu-profile.json` of Zeus Editor),
+  shows a green EU pill, and shows the session cost estimate in USD from the `cost:` messages of the chat page.
+  A switch closes and stops every session of the old mode before the new mode starts, and asks first about unsent text or busy tabs.
+  The tabs of each mode are kept apart (`tabs-standard.json`, `tabs-eu.json`), and an EU tab never resumes in Standard mode.
+  Each mode has its own web data store, and the terminal of a tab runs in the environment of its mode.
+  When EU mode does not start, the tab shows the `zeus:` message with **Sign in to Google Cloud** (it runs the gcloud sign-in in the tab's terminal),
+  **Run the Zeus setup**, **Try again**, and **Switch to Standard**. An `eu-error:` message (Vertex AI 403, 404, or 429) shows a question with the fix.
+- **EU handover.** **Hand Over First…** at the switch to Standard opens the handover window (`Sources/Zeus/Handover.swift`).
+  **Ask Zeus in this chat** sends the summary request to an EU tab, with the project that the tab shows.
+  The app runs the handoff commands of `scripts/zeus.py` of the Standard workspace (`~/Code/zeus`, which EU Claude can not write) with `--workspace` set to the EU workspace.
+  It runs `python3 -E -s`, so no module of the EU workspace loads, and EU Claude can not change the scan.
+  The app shows the summary, the files, and the scan findings,
+  and lets the user edit the summary, remove files, and accept findings. E-mail and IBAN findings can not be accepted.
+  **Release to Standard** scans again, then the app copies the checked files to `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/`
+  and writes `released.json`. Claude never releases a handover.
 - **Keyboard.** Typing and pasting (Cmd+V or Edit > Paste) go to the part of the tab that the user clicked last: the chat page or the terminal.
   Cmd+J gives the keyboard to the terminal it shows; the terminal header then says "typing and pasting go here".
   A click in the chat page gives the keyboard back to the chat, also the click that only brings the window to the front, which WebKit does not give to the page.
@@ -125,15 +141,16 @@ The GitHub CLI does not mark its downloads with the quarantine attribute, so mac
 
 CI publishes a release with `app/release.sh` after each merge to `main` that changes the app (see [Release the Zeus app](../README.md#release-the-zeus-app-maintainer)).
 It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in the private zeus repo.
-`install-app.sh` (through `install.sh --app-only`), step 12 of `install.sh`, and the app's self-update download the newest one.
+`install-app.sh` (through `install.sh --app-only`), step 15 of `install.sh`, and the app's self-update download the newest one.
 
 ## Debug
 
 `ZEUS_APP_TRACE=/path/to/file` adds setup events, update events, session states, and page loads to the end of that file.
-`ZEUS_APP_REPO=owner/name` replaces the repo of the app releases, as in `install.sh`.
+`ZEUS_APP_REPO=owner/name` (debug builds) replaces the repo of the app releases, as in `install.sh`.
 `ZEUS_APP_NO_UPDATE=1` turns off the update check at start.
 `ZEUS_APP_TEST_NO_CONFIRM=1` (debug builds) makes the new copy of an update not confirm, so that the old copy rolls back. That copy then starts nothing.
-`ZEUS_APP_INSTALLER=/path/to/install.sh` replaces the bundled installer.
+`ZEUS_APP_INSTALLER=/path/to/install.sh` (debug builds) replaces the bundled installer.
+`ZEUS_APP_ZEUS_COMMAND=/path/to/zeus` (debug builds) replaces `~/.local/bin/zeus`.
 `ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
 `ZEUS_APP_TEST_SPEECH=1` (debug builds) replaces Apple's speech recognition with a simulated recognizer that "hears" "Hello Zeus" (`denied`: no permission).
 `ZEUS_APP_TEST_SPEECH=whisper` (debug builds) also replaces the Whisper model with a simulated one (a file that starts with `ZEUS-SIMULATED-MODEL`) and the microphone with a simulated voice.
@@ -222,6 +239,7 @@ It also checks the `@@zeus` lines of step 7 in app mode.
 
 ```bash
 app/test/sim/run.sh [screenshot-folder]
+app/test/sim/run.sh --eu [screenshot-folder]   # EU mode only
 ```
 
 The test runs the app (behind the other apps) and the bundled installer with `HOME` set to an empty temporary folder, and with
@@ -231,7 +249,7 @@ real home folder, Claude Code, GitHub login, and app settings are not used (the 
 The paste checks use the pasteboard, then put back what the user had on it.
 It presses the app's buttons through the debug test actions and checks the trace:
 
-1. A new Mac: the check finds 12 steps to do; all 13 steps install, with the Anaconda license, the GitHub
+1. A new Mac: the check finds 15 steps to do; all 16 steps install (with the three EU steps: the Google Cloud CLI, `~/Code/zeus-eu`, and the EU plugins, without shell profile changes), with the Anaconda license, the GitHub
    one-time code, and the Claude login answered in the app; Start Zeus opens the chat page from `~/Code/zeus`
    with `--no-open` and the globe hand-over; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
    Cmd+T tabs start separate sessions and come in without the hand-over; a tab takes the name of the project picked in its chat,
@@ -267,6 +285,15 @@ It presses the app's buttons through the debug test actions and checks the trace
    apply at once; a damaged file gives the defaults without a crash; a symbol key shortcut with Shift works in a Zeus Editor window;
    Settings… calls `openSettings` in the chat page, also when it comes while a new tab still loads its chat page.
 5. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
+   An EU step that fails (the Google Cloud CLI download) is a warning: the later steps run, the setup completes,
+   and a switch to EU mode names the missing Google Cloud CLI. In Terminal use, the steps after a failed EU step also run.
+   An EU step that stops on a command without its own message (an EU config folder that can not be made) is also reported as failed.
+
+`--eu` runs the EU mode scenario (`app/test/sim/eu.sh`) with a simulated `gcloud`, EU `zeus`, and handoff `scripts/zeus.py`:
+the setup question when EU mode is not set up; a switch stops every Standard session before `zeus --eu --no-open` starts in `~/Code/zeus-eu`;
+the EU pill, the EU web data store, and the cost label; a 429 error question; a failed start that needs the Google sign-in,
+the sign-in in the terminal, and the retry; a 403 failure; the handover request that names the project of the tab, the handover with findings, an accepted finding, an edited summary, a removed file,
+the release, and `released.json`; the handoff commands run the Standard `scripts/zeus.py` and never a script or module of the EU workspace; the switch back resumes the Standard tabs and never an EU tab; and a restart in EU mode.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
 permission for the terminal only for the screenshots.

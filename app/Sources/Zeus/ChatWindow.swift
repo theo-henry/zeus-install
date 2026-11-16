@@ -51,13 +51,24 @@ final class ChatTab: NSObject {
     var onRunSetup: (() -> Void)?
     var onRetry: (() -> Void)?
     var onClosed: ((ChatTab) -> Void)?
+    /// The status page of an EU start asks for Standard mode ("Switch to Standard"): the app asks first.
+    var onSwitchToStandard: (() -> Void)?
+    /// EU mode: the chat ended with a Vertex error that the user can act on; the words to show.
+    var onEUError: ((ChatTab, String) -> Void)?
+
+    /// EU mode: the session cost of this tab's launch, from its chat page after each reply. Nil in Standard.
+    private(set) var cost: EUCost?
+    /// EU mode: the Google sign-in that runs in the terminal panel after a failed EU start.
+    private var signIn: GoogleSignIn?
+
+    var mode: ZeusMode { session.mode }
 
     init(session: ZeusSession, restore: TabRestore.Tab? = nil) {
         self.session = session
         self.restore = restore
         super.init()
 
-        webView = handler.makeWebView()
+        webView = handler.makeWebView(mode: session.mode)
         webView.configuration.userContentController.addUserScript(TabName.projectScript)
         // The window's Zeus background shows until the first page paints, not a gray frame.
         webView.setValue(false, forKey: "drawsBackground")
@@ -136,7 +147,13 @@ final class ChatTab: NSObject {
             shownURL = nil
             pageLoaded = false
             settingsWanted = false
-            webView.loadHTMLString(StatusPage.failed(message: message, log: session.log.text), baseURL: nil)
+            if session.mode == .eu {
+                let failure = EUStartFailure(log: session.log, exitCode: session.exitCode)
+                Trace.log("eu start failed: \(session.pid) exit=\(session.exitCode.map(String.init) ?? "-") sign-in=\(failure.needsSignIn) \(failure.message)")
+                webView.loadHTMLString(StatusPage.euFailed(failure, note: signInNote, log: session.log.text), baseURL: nil)
+            } else {
+                webView.loadHTMLString(StatusPage.failed(message: message, log: session.log.text), baseURL: nil)
+            }
             if let loader { dismiss(loader, over: 0.25) }
             loader = nil
         case .ended:
@@ -236,6 +253,25 @@ final class ChatTab: NSObject {
             return
         }
         guard let message = body as? String else { return }
+        // EU mode (zeus-editor src/eu/meter.js): the session cost after each reply, and a Vertex error that the user can
+        // act on. A Standard chat never shows a cost, also when a page sends one.
+        if message.hasPrefix("cost:") {
+            guard session.mode == .eu, let cost = EUCost(json: String(message.dropFirst(5))) else { return }
+            self.cost = cost
+            Trace.log("eu cost: \(session.pid) session=\(String(format: "%.6f", cost.sessionTotal)) chat=\(String(format: "%.6f", cost.chatTotal)) calls=\(cost.calls) unpriced=\(cost.unpricedCalls)")
+            host?.tabCostChanged(self)
+            return
+        }
+        if message.hasPrefix("eu-error:") {
+            guard session.mode == .eu, let data = message.dropFirst(9).data(using: .utf8),
+                  let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let status = (object["status"] as? NSNumber)?.intValue else { return }
+            let model = object["model"] as? String ?? "?"
+            let words = VertexError.message(status: status, model: model)
+            Trace.log("eu error: \(session.pid) \(status) \(model)")
+            onEUError?(self, words)
+            return
+        }
         switch message {
         case "chat-ready":
             // After a reload of the page there is no loading screen: the page comes in at once.
@@ -246,6 +282,8 @@ final class ChatTab: NSObject {
             }
         case "retry": onRetry?()
         case "setup": onRunSetup?()
+        case "eu-sign-in": startSignIn()
+        case "switch-standard": onSwitchToStandard?()
         case "copy-log":
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(session.log.text, forType: .string)
@@ -268,7 +306,7 @@ final class ChatTab: NSObject {
     /// The tab as it is now, for the new copy of the app: the Claude Code session and the terminal's unsent text
     /// from the launcher, the unsent text of the message box from the page.
     func snapshot(completion: @escaping (TabRestore.Tab) -> Void) {
-        var tab = TabRestore.Tab(sessionID: nil, project: tabName.project, customName: tabName.custom, draft: nil,
+        var tab = TabRestore.Tab(mode: session.mode, sessionID: nil, project: tabName.project, customName: tabName.custom, draft: nil,
                                  terminalDraft: nil, terminalVisible: !terminal.webView.isHidden,
                                  selected: host?.selectedTab === self)
         // A tab that has not shown its chat yet keeps what it was to open again.
@@ -278,12 +316,12 @@ final class ChatTab: NSObject {
             tab.terminalDraft = restore.terminalDraft
         }
         let group = DispatchGroup()
-        let launchID = session.launchID, chatURL = session.chatURL
+        let launchID = session.launchID, chatURL = session.chatURL, mode = session.mode
         var launcherState: [String: Any]?
         if chatURL != nil {
             group.enter()
             DispatchQueue.global(qos: .userInitiated).async {
-                if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: chatURL) {
+                if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: chatURL, mode: mode) {
                     launcherState = LaunchControl.request(endpoint, ["op": "state"], timeout: 3)
                 }
                 group.leave()
@@ -323,10 +361,10 @@ final class ChatTab: NSObject {
                 return
             }
             guard let self, reason != nil else { DispatchQueue.main.async { completion(false) }; return }
-            let launchID = self.session.launchID, chatURL = self.session.chatURL
+            let launchID = self.session.launchID, chatURL = self.session.chatURL, mode = self.session.mode
             DispatchQueue.global(qos: .userInitiated).async {
                 var busy = false
-                if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: chatURL),
+                if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: chatURL, mode: mode),
                    let state = LaunchControl.request(endpoint, ["op": "state"], timeout: 3) {
                     let status = state["status"] as? String
                     busy = status == "busy" || status == "waiting" || state["restarting"] as? Bool == true
@@ -345,12 +383,12 @@ final class ChatTab: NSObject {
     /// unsent text back when Claude Code is ready for it.
     private func resumeSession(url: URL) {
         guard let restore else { return }
-        let launchID = session.launchID, pid = session.pid
+        let launchID = session.launchID, pid = session.pid, mode = session.mode
         let terminalDraft = restore.terminalDraft?.replacingOccurrences(of: "\r", with: "")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var resumed = false
             var ready = false
-            if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: url) {
+            if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: url, mode: mode) {
                 if let id = restore.sessionID {
                     resumed = LaunchControl.request(endpoint, ["op": "restart", "resume": id], timeout: 30) != nil
                 }
@@ -400,6 +438,75 @@ final class ChatTab: NSObject {
         webView.callAsyncJavaScript(script, arguments: ["draft": draft], in: nil, in: .page) { result in
             Trace.log("restore: \(pid) message box text back=\((try? result.get()) as? Bool ?? false)")
         }
+    }
+
+    // MARK: EU mode
+
+    /// The sign-in of EU mode ended: the page says so after a failure.
+    private var signInNote: String?
+
+    /// Runs the one-time Google sign-in of EU mode in the terminal panel, after an EU start that needs it.
+    /// When it completes, the tab starts EU mode again; it never starts Standard.
+    private func startSignIn() {
+        guard session.mode == .eu, signIn == nil else { return }
+        let profile = EUProfile.load()
+        guard let gcloud = GoogleCloud.gcloud() else {
+            signInNote = "Zeus could not find the Google Cloud CLI (gcloud). Run the Zeus setup."
+            render()
+            return
+        }
+        do {
+            let process = try GoogleSignIn(gcloud: gcloud, project: profile.vertexProject)
+            signIn = process
+            terminal.attach(process)
+            if terminal.webView.isHidden { toggleTerminal() }
+            Trace.log("eu sign-in: started \(process.terminalPID)")
+            process.onExit = { [weak self] code in
+                guard let self else { return }
+                Trace.log("eu sign-in: ended code=\(code)")
+                self.signIn = nil
+                if code == 0 {
+                    self.signInNote = nil
+                    self.onRetry?()
+                } else {
+                    self.signInNote = "The Google sign-in did not complete (exit code \(code)). See the terminal below (Cmd+J)."
+                    self.render()
+                }
+            }
+        } catch {
+            signInNote = "The Google sign-in did not start: \(error.localizedDescription)"
+            render()
+        }
+    }
+
+    /// EU handover: asks Zeus in this chat to write the handover summary of the chat's project (zeus references/eu-mode.md,
+    /// "Handover"), as a message that the user could also type. Calls back on the main queue with true when the
+    /// launcher took the message.
+    func askForHandoverSummary(completion: @escaping (Bool) -> Void) {
+        guard session.mode == .eu else { completion(false); return }
+        let launchID = session.launchID, chatURL = session.chatURL, mode = session.mode, pid = session.pid
+        let text = Self.handoverPrompt(project: tabName.project)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var sent = false
+            if let endpoint = LaunchControl.endpoint(launchID: launchID, chatURL: chatURL, mode: mode) {
+                sent = LaunchControl.request(endpoint, ["op": "send", "send_id": "zeus-app-handover-\(UUID().uuidString)", "text": text],
+                                             timeout: 15) != nil
+            }
+            DispatchQueue.main.async {
+                Trace.log("handover: summary asked in \(pid) sent=\(sent)")
+                completion(sent)
+            }
+        }
+    }
+
+    /// The request names the project that the chat page shows: a project picked in the page is not yet the project of
+    /// the Claude session until the next message, so "this chat's project" alone can be unknown to Zeus.
+    static func handoverPrompt(project: String?) -> String {
+        let named = project.flatMap { Handover.validProject($0) ? $0 : nil }
+        return "The user hands over the EU work of " + (named.map { "the project \($0)" } ?? "this chat's project") + " to Standard mode. "
+            + "Write the handover summary: run `python3 scripts/zeus.py handoff summary \(named ?? "<this chat's project>") --json`, "
+            + "fill each section of the file that it names without client data values, then save it with the command that it prints. "
+            + "Do nothing else. The user reviews and releases the handover in the Zeus app."
     }
 
     /// Settings… (Cmd+,): opens the settings pop-up of the chat page. A tab that still starts or loads its chat
@@ -649,6 +756,8 @@ final class ChatTab: NSObject {
         closePending = false
         closeGeneration += 1
         SpeechService.shared.cancel(in: webView, reason: "tab closed")
+        signIn?.stop()
+        signIn = nil
         terminal.detach()
         session.stop()
         session.onStateChange = nil
@@ -713,6 +822,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         SpeechService.shared.cancel(in: webView, reason: "window closed")
         EditorWindowController.open.removeAll { $0 === self }
+    }
+
+    /// A mode switch closes the Zeus Editor pages of the old mode.
+    static func closeAll() {
+        for controller in open { controller.window?.close() }
     }
 
     /// Speech to text stops when the page goes out of view: another tab of the window shows, or the window is minimized.

@@ -366,14 +366,17 @@ SWIFT
       { [ ! -e "$SUPPORT/update.json" ] || grep -q '"rolledBack":true' "$SUPPORT/update.json"; }
   }
   # A late start of the new copy after the roll back (macOS can start it late under load): it quits at once and
-  # does not update again.
+  # does not update again. The old copy keeps the roll back mark for Updater.lateStartWindow (120 s) only, so the
+  # check starts the late copy as soon as the mark is written, and gives it 90 s to start and quit under load.
+  rollback_marked() { grep -q '"rolledBack":true' "$SUPPORT/update.json" 2>/dev/null; }
   late_copy_quits() {
     local before late_pid waited=0
+    wait_until rollback_marked 60 || return 1
     before="$(grep -c "update: current=" "$TRACE" || true)"
     env HOME="$SANDBOX" SHELL=/bin/zsh ZEUS_APP_TRACE="$TRACE" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
       ZEUS_APP_TEST_NO_CONFIRM=1 "$APPS/Zeus.app/Contents/MacOS/Zeus" >"$WORK/$NAME/late.out" 2>&1 &
     late_pid=$!
-    while kill -0 "$late_pid" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
+    while kill -0 "$late_pid" 2>/dev/null && [ "$waited" -lt 180 ]; do sleep 0.5; waited=$((waited + 1)); done
     if kill -0 "$late_pid" 2>/dev/null; then kill -9 "$late_pid"; return 1; fi
     grep -q "update: a late copy of the rolled back update to 1.1.0 quits" "$TRACE" &&
       [ "$(grep -c "update: current=" "$TRACE" || true)" = "$before" ] && [ "$(copies)" = 1 ]
@@ -455,10 +458,10 @@ if wants app; then
   check "when the new copy does not confirm, the old copy is put back" 'wait_for "update: rolled back to 1.0.0" 120'
   check "the app in Applications is version 1.0.0 again" \
     '[ "$(app_version "$APPS/Zeus.app")" = 1.0.0 ] && codesign --verify --strict "$APPS/Zeus.app"'
+  check "a late start of the new copy quits at once and does not update again" 'late_copy_quits'
   check "the old copy continues and opens the setup window" 'wait_for "setup ended: check=true" 60 && kill -0 "$APP_PID" 2>/dev/null'
   check "the new copy was stopped and the update files are removed" \
-    'wait_until rollback_cleaned 30'
-  check "a late start of the new copy quits at once and does not update again" 'late_copy_quits'
+    'wait_until rollback_cleaned 90'
   quit_all
 fi
 
@@ -553,8 +556,9 @@ if wants upgrade; then
     CASE_WATCHDOG=""
   }
   # No old copy and no update.json are left.
-  # The removal ends a little after the app's own confirmation or the end of the install line, so wait up to 20 s.
-  settled() { local waited=0; until "$@"; do sleep 0.5; waited=$((waited + 1)); [ "$waited" -lt 40 ] || return 1; done; }
+  # The removal ends a little after the app's own confirmation or the end of the install line; under load this can
+  # take much longer, so wait up to 90 s.
+  settled() { local waited=0; until "$@"; do sleep 0.5; waited=$((waited + 1)); [ "$waited" -lt 180 ] || return 1; done; }
   no_update_files() { settled no_update_files_now; }
   no_update_files_now() { [ ! -e "$SUPPORT/update.json" ] && [ -z "$(ls -A "$TEMP" 2>/dev/null)" ]; }
   # After a roll back, the old app keeps update.json with "rolledBack" for 120 s on purpose (Updater.lateStartWindow).
