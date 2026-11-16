@@ -270,7 +270,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func makeTab(_ session: ZeusSession, restore: TabRestore.Tab? = nil) -> ChatTab {
         let tab = ChatTab(session: session, restore: restore)
-        tab.onClosed = { [weak self] closed in self?.chatTabs.removeAll { $0 === closed } }
+        tab.onClosed = { [weak self] closed in
+            guard let self else { return }
+            self.chatTabs.removeAll { $0 === closed }
+            if let handover = self.handover, handover.tab === closed { self.cancelHandover() }
+        }
         tab.onRetry = { [weak self, weak tab] in
             tab?.requestClose()
             self?.newChat(nil)
@@ -285,7 +289,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func makeChatWindow() -> ChatWindowController {
         let window = ChatWindowController()
-        window.onClosed = { [weak self] closed in self?.chatWindows.removeAll { $0 === closed } }
+        window.onClosed = { [weak self] closed in
+            guard let self else { return }
+            self.chatWindows.removeAll { $0 === closed }
+            if let handover = self.handover, let shown = handover.window, shown === closed.window { self.cancelHandover() }
+        }
         chatWindows.append(window)
         return window
     }
@@ -375,6 +383,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 }
             }
         }
+    }
+
+    /// The tab or window of the handover closed: no sheet, no switch, and the switch ends.
+    private func cancelHandover() {
+        handover?.cancel()
+        handover = nil
+        switching = false
     }
 
     /// Ends every chat of the old mode and starts one new chat in each chat window, in the new mode.
@@ -816,6 +831,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return !pinned
         case #selector(switchMode(_:)):
             menuItem.title = ZeusMode.current == .eu ? "Switch to Standard Mode" : "Switch to EU Mode"
+            menuItem.isHidden = !ModeSwitch.shows
             return !updating && !switching
         case #selector(reloadPage(_:)), #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualSize(_:)), #selector(openSettings(_:)):
             return keyWebView != nil

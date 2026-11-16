@@ -227,7 +227,11 @@ final class ProjectHandover: ObservableObject, Identifiable {
     var id: String { project }
     /// The project has EU work newer than its last release, but no handover summary: EU Claude writes it first.
     let needsSummary: Bool
-    @Published var built: HandoverCLI.Built?
+    @Published var built: HandoverCLI.Built? { didSet { files = built?.files ?? [] } }
+    /// The handover's files as they are now: those of the build, or those that the last mask returned.
+    var files: [HandoverCLI.File] = []
+    /// The groups that Zeus has masked already: a later Release sends only the others.
+    var appliedMasks: [FindingGroup] = []
     @Published var scan: HandoverCLI.Scan?
     @Published var groups: [FindingGroup] = []
     @Published var choices: [String: HandoverChoice] = [:]
@@ -278,8 +282,8 @@ final class HandoverFlow {
     static let title = "Handing off data securely"
     static let subtitle = "Removing and aggregating sensitive information"
 
-    private weak var tab: ChatTab?
-    private weak var window: NSWindow?
+    private(set) weak var tab: ChatTab?
+    private(set) weak var window: NSWindow?
     private var overlay: LoaderOverlay?
     private var completion: ((Outcome) -> Void)?
     private let queue = DispatchQueue(label: "io.github.theo-henry.zeus.handover", qos: .userInitiated)
@@ -319,6 +323,7 @@ final class HandoverFlow {
     func cancel() {
         guard !ended else { return }
         ended = true
+        Trace.log("handover: cancelled")
         sheet?.close()
         overlay?.remove(over: 0.1)
         overlay = nil
@@ -450,20 +455,27 @@ final class HandoverFlow {
         guard let model = sheet?.model, model.canRelease else { return }
         model.releasing = true
         model.error = nil
-        let work = projects.filter { $0.built != nil }.map { handover in
-            (handover, handover.choices.filter { $0.value == .mask }.map(\.key).sorted(),
-             Set(handover.choices.filter { $0.value == .keep }.map(\.key)))
+        let work = projects.filter { $0.built != nil && !model.released.contains($0.project) }.map { handover in
+            let applied = Set(handover.appliedMasks.map(\.id))
+            return (handover, handover.files, handover.appliedMasks,
+                    handover.groups.filter { handover.choices[$0.id] == .mask && !applied.contains($0.id) }.sorted { $0.id < $1.id },
+                    Set(handover.choices.filter { $0.value == .keep }.map(\.key)))
         }
         queue.async { [weak self] in
             var failure: String?
             var changed: [(ProjectHandover, HandoverCLI.Scan)] = []
+            var maskedNow: [(ProjectHandover, [HandoverCLI.File], [FindingGroup])] = []
             var released: [String] = []
-            for (handover, masked, kept) in work {
+            for (handover, current, applied, toMask, kept) in work {
                 guard let built = handover.built else { continue }
-                var files = built.files
-                if !masked.isEmpty {
-                    switch HandoverCLI.mask(built.id, groups: masked) {
-                    case let .success(after): files = after
+                var files = current
+                var masked = applied
+                if !toMask.isEmpty {
+                    switch HandoverCLI.mask(built.id, groups: toMask.map(\.id)) {
+                    case let .success(after):
+                        files = after
+                        masked += toMask
+                        maskedNow.append((handover, after, toMask))
                     case let .failure(error): failure = "\(handover.project): \(error.message)"
                     }
                 }
@@ -479,8 +491,7 @@ final class HandoverFlow {
                         continue
                     }
                     let record = HandoverRelease(project: handover.project, built: built, files: files,
-                                                 kept: handover.groups.filter { kept.contains($0.id) },
-                                                 masked: handover.groups.filter { masked.contains($0.id) })
+                                                 kept: handover.groups.filter { kept.contains($0.id) }, masked: masked)
                     do {
                         try record.write()
                         released.append(handover.project)
@@ -495,6 +506,10 @@ final class HandoverFlow {
                 guard let self, !self.ended else { return }
                 model.releasing = false
                 model.released += released
+                for (handover, files, groups) in maskedNow {
+                    handover.files = files
+                    handover.appliedMasks += groups
+                }
                 for (handover, scan) in changed { handover.update(scan: scan) }
                 if let failure {
                     Trace.log("handover: release failed: \(failure)")

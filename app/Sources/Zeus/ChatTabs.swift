@@ -404,9 +404,7 @@ final class TabStripView: NSView {
         let tab = controller?.selectedTab
         let cost = tab.flatMap { tab in Preferences.showCost(in: tab.session.mode) ? tab.cost : nil }
         let mode = ZeusMode.current
-        let showSwitch = mode == .eu
-            || (Preferences.showModeSwitch && FileManager.default.fileExists(atPath: ZeusMode.eu.workspace + "/scripts/zeus.py"))
-        modeBar.update(mode: mode, showSwitch: showSwitch, cost: cost, switching: (NSApp.delegate as? AppDelegate)?.isSwitching ?? false)
+        modeBar.update(mode: mode, showSwitch: ModeSwitch.shows, cost: cost, switching: (NSApp.delegate as? AppDelegate)?.isSwitching ?? false)
     }
 
     @objc private func newTab() {

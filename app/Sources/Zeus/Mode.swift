@@ -115,6 +115,11 @@ enum SHA256Hex {
 enum ModeSwitch {
     static let changed = Notification.Name("io.github.theo-henry.zeus.mode-changed")
     static func refresh() { NotificationCenter.default.post(name: changed, object: nil) }
+    /// In EU mode the switch always shows, so the way back is never hidden; in Standard, with an EU workspace and the developer setting on.
+    static var shows: Bool {
+        ZeusMode.current == .eu
+            || (Preferences.showModeSwitch && FileManager.default.fileExists(atPath: ZeusMode.eu.workspace + "/scripts/zeus.py"))
+    }
 }
 
 /// The cost of a session, as Zeus Editor counts it after each reply (zeus-editor docs/chat.md, "Session cost") and the chat page

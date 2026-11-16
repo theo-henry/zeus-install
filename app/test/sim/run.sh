@@ -840,6 +840,13 @@ act mode-standard
 check "the switch back runs the handover: build and scan in the EU workspace" \
   'wait_for "handover: pilot built 20261116T100000Z-abc123 files=2 findings=3 groups=2" 30 && grep -q "^build pilot" "$STATE/handover-calls" && grep -q "^scan 20261116T100000Z-abc123" "$STATE/handover-calls"'
 need "the handover sheet shows the two groups" 'wait_for "handover: sheet shown projects=1 groups=2" 20'
+act test-close-anyway
+check "closing the chat during the handover cancels it: no switch, and the switch ends" \
+  'wait_for "handover: cancelled" 10 && sleep 1 && ! grep -q "mode: now standard" "$TRACE" && ! grep -q "handover: outcome" "$TRACE"'
+act new-chat
+wait_count "state: running(" 3 30 >/dev/null && newest_page_loaded >/dev/null
+act mode-standard
+need "a new switch back runs the handover again" 'wait_count "handover: sheet shown projects=1 groups=2" 2 30'
 shot 14-handover-sheet
 act handover:release
 check "Release stays off while a group is undecided" 'wait_for "handover: release is disabled" 10 && ! grep -q "^mask" "$STATE/handover-calls"'
@@ -852,22 +859,28 @@ act handover:mask
 act handover:state
 check "with every group decided, Release turns on" 'wait_for "handover: sheet state undecided=0 release=on" 10'
 shot 15-handover-masked
+touch "$STATE/handover-fail-scan"
 act handover:release
-check "Release masks the masked groups, scans again, and releases" \
-  'wait_for "handover: released pilot 20261116T100000Z-abc123 files=2 kept=0 masked=2" 30 && grep -q "^mask 20261116T100000Z-abc123 --group gemail000000002 --group gliteral0000001" "$STATE/handover-calls"'
+check "a scan that fails after masking shows its error and leaves the sheet open" \
+  'wait_for "handover: release failed: pilot: simulated scan failure" 30 && ! grep -q "mode: now standard" "$TRACE"'
+act handover:release
+check "Release again masks nothing twice, scans again, and releases" \
+  'wait_for "handover: released pilot 20261116T100000Z-abc123 files=2 kept=0 masked=2" 30 && [ "$(grep -c "^mask" "$STATE/handover-calls")" -eq 1 ] && grep -q "^mask 20261116T100000Z-abc123 --group gemail000000002 --group gliteral0000001" "$STATE/handover-calls"'
 RELEASED="$SANDBOX/Code/zeus/clients/pilot/handoff/from-eu/20261116T100000Z-abc123"
 check "the released files are in the Standard workspace, masked, with released.json" \
   '[ -f "$RELEASED/summary.md" ] && grep -q "\[masked email #1\]" "$RELEASED/files/work/overview/query.sql" && ! grep -q "jane@example.com\|0000412" "$RELEASED/files/work/overview/query.sql" && grep -q "\"masked\"" "$RELEASED/released.json"'
 check "released.json holds groups and kinds, never a value" '! grep -q "0000412\|jane" "$RELEASED/released.json"'
+check "released.json records both masked groups" \
+  '[ "$(python3 -c "import json,sys; print(\",\".join(sorted(g[\"group\"] for g in json.load(open(sys.argv[1]))[\"masked\"])))" "$RELEASED/released.json")" = "gemail000000002,gliteral0000001" ]'
 check "the EU handover is closed" '[ -f "$EU_WS/clients/pilot/handoff/20261116T100000Z-abc123/released.json" ]'
-check "the app is in Standard mode with a new chat in ~/Code/zeus" 'wait_for "mode: now standard" 10 && wait_count "state: running(" 3 30 && sleep 1 && ! grep -q "\"--eu\"" "$STATE/zeus-started"'
+check "the app is in Standard mode with a new chat in ~/Code/zeus" 'wait_for "mode: now standard" 10 && wait_count "state: running(" 4 30 && sleep 1 && ! grep -q "\"--eu\"" "$STATE/zeus-started"'
 act mode-eu
 wait_for "mode: now eu" 10 >/dev/null
-wait_count "state: running(" 4 30 >/dev/null
+wait_count "state: running(" 5 30 >/dev/null
 act mode-standard
 check "with nothing new to hand over, the handover step still plays and says why, then Standard starts" \
   'wait_for "handover: no work: everything was handed over already" 20 && wait_count "mode: now standard" 2 10'
-wait_count "state: running(" 5 30 >/dev/null && newest_page_loaded >/dev/null && sleep 1
+wait_count "state: running(" 6 30 >/dev/null && newest_page_loaded >/dev/null && sleep 1
 STD_COST='{"mode":"standard","currency":"USD","session_total":0.42,"chat_total":0.31,"calls":7,"unpriced_calls":0,"prices_as_of":"2026-11-16"}'
 act "test-cost:$STD_COST"
 wait_for "cost: [0-9]* Session €0.40 · Chat total €0.30 mode=standard" 10 >/dev/null
@@ -881,7 +894,7 @@ check "with the developer setting on, Standard shows the session and the chat to
 shot 16-cost-standard
 act dev-setting:costStandard=off
 act mode-eu
-wait_count "state: running(" 6 30 >/dev/null && newest_page_loaded >/dev/null && sleep 1
+wait_count "state: running(" 7 30 >/dev/null && newest_page_loaded >/dev/null && sleep 1
 act "test-cost:${STD_COST/standard/eu}"
 wait_for "cost: [0-9]* .* mode=eu" 10 >/dev/null
 act test-cost-shown

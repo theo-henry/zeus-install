@@ -2,7 +2,9 @@
 """A simulated scripts/zeus.py of the EU workspace: only `handoff pending|build|scan|mask --json`, as zeus references/eu-mode.md describes.
 
 The handover of project pilot has one SQL file with a quoted literal in two places (one group) and an e-mail address (a blocking group).
-Masking replaces each place with [masked <kind> #<n>], as the real `handoff mask` does. Each call is recorded in $ZEUS_SIM_STATE/handover-calls.
+Masking replaces each place with [masked <kind> #<n>], as the real `handoff mask` does, and like it refuses a group that it no longer
+finds and a released handover. Each call is recorded in $ZEUS_SIM_STATE/handover-calls.
+With $ZEUS_SIM_STATE/handover-fail-scan present, the next scan fails once (the file is removed).
 """
 import hashlib
 import json
@@ -47,6 +49,9 @@ if command == "build":
     answer({"id": HANDOVER, "dir": str(folder), "files": files(), "summary_path": "summary.md",
             "skipped": [{"path": "out/rows.csv", "reason": "files in out/ never cross"}]})
 if command == "scan":
+    if (state / "handover-fail-scan").exists():
+        (state / "handover-fail-scan").unlink()
+        answer({"status": "error", "error": "simulated scan failure"}, 4)
     text = (folder / SQL).read_text()
     findings = []
     for number, line in enumerate(text.splitlines(), 1):
@@ -57,7 +62,12 @@ if command == "scan":
     answer({"id": HANDOVER, "clean": not findings, "findings": findings, "note": "simulated"}, 3 if findings else 0)
 if command == "mask":
     groups = [args[i + 1] for i, a in enumerate(args) if a == "--group"]
+    if (folder / "released.json").exists():
+        answer({"status": "error", "error": f"Handover {HANDOVER} is released."}, 2)
     text = (folder / SQL).read_text()
+    for group in groups:
+        if group not in PLACES or PLACES[group][1] not in text:
+            answer({"status": "error", "error": f"No finding of handover {HANDOVER} in group {group}."}, 2)
     for number, group in enumerate(groups, 1):
         kind, value, _ = PLACES[group]
         text = text.replace(value, f"[masked {kind} #{number}]")
