@@ -384,10 +384,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             let frame = NSRectFromString(saved.frame)
             if frame.width > 0, frame.height > 0 { host.window?.setFrame(frame, display: false) }
             var selected: ChatTab?
-            for state in saved.tabs {
+            for var state in saved.tabs {
+                if state.host == nil { state.sessionID = nil }
                 do {
-                    let session = try SessionManager.shared.start()
-                    Trace.log("session \(session.pid) started (restore)")
+                    let session = try SessionManager.shared.start(host: state.host ?? .apolix)
+                    Trace.log("session \(session.pid) started on \(session.host.rawValue) (restore)")
                     let tab = makeTab(session, restore: state)
                     host.add(tab)
                     if state.selected { selected = tab }

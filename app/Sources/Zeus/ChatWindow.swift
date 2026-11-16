@@ -65,7 +65,7 @@ final class ChatTab: NSObject {
     private var closed = false
 
     /// The tab as it was before an update from the settings, which this tab opens again (`TabRestore`).
-    private let restore: TabRestore.Tab?
+    private var restore: TabRestore.Tab?
     private enum Resume { case none, waiting, running, done }
     /// The Claude Code session of `restore` resumes before the chat page loads.
     private var resume = Resume.none
@@ -408,12 +408,12 @@ final class ChatTab: NSObject {
 
     /// Stops this tab's session and starts a new one on `host` in its place. Also used for "Try again".
     func replaceSession(host target: ClaudeHost) {
-        if target != session.host { Preferences.lastHost = target }
         // Start first: when the new session cannot start, the tab keeps the one it has.
         guard let next = startSession?(target) else {
             host?.tabStateChanged(self)
             return
         }
+        if target != session.host { Preferences.lastHost = target }
         // The loading screen covers the page before the old session stops, and the old page goes out of sight
         // at once: the loading screen draws only after its own page has loaded.
         pageHidden = true
@@ -434,6 +434,8 @@ final class ChatTab: NSObject {
         SpeechService.shared.cancel(in: webView, reason: "session replaced")
         generation += 1
         session = next
+        restore = nil
+        resume = .none
         cost = nil
         shownURL = nil
         closeReason = nil
@@ -492,8 +494,8 @@ final class ChatTab: NSObject {
     /// The tab as it is now, for the new copy of the app: the Claude Code session and the terminal's unsent text
     /// from the launcher, the unsent text of the message box from the page.
     func snapshot(completion: @escaping (TabRestore.Tab) -> Void) {
-        var tab = TabRestore.Tab(sessionID: nil, project: tabName.project, customName: tabName.custom, draft: nil,
-                                 terminalDraft: nil, terminalVisible: !terminal.webView.isHidden,
+        var tab = TabRestore.Tab(sessionID: nil, host: session.host, project: tabName.project, customName: tabName.custom,
+                                 draft: nil, terminalDraft: nil, terminalVisible: !terminal.webView.isHidden,
                                  selected: host?.selectedTab === self)
         // A tab that has not shown its chat yet keeps what it was to open again.
         if shownURL == nil, let restore {
@@ -569,7 +571,7 @@ final class ChatTab: NSObject {
     /// unsent text back when Claude Code is ready for it.
     private func resumeSession(url: URL) {
         guard let restore else { return }
-        let launchID = session.launchID, pid = session.pid
+        let started = session, launchID = session.launchID, pid = session.pid
         let terminalDraft = restore.terminalDraft?.replacingOccurrences(of: "\r", with: "")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var resumed = false
@@ -590,7 +592,7 @@ final class ChatTab: NSObject {
             }
             DispatchQueue.main.async { [weak self] in
                 Trace.log("restore: \(pid) resume=\(restore.sessionID ?? "-") \(resumed ? "ok" : "not resumed")")
-                guard let self, !self.closed else { return }
+                guard let self, !self.closed, self.session === started else { return }
                 if ready, let terminalDraft {
                     // A text of several lines goes in as a paste, so that its line ends do not send it.
                     self.session.write(terminalDraft.contains("\n") ? "\u{1b}[200~\(terminalDraft)\u{1b}[201~" : terminalDraft)

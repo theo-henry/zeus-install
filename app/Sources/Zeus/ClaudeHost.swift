@@ -2,7 +2,7 @@ import Foundation
 
 /// Where the Claude Code of a session sends its requests. Claude Code cannot change this while it
 /// runs, so a session has one host from its start to its end.
-enum ClaudeHost: String {
+enum ClaudeHost: String, Codable {
     /// The Claude Code subscription login, as before the host switch existed.
     case apolix
     /// Claude on Google Cloud Vertex AI in the EU, with the variables of the `claude-eu` shell alias.
@@ -227,9 +227,12 @@ enum Shell {
         var outputBytes = 0
         var errorData = Data()
         let lock = NSLock()
+        var openPipes = 2
         output.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil }
             lock.lock()
+            if data.isEmpty { openPipes -= 1 }
             outputBytes += data.count
             if keepOutput { outputData.append(data) }
             lock.unlock()
@@ -237,7 +240,9 @@ enum Shell {
         var partial = Data()
         errors.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil }
             lock.lock()
+            if data.isEmpty { openPipes -= 1 }
             if errorData.count < 16000 { errorData.append(data) }
             var lines: [String] = []
             if onErrorLine != nil {
@@ -261,7 +266,15 @@ enum Shell {
             process.terminate()
             return nil
         }
-        usleep(50000) // The last output arrives a moment after the exit.
+        // The last output arrives after the exit; a child that keeps the pipes open does not hold the answer long.
+        let drained = Date().addingTimeInterval(2)
+        while Date() < drained {
+            lock.lock()
+            let open = openPipes
+            lock.unlock()
+            if open == 0 { break }
+            usleep(5000)
+        }
         lock.lock()
         defer { lock.unlock() }
         return Run(status: process.terminationStatus, output: String(decoding: outputData, as: UTF8.self),

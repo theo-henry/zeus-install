@@ -891,8 +891,8 @@ echo "ya29.simulated-token-that-the-app-must-never-keep"
 GCLOUD
   chmod +x "$SANDBOX/.local/bin/zeus" "$WORK/$1/tools/gcloud"
   cp "$SIM_DIR/payload/handoff-zeus.py" "$SANDBOX/Code/zeus/scripts/zeus.py"
-  defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
-  defaults write "$BUNDLE_ID" setupDone -bool true
+  defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
+  defaults write "$PREFS_DOMAIN" setupDone -bool true
   GCLOUD_SIM="$WORK/$1/tools/gcloud"
 }
 
@@ -988,7 +988,7 @@ shot_frame 24-eu-refused
 rm -f "$STATE/gcloud-fail"
 act "test-retry"
 check "Try again starts on EU again after the sign-in" 'wait_count "EU preflight passed" 3 30 && wait_count "state: running(" 6 30 && start_has 6 "\"host\":\"eu\""'
-check "the app remembers EU for the next tab" '[ "$(defaults read "$BUNDLE_ID" lastHost 2>/dev/null)" = eu ]'
+check "the app remembers EU for the next tab" '[ "$(defaults read "$PREFS_DOMAIN" lastHost 2>/dev/null)" = eu ]'
 stop_app
 check "every session stopped when the app quit" '[ "$(stops)" = 6 ]'
 fi
@@ -997,8 +997,8 @@ if runs 7; then
 echo
 echo "Scenario 7: the EU handoff when a tab switches from EU to Apolix"
 prepare_mac handoff
-defaults write "$BUNDLE_ID" developerHostSwitch -bool true
-defaults write "$BUNDLE_ID" lastHost eu
+defaults write "$PREFS_DOMAIN" developerHostSwitch -bool true
+defaults write "$PREFS_DOMAIN" lastHost eu
 echo clean >"$STATE/handoff-mode"
 launch_app handoff ZEUS_APP_GCLOUD="$GCLOUD_SIM" ZEUS_APP_TEST_NO_SWITCH_QUESTION=1 ZEUS_APP_TEST_NO_OPEN=1 ZEUS_SIM_HANDOFF_DELAY=2.5
 check "the tab starts on EU" 'wait_count "state: running(" 1 30 && start_has 1 "\"host\":\"eu\""'

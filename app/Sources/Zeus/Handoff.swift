@@ -419,11 +419,13 @@ final class HandoffFlow {
         let scans = self.scans
         queue.async { [weak self] in
             var failure: HandoffCLI.Failure?
+            var released: [String] = []
             for scan in scans {
                 if case let .failure(error) = HandoffCLI.release(scan) {
                     failure = HandoffCLI.Failure(message: "\(scan.project.name): \(error.message)", fix: error.fix)
                     break
                 }
+                released.append(scan.project.name)
                 Trace.log("handoff: released \(scan.project.id)")
             }
             DispatchQueue.main.async {
@@ -432,6 +434,7 @@ final class HandoffFlow {
                 if let failure {
                     Trace.log("handoff: release failed: \(failure.message)")
                     model.error = failure
+                    model.released = released
                     model.releaseFailed = true
                 } else {
                     self.finish(.switchNow)
@@ -477,6 +480,8 @@ final class HandoffSummaryModel: ObservableObject {
     @Published var error: HandoffCLI.Failure?
     @Published var releasing = false
     @Published var releaseFailed = false
+    /// The projects released before a release failed.
+    @Published var released: [String] = []
     var onRelease: (() -> Void)?
     var onReview: (() -> Void)?
     var onContinue: (() -> Void)?
@@ -492,15 +497,16 @@ final class HandoffSummaryModel: ObservableObject {
     var hasReview: Bool { scans.contains { $0.reviewPage != nil } }
 
     var title: String {
-        if error != nil && scans.isEmpty { return "The Secure Handoff did not complete" }
         if releaseFailed { return "The release did not complete" }
+        if error != nil { return "The Secure Handoff did not complete" }
         if findings > 0 || !scans.allSatisfy(\.ok) { return "The scan found sensitive values" }
         return "Secure Handoff ready"
     }
 
     var subtitle: String {
-        if error != nil && scans.isEmpty || releaseFailed {
-            return "Nothing was released. The EU session still runs."
+        if error != nil {
+            if released.isEmpty { return "Nothing was released. The EU session still runs." }
+            return "Released: \(released.joined(separator: ", ")). Nothing else was released. The EU session still runs."
         }
         if findings > 0 || !scans.allSatisfy(\.ok) {
             return "Release stays off until the review page clears every finding. The EU session still runs."
