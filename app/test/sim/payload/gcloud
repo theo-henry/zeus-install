@@ -1,0 +1,24 @@
+#!/bin/bash
+# Simulated Google Cloud CLI (the installer puts it in ~/google-cloud-sdk/bin). Each call is logged in
+# $ZEUS_SIM_STATE/gcloud.log. "auth application-default login" writes the credentials file and ends the simulated
+# EU sign-in problem ($ZEUS_SIM_STATE/eu-preflight), as a real sign-in does. Nothing reaches Google.
+S="$ZEUS_SIM_STATE"
+printf '%s\n' "$*" >>"$S/gcloud.log"
+case "$*" in
+  "--version") echo "Google Cloud SDK 593.0.0 (simulated)" ;;
+  config\ set*) exit 0 ;;
+  "auth application-default login")
+    echo "Your browser has been opened to visit:"
+    echo "    https://accounts.google.com/o/oauth2/auth?simulated=1"
+    sleep 1
+    if [ -f "$S/eu-sign-in-fails" ]; then echo "ERROR: (gcloud.auth.application-default.login) simulated failure" >&2; exit 1; fi
+    mkdir -p "$HOME/.config/gcloud"
+    printf '{"type": "authorized_user", "simulated": true}\n' >"$HOME/.config/gcloud/application_default_credentials.json"
+    rm -f "$S/eu-preflight"
+    echo "Credentials saved to file: [$HOME/.config/gcloud/application_default_credentials.json]"
+    ;;
+  "auth application-default set-quota-project "*)
+    echo "Quota project \"${*##* }\" was added to ADC (simulated)."
+    ;;
+  *) echo "gcloud (simulated): $*" ;;
+esac

@@ -27,6 +27,15 @@ case "$url" in
     write <"$work/node.tar.gz"
     rm -rf "$work"
     ;;
+  *google-cloud-cli-*-darwin-*.tar.gz)
+    work="$(mktemp -d)"
+    mkdir -p "$work/google-cloud-sdk/bin"
+    cp "$P/gcloud" "$work/google-cloud-sdk/bin/gcloud"
+    chmod +x "$work/google-cloud-sdk/bin/gcloud"
+    tar -czf "$work/gcloud.tar.gz" -C "$work" google-cloud-sdk
+    write <"$work/gcloud.tar.gz"
+    rm -rf "$work"
+    ;;
   https://claude.ai/install.sh)
     printf '#!/bin/bash\n# Simulated Claude Code installer.\nmkdir -p "$HOME/.local/bin"\ncp "%s/claude" "$HOME/.local/bin/claude"\nchmod +x "$HOME/.local/bin/claude"\necho "Claude Code installed (simulated)."\n' "$P" | write
     ;;

@@ -6,6 +6,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     weak var app: AppDelegate?
 
     func update() {
+        defer { updateIcon() }
         if Preferences.showMenuBar, item == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.button?.image = StatusMenu.icon()
@@ -20,6 +21,16 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         }
     }
 
+    /// In EU mode the menu bar item shows "EU" next to its icon, like the EU pill of the windows.
+    private func updateIcon() {
+        guard let button = item?.button else { return }
+        let eu = ZeusMode.current == .eu
+        item?.length = eu ? NSStatusItem.variableLength : NSStatusItem.squareLength
+        button.title = eu ? "EU" : ""
+        button.imagePosition = eu ? .imageLeading : .imageOnly
+        button.toolTip = eu ? "Zeus, EU mode" : "Zeus"
+    }
+
     private static func icon() -> NSImage? {
         let image = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: "Zeus")
         image?.isTemplate = true
@@ -29,6 +40,21 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let sessions = SessionManager.shared.sessions.filter(\.isAlive)
+        let mode = ZeusMode.current
+        let header = menu.addItem(withTitle: mode == .eu ? "Mode: EU (Google Vertex AI, EU)" : "Mode: Standard", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        let switching = app?.isSwitchingMode ?? false
+        for choice in ZeusMode.allCases {
+            let item = menu.addItem(withTitle: "\(choice.title) Mode", action: #selector(chooseMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = choice.rawValue
+            item.state = choice == mode ? .on : .off
+            item.isEnabled = !switching
+        }
+        if mode == .eu {
+            menu.addItem(withTitle: "Hand Over EU Work…", action: #selector(handover), keyEquivalent: "").target = self
+        }
+        menu.addItem(.separator())
         menu.addItem(withTitle: "New Zeus Chat", action: #selector(newChat), keyEquivalent: "").target = self
         menu.addItem(.separator())
         if sessions.isEmpty {
@@ -63,6 +89,12 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     }
 
     @objc private func newChat() { app?.newChat(nil) }
+    @objc private func handover() { app?.showHandover(nil) }
+
+    @objc private func chooseMode(_ sender: NSMenuItem) {
+        guard let mode = (sender.representedObject as? String).flatMap(ZeusMode.init(rawValue:)) else { return }
+        app?.requestMode(mode)
+    }
     @objc private func setup() { app?.showSetup(nil) }
     @objc private func stopAll() { SessionManager.shared.sessions.forEach { $0.stop() } }
 

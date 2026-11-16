@@ -6,8 +6,9 @@
 # home folder, Claude Code, and GitHub login are not used. The test presses the app's buttons through
 # its debug test actions (active only with ZEUS_APP_TRACE) and checks the trace.
 #
-# Usage: app/test/sim/run.sh [screenshot-folder]
+# Usage: app/test/sim/run.sh [--eu] [screenshot-folder]
 # With a folder, it saves a screenshot of each app window state there (the app's windows only).
+# --eu runs only the EU mode scenario (app/test/run-all.sh runs both parts, each with its own time limit).
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
 # shellcheck disable=SC2016,SC2034
@@ -16,6 +17,8 @@ set -euo pipefail
 SIM_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SIM_DIR/../.." && pwd)"
 REPO_DIR="$(dirname "$APP_DIR")"
+PART=main
+if [ "${1:-}" = "--eu" ]; then PART=eu; shift; fi
 SHOTS="${1:-}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
@@ -213,12 +216,25 @@ stop_app() {
   if [ -n "$SHOTS" ]; then cp "$TRACE" "$SHOTS/trace-$(basename "$(dirname "$TRACE")").log"; fi
 }
 
+# shellcheck source=app/test/sim/eu.sh
+source "$SIM_DIR/eu.sh"
+if [ "$PART" = eu ]; then
+  eu_scenario
+  echo
+  if [ "$FAILURES" -eq 0 ]; then
+    printf '\033[32mAll checks passed.\033[0m\n'
+    exit 0
+  fi
+  printf '\033[31m%s checks failed.\033[0m\n' "$FAILURES"
+  exit 1
+fi
+
 echo
 echo "Scenario 1: a new Mac, full setup, chat, close"
 start_app new ZEUS_SIM_START_DELAY=2500
 need "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
-need "the check finds 12 steps to do on a new Mac (got $todo)" '[ "$todo" = 12 ]'
+need "the check finds 15 steps to do on a new Mac (got $todo)" '[ "$todo" = 15 ]'
 shot 1-check
 
 act setup-install
@@ -245,9 +261,18 @@ check "step 13: the Claude login starts" 'wait_for "setup event: running 13 " 10
 sleep 1.5
 shot 4-claude-login
 check "step 13: the Claude login completes" 'wait_for "setup event: done 13 " 30'
+check "step 14: the Google Cloud CLI installs in ~/google-cloud-sdk" 'wait_for "setup event: done 14 " 30 && [ -x "$SANDBOX/google-cloud-sdk/bin/gcloud" ]'
+check "step 15: the EU workspace is cloned in ~/Code/zeus-eu" 'wait_for "setup event: done 15 " 30 && [ -d "$SANDBOX/Code/zeus-eu/.git" ]'
+check "step 16: the Zeus plugins install in the EU Claude Code folder" 'wait_for "setup event: done 16 " 30 && grep -q "zeus-editor@zeus-editor" "$SANDBOX/.zeus/eu/claude/plugins/installed_plugins.json" && grep -q "celonis-pql@celonis-pql" "$SANDBOX/.zeus/eu/claude/plugins/installed_plugins.json"'
+check "the EU plugins are installed apart from the Standard plugins" '[ "$(ls "$STATE" | grep -c "^eu-plugin-")" = 4 ] && [ "$(ls "$STATE" | grep -c "^plugin-")" = 4 ]'
+check "EU Claude Code starts without the first-start questions in the EU workspace" \
+  'python3 -c "import json,os,sys; c=json.load(open(sys.argv[1])); p=c[\"projects\"][os.path.realpath(sys.argv[2])]; sys.exit(0 if c[\"hasCompletedOnboarding\"] and p[\"hasTrustDialogAccepted\"] and p[\"hasClaudeMdExternalIncludesWarningShown\"] and not p[\"hasClaudeMdExternalIncludesApproved\"] else 1)" "$SANDBOX/.zeus/eu/claude/.claude.json" "$SANDBOX/Code/zeus-eu"'
+check "the EU setup changes no shell profile" '! grep -qs "google-cloud-sdk\|zeus-eu\|CLOUDSDK\|CLAUDE_CONFIG_DIR\|\.zeus/eu" "$SANDBOX/.zprofile" "$SANDBOX/.zshrc" "$SANDBOX/.bash_profile" "$SANDBOX/.bashrc"'
 check "the setup finishes" 'wait_for "setup ended: check=false code=0" 20'
 shot 5-finished
 check "the installer wrote only into the simulated home folder" '[ -x "$SANDBOX/.local/bin/zeus" ] && [ -d "$SANDBOX/Code/zeus/.git" ]'
+check "install.sh --check then finds the EU steps done" \
+  '[ "$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check 2>&1 | grep -c "@@zeus state 1[456] ok")" = 3 ]'
 
 act setup-start
 if [ -n "$SHOTS" ]; then

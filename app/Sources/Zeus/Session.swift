@@ -1,8 +1,17 @@
 import AppKit
 import Foundation
 
+/// The output of a hidden terminal, which the terminal panel of a tab shows and types into.
+protocol TerminalSource: AnyObject {
+    var onOutput: ((Data) -> Void)? { get set }
+    /// The process of the terminal, for the trace.
+    var terminalPID: pid_t { get }
+    func write(_ text: String)
+    func resize(rows: UInt16, cols: UInt16)
+}
+
 /// One Zeus chat: the `zeus` command in a hidden terminal, and its chat page.
-final class ZeusSession {
+final class ZeusSession: TerminalSource {
     enum State: Equatable {
         case starting
         case running(URL)
@@ -11,11 +20,15 @@ final class ZeusSession {
     }
 
     let id = UUID()
+    /// The mode of the session: `zeus` (Standard) or `zeus --eu` (EU). It never changes.
+    let mode: ZeusMode
     let pid: pid_t
     let startedAt: Date
     let log = TerminalLog()
     private let process: PTYProcess
     private var stopRequested = false
+    /// The exit code of `zeus`, when it has stopped.
+    private(set) var exitCode: Int32?
 
     private(set) var state: State = .starting {
         didSet {
@@ -54,21 +67,28 @@ final class ZeusSession {
 
     var isAlive: Bool { state == .starting || chatURL != nil }
 
-    /// Starts `zeus` in ~/Code/zeus. `--no-open` stops it from opening the browser; the app shows the page.
-    init() throws {
+    var terminalPID: pid_t { pid }
+
+    /// Starts `zeus` in ~/Code/zeus, or `zeus --eu` in the EU workspace. `--no-open` stops it from opening the browser;
+    /// the app shows the page. `zeus --eu` builds the environment of EU Claude Code from the EU profile only and checks
+    /// the Google Cloud access first (zeus-editor src/eu/preflight.js); a failed check stops it with exit code 3.
+    init(mode: ZeusMode = .standard) throws {
+        self.mode = mode
         startedAt = Date()
         let env = ShellEnvironment.make()
         guard FileManager.default.isExecutableFile(atPath: Paths.zeusCommand) else {
             throw NSError(domain: "Zeus", code: 1, userInfo: [NSLocalizedDescriptionKey:
                 "The zeus command is not installed (\(Paths.zeusCommand)). Run the Zeus setup."])
         }
+        let workspace = Paths.workspace(for: mode)
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: Paths.zeusDir, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw NSError(domain: "Zeus", code: 2, userInfo: [NSLocalizedDescriptionKey:
-                "The Zeus workspace is not in ~/Code/zeus. Run the Zeus setup."])
+        guard FileManager.default.fileExists(atPath: workspace, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw NSError(domain: "Zeus", code: 2, userInfo: [NSLocalizedDescriptionKey: mode == .eu
+                ? "The EU workspace is not in \(EUSetup.display(workspace)). Run the Zeus setup."
+                : "The Zeus workspace is not in ~/Code/zeus. Run the Zeus setup."])
         }
-        let process = try PTYProcess(executable: Paths.zeusCommand, arguments: ["--no-open"],
-                                     environment: env, directory: Paths.zeusDir)
+        let process = try PTYProcess(executable: Paths.zeusCommand, arguments: (mode == .eu ? ["--eu"] : []) + ["--no-open"],
+                                     environment: env, directory: workspace)
         self.process = process
         pid = process.pid
         #if DEBUG
@@ -100,6 +120,7 @@ final class ZeusSession {
     }
 
     private func processEnded(code: Int32) {
+        exitCode = code
         if stopRequested || chatURL != nil {
             state = .ended
             return
@@ -133,8 +154,8 @@ final class SessionManager {
     var onChange: (() -> Void)?
 
     @discardableResult
-    func start() throws -> ZeusSession {
-        let session = try ZeusSession()
+    func start(mode: ZeusMode = ZeusMode.current) throws -> ZeusSession {
+        let session = try ZeusSession(mode: mode)
         add(session)
         return session
     }

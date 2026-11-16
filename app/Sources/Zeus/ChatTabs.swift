@@ -156,6 +156,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         for other in tabs { other.view.isHidden = other !== tab }
         window?.title = tab.tabName.title
         strip.reload()
+        strip.modeBar.update(cost: tab.cost)
         WebViewHandler.matchTitleBar(of: window, to: tab.webView)
         if changed {
             window?.makeFirstResponder(tab.focusView)
@@ -204,6 +205,20 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
             strip.reload()
         }
     }
+
+    /// EU mode: a tab has a new session cost. The title bar shows the cost of the selected tab.
+    func tabCostChanged(_ tab: ChatTab) {
+        guard tab === selectedTab else { return }
+        strip.modeBar.update(cost: tab.cost)
+    }
+
+    /// The app changed its mode, or a switch started or ended.
+    func modeChanged() { strip.modeBar.update(cost: selectedTab?.cost) }
+
+    #if DEBUG
+    /// Test action: what the mode bar of this window shows.
+    var modeBarState: String { strip.modeBar.state }
+    #endif
 
     #if DEBUG
     /// Test actions: open the rename field of a tab, and save a name in it as Return does.
@@ -280,6 +295,8 @@ final class TabStripView: NSView {
     private weak var controller: ChatWindowController?
     private let stack = NSStackView()
     private let addButton = HoverButton(symbol: "plus", label: "New Tab")
+    /// The mode of the app (`Standard | EU`), the EU pill, and the EU session cost.
+    let modeBar = ModeBarView()
     private var leadingConstraint: NSLayoutConstraint!
 
     init(controller: ChatWindowController) {
@@ -297,13 +314,17 @@ final class TabStripView: NSView {
         addButton.target = self
         addButton.action = #selector(newTab)
         addSubview(addButton)
+        modeBar.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(modeBar)
         leadingConstraint = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 80)
         NSLayoutConstraint.activate([
             leadingConstraint,
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             addButton.leadingAnchor.constraint(equalTo: stack.trailingAnchor, constant: 4),
             addButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            addButton.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+            addButton.trailingAnchor.constraint(lessThanOrEqualTo: modeBar.leadingAnchor, constant: -12),
+            modeBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            modeBar.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(windowStyleChanged), name: name, object: nil)
@@ -381,7 +402,7 @@ final class TabStripView: NSView {
 }
 
 /// The Zeus chat colours of the tab strip (zeus-editor src/chat/chat.css).
-private enum TabColors {
+enum TabColors {
     static let selected = NSColor(srgbRed: 19/255, green: 53/255, blue: 97/255, alpha: 1)       // --ink-600
     static let selectedBorder = NSColor(srgbRed: 36/255, green: 71/255, blue: 122/255, alpha: 1) // --line-strong
     static let hover = NSColor(srgbRed: 13/255, green: 42/255, blue: 78/255, alpha: 1)          // --ink-800
@@ -613,5 +634,99 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         if save { tab?.tabName.rename(field.stringValue) }
         update(selected: selected)
         if editing, let tab { window?.makeFirstResponder(tab.focusView) }
+    }
+}
+
+/// The right side of the title bar of a chat window: in EU mode the green EU pill and the EU session cost of the selected
+/// tab (an estimate, in USD), then the `Standard | EU` switch of the whole app. Standard shows no cost.
+final class ModeBarView: NSView {
+    static let euGreen = NSColor(srgbRed: 31/255, green: 122/255, blue: 77/255, alpha: 1)
+    private let pill = NSView()
+    private let pillLabel = NSTextField(labelWithString: "EU")
+    private let costLabel = NSTextField(labelWithString: "")
+    private let control = NSSegmentedControl(labels: ZeusMode.allCases.map(\.title), trackingMode: .selectOne,
+                                             target: nil, action: nil)
+
+    init() {
+        super.init(frame: .zero)
+        pillLabel.font = NSFont(name: "PPObjectSans-Semibold", size: 11) ?? .boldSystemFont(ofSize: 11)
+        pillLabel.textColor = .white
+        pillLabel.alignment = .center
+        pillLabel.translatesAutoresizingMaskIntoConstraints = false
+        pill.addSubview(pillLabel)
+        pill.wantsLayer = true
+        pill.layer?.backgroundColor = Self.euGreen.cgColor
+        pill.layer?.cornerRadius = 9
+        pill.setAccessibilityElement(true)
+        pill.setAccessibilityRole(.staticText)
+        pill.setAccessibilityLabel("EU mode")
+        pill.toolTip = "EU mode: Claude on Google Vertex AI in the EU, with its own chats and workspace."
+        costLabel.font = NSFont(name: "ObjectSans-Regular", size: 12) ?? .systemFont(ofSize: 12)
+        costLabel.textColor = TabColors.dimText
+        costLabel.lineBreakMode = .byTruncatingTail
+        costLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        control.segmentStyle = .rounded
+        control.controlSize = .small
+        control.target = self
+        control.action = #selector(choose)
+        control.setAccessibilityLabel("Zeus mode")
+        control.toolTip = "Standard: Claude on the Apolix Team plan. EU: Claude on Google Vertex AI in the EU, for client data work."
+        let stack = NSStackView(views: [pill, costLabel, control])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            pill.widthAnchor.constraint(equalToConstant: 30),
+            pill.heightAnchor.constraint(equalToConstant: 18),
+            pillLabel.centerXAnchor.constraint(equalTo: pill.centerXAnchor),
+            pillLabel.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+            costLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280),
+        ])
+        update(cost: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    /// The cost of the selected tab, which the bar shows in EU mode.
+    private var cost: EUCost?
+
+    func update(cost: EUCost?) {
+        self.cost = cost
+        refresh()
+    }
+
+    func refresh() {
+        let mode = ZeusMode.current
+        let app = NSApp.delegate as? AppDelegate
+        control.selectedSegment = ZeusMode.allCases.firstIndex(of: mode) ?? 0
+        control.isEnabled = !(app?.isSwitchingMode ?? false)
+        pill.isHidden = mode != .eu
+        costLabel.isHidden = mode != .eu || cost == nil
+        costLabel.stringValue = cost?.label ?? ""
+        costLabel.toolTip = cost?.detail
+        costLabel.setAccessibilityLabel(cost.map { "\($0.label). \($0.detail)" })
+    }
+
+    #if DEBUG
+    var state: String {
+        "mode=\(ZeusMode.allCases[max(0, control.selectedSegment)].rawValue) enabled=\(control.isEnabled) pill=\(!pill.isHidden) cost=\(costLabel.isHidden ? "-" : costLabel.stringValue)"
+    }
+    #endif
+
+    @objc private func choose() {
+        let index = control.selectedSegment
+        // The control shows the mode of the app until a switch is done.
+        refresh()
+        guard ZeusMode.allCases.indices.contains(index) else { return }
+        (NSApp.delegate as? AppDelegate)?.requestMode(ZeusMode.allCases[index])
     }
 }

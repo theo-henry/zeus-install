@@ -34,6 +34,37 @@ enum StatusPage {
     function send(m){ window.webkit.messageHandlers.zeusApp.postMessage(m); }
     """
 
+    /// EU mode did not start: the message of `zeus --eu`, and the button that fixes it. The page never offers to start
+    /// Standard in its place; "Switch to Standard" is the normal mode switch, which asks first.
+    static func euFailed(_ failure: EUStartFailure, note: String?, log: String) -> String {
+        let signIn = failure.needsSignIn
+            ? "<button class=\"primary\" onclick=\"send('eu-sign-in')\">Sign in to Google Cloud</button>" : ""
+        let setup = failure.needsSetup ? "<button class=\"primary\" onclick=\"send('setup')\">Run the Zeus setup</button>" : ""
+        let signInHelp = failure.needsSignIn
+            ? "<p>Sign in with the Google account that has access to the Apolix EU project. Your browser opens; the terminal below shows the steps.</p>"
+            : ""
+        return """
+        <!doctype html><html><head><meta charset="utf-8"><style>\(style)
+        .eu { background:#1f7a4d; color:#fff; border-radius:999px; font-size:12px; padding:2px 9px; font-weight:600; }
+        .note { color:var(--bad); }</style><script>\(script)</script></head>
+        <body><main>
+          <h1 class="bad"><span class="eu">EU</span> EU mode did not start</h1>
+          <p>\(escape(failure.message))</p>
+          \(signInHelp)
+          \(note.map { "<p class=\"note\">\(escape($0))</p>" } ?? "")
+          <pre id="log">\(escape(log.isEmpty ? "(no output)" : log))</pre>
+          <div class="actions">
+            \(signIn)\(setup)
+            <button\(signIn.isEmpty && setup.isEmpty ? " class=\"primary\"" : "") onclick="send('retry')">Try again</button>
+            <button onclick="send('switch-standard')">Switch to Standard</button>
+            <button onclick="send('copy-log')">Copy the output</button>
+          </div>
+        </main>
+        <script>var p=document.getElementById('log'); p.scrollTop=p.scrollHeight;</script>
+        </body></html>
+        """
+    }
+
     static func failed(message: String, log: String) -> String {
         """
         <!doctype html><html><head><meta charset="utf-8"><style>\(style)</style><script>\(script)</script></head>

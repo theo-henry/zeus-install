@@ -21,6 +21,11 @@
 #                                             the Claude login) and prints machine-readable lines that start with
 #                                             "@@zeus " so that the app can show a checklist. Terminal use is unchanged.
 #
+# EU mode (Claude on Google Vertex AI in the EU) gets the same three steps on every Mac: the Google Cloud CLI in
+# ~/google-cloud-sdk, the EU workspace ~/Code/zeus-eu, and the Zeus plugins in the EU Claude Code folder ~/.zeus/eu/claude.
+# No shell profile changes for EU mode. Each user then signs in to Google once (the Zeus app shows the button), and the
+# Zeus maintainer gives the user's Google account the Vertex AI User role on the EU project.
+#
 # Options:
 #   --check      app mode only: report which steps are already done, then stop. Installs nothing.
 #   --app-only   used by install-app.sh: steps 1 to 5 (GitHub login and access check), then the Zeus app.
@@ -53,6 +58,16 @@ ANACONDA_SHA256_X86_64="58139fe195337f3041259e3a611339ed3afa4d164cc9aa2a7e8e84c0
 ANACONDA_LICENSE_URL="https://www.anaconda.com/legal/terms/terms-of-service"
 PYTHON_MIN_VERSION="3.10"
 
+# EU mode. The values of the EU launch profile of Zeus Editor (eu-profile.json): `zeus --eu` uses these folders.
+EU_WORKSPACE="$HOME/Code/zeus-eu"
+EU_CONFIG_DIR="$HOME/.zeus/eu/claude"
+# The Google Cloud CLI for the EU sign-in: the official macOS archive, pinned by version and checksum. gcloud updates
+# itself later (gcloud components update) when the user wants.
+GCLOUD_VERSION="593.0.0"
+GCLOUD_SHA256_ARM64="3351dba1dbed21be0bc77c47462d6ba5d28a25ecc31e878ab1c0f32cc442741b"
+GCLOUD_SHA256_X86_64="18b34987c1288c0c9c8ace5088d124e2a1b51eea7b7c645e2dae9d5832faa619"
+GCLOUD_DIR="$HOME/google-cloud-sdk"
+
 LOCAL_BIN="$HOME/.local/bin"
 NODE_DIR="$HOME/.local/node"
 TOOLS_ENV="$HOME/.local/zeus-tools"
@@ -74,10 +89,12 @@ ZEUS_APP_REPO="${ZEUS_APP_REPO:-$ZEUS_REPO}"
 APP_BUNDLE_ID="io.github.theo-henry.zeus"
 APP_ONLY=""
 if [ "${1:-}" = "--app-only" ]; then APP_ONLY=1; fi
-# Terminal use: step 12 installs the Zeus app. App mode: steps 12 and 13 finish the setup that the app needs.
-# --app-only: step 6 installs the Zeus app, and the app does steps 6 to 13 in its setup window.
-TOTAL_STEPS=12
-if [ -n "$APP_MODE" ]; then TOTAL_STEPS=13; fi
+# Terminal use: steps 12 to 14 set up EU mode, and step 15 installs the Zeus app. App mode: steps 12 and 13 finish the
+# setup that the app needs, and steps 14 to 16 set up EU mode.
+# --app-only: step 6 installs the Zeus app, and the app does steps 6 to 16 in its setup window.
+TOTAL_STEPS=15
+EU_FIRST_STEP=12
+if [ -n "$APP_MODE" ]; then TOTAL_STEPS=16; EU_FIRST_STEP=14; fi
 if [ -n "$APP_ONLY" ]; then TOTAL_STEPS=6; fi
 CURRENT_STEP=0
 
@@ -583,67 +600,75 @@ install_content_cli() {
 }
 
 # Step 9 - Clone the zeus repo.
-# Brings an existing ~/Code/zeus clone up to date with the reviewed updater from origin/main
+# Brings an existing clone up to date with the reviewed updater from origin/main
 # (.claude/hooks/zeus_update.py --now): a fast-forward only, local work is never discarded, and when
 # it cannot update it gives one step. An older origin/main without that updater keeps the clone as it is;
 # the Zeus session start then updates it.
-update_zeus() {
-  local updater="$WORK_DIR/zeus_update.py" result outcome message step
-  if ! git -C "$ZEUS_DIR" fetch --quiet origin main 2>/dev/null ||
-    ! git -C "$ZEUS_DIR" show origin/main:.claude/hooks/zeus_update.py >"$updater" 2>/dev/null ||
+# update_workspace <folder> <name for the user>
+update_workspace() {
+  local dir="$1" label="$2" updater="$WORK_DIR/zeus_update.py" result outcome message step
+  if ! git -C "$dir" fetch --quiet origin main 2>/dev/null ||
+    ! git -C "$dir" show origin/main:.claude/hooks/zeus_update.py >"$updater" 2>/dev/null ||
     ! grep -q '^def now_cli' "$updater"; then
-    info "Already cloned in ~/Code/zeus. Zeus updates itself when a Zeus session starts."
-    record "skipped" "Zeus repo (~/Code/zeus)"
+    info "Already cloned in $label. Zeus updates itself when a Zeus session starts."
+    record "skipped" "Zeus repo ($label)"
     return
   fi
-  result="$( { python3 "$updater" --now --root "$ZEUS_DIR" 2>/dev/null || true; } | tail -n 1)"
+  result="$( { python3 "$updater" --now --root "$dir" 2>/dev/null || true; } | tail -n 1)"
   outcome="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
   case "$outcome" in
     current)
       # `current` means that this Zeus has what Zeus Editor needs; the clone can still be behind origin/main.
-      if [ "$(git -C "$ZEUS_DIR" rev-list --count HEAD..origin/main 2>/dev/null || echo 1)" = 0 ]; then
-        info "Already cloned in ~/Code/zeus, and up to date."
-        record "skipped" "Zeus repo (~/Code/zeus, up to date)"
+      if [ "$(git -C "$dir" rev-list --count HEAD..origin/main 2>/dev/null || echo 1)" = 0 ]; then
+        info "Already cloned in $label, and up to date."
+        record "skipped" "Zeus repo ($label, up to date)"
       else
-        info "Already cloned in ~/Code/zeus, with the Zeus version that Zeus Editor needs."
+        info "Already cloned in $label, with the Zeus version that Zeus Editor needs."
         info "Zeus gets the newer updates when a Zeus session starts."
-        record "skipped" "Zeus repo (~/Code/zeus)"
+        record "skipped" "Zeus repo ($label)"
       fi
       ;;
     updated)
-      info "Updated ~/Code/zeus to the reviewed version."
-      record "done" "Zeus repo (~/Code/zeus, updated)"
+      info "Updated $label to the reviewed version."
+      record "done" "Zeus repo ($label, updated)"
       ;;
     *)
       message="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("message",""))' 2>/dev/null || true)"
       step="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("step",""))' 2>/dev/null || true)"
-      info "${message:-Zeus in ~/Code/zeus could not update itself. Nothing was changed or discarded.}"
-      info "To update: ${step:-run \`git pull --ff-only\` in ~/Code/zeus}."
-      record "skipped" "Zeus repo (~/Code/zeus, not updated)"
+      info "${message:-Zeus in $label could not update itself. Nothing was changed or discarded.}"
+      info "To update: ${step:-run \`git pull --ff-only\` in $label}."
+      record "skipped" "Zeus repo ($label, not updated)"
       ;;
   esac
 }
 
-clone_zeus() {
-  step 9 "Zeus repo"
-  if [ -d "$ZEUS_DIR/.git" ]; then
+# clone_workspace <folder> <name for the user>: clones the zeus repo there, or updates the clone that is there.
+clone_workspace() {
+  local dir="$1" label="$2"
+  if [ -d "$dir/.git" ]; then
     local remote
-    remote="$(git -C "$ZEUS_DIR" remote get-url origin 2>/dev/null || true)"
+    remote="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
     case "$remote" in
       *"$ZEUS_REPO"|*"$ZEUS_REPO.git")
-        update_zeus
+        update_workspace "$dir" "$label"
         return
         ;;
     esac
   fi
-  if [ -e "$ZEUS_DIR" ]; then
-    fail "The folder ~/Code/zeus exists, but it is not the zeus repo." \
+  if [ -e "$dir" ]; then
+    fail "The folder $label exists, but it is not the zeus repo." \
       "Move or rename that folder, then run the same line again."
   fi
-  mkdir -p "$(dirname "$ZEUS_DIR")"
-  gh repo clone "$ZEUS_REPO" "$ZEUS_DIR" ||
-    fail "The zeus repo could not be cloned."
-  record "done" "Zeus repo (~/Code/zeus)"
+  mkdir -p "$(dirname "$dir")"
+  gh repo clone "$ZEUS_REPO" "$dir" ||
+    fail "The zeus repo could not be cloned into $label."
+  record "done" "Zeus repo ($label)"
+}
+
+clone_zeus() {
+  step 9 "Zeus repo"
+  # shellcheck disable=SC2088 # A name for the user, not a path.
+  clone_workspace "$ZEUS_DIR" "~/Code/zeus"
 }
 
 # The shim for step 11. The quoted heredoc keeps every $ as it is.
@@ -704,6 +729,170 @@ install_zeus_command() {
   add_path_line
   info "Installed ~/.local/bin/zeus."
   record "done" "The zeus command"
+}
+
+# EU mode, steps 12 to 14 (terminal use) or 14 to 16 (app mode). The same on every Mac; no shell profile changes.
+
+# Prints the first gcloud in the places where Zeus Editor's EU check looks (src/eu/preflight.js): PATH, then the usual
+# install folders.
+find_gcloud() {
+  local candidate
+  if candidate="$(command -v gcloud 2>/dev/null)" && [ -x "$candidate" ]; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  for candidate in "$GCLOUD_DIR/bin/gcloud" /opt/homebrew/bin/gcloud /opt/homebrew/share/google-cloud-sdk/bin/gcloud \
+    /usr/local/bin/gcloud /usr/local/share/google-cloud-sdk/bin/gcloud; do
+    if [ -x "$candidate" ] && [ -f "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Step 12/14 - The Google Cloud CLI, for the Google sign-in of EU mode. Claude Code itself reads the sign-in file.
+install_gcloud() {
+  step "$EU_FIRST_STEP" "Google Cloud CLI (EU mode)"
+  local found
+  if found="$(find_gcloud)"; then
+    info "Already installed ($found)."
+    record "skipped" "Google Cloud CLI"
+    return
+  fi
+  if [ -e "$GCLOUD_DIR" ]; then
+    fail "The folder ~/google-cloud-sdk exists, but it has no gcloud command." \
+      "Move or rename that folder, then run the same line again."
+  fi
+  local arch sha256
+  case "$(uname -m)" in
+    arm64) arch="arm"; sha256="$GCLOUD_SHA256_ARM64" ;;
+    x86_64) arch="x86_64"; sha256="$GCLOUD_SHA256_X86_64" ;;
+    *) fail "This Mac type ($(uname -m)) is not supported." ;;
+  esac
+  local file="google-cloud-cli-$GCLOUD_VERSION-darwin-$arch.tar.gz"
+  download "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/$file" "$WORK_DIR/$file" "$sha256"
+  mkdir -p "$WORK_DIR/gcloud"
+  tar -xzf "$WORK_DIR/$file" -C "$WORK_DIR/gcloud" && [ -x "$WORK_DIR/gcloud/google-cloud-sdk/bin/gcloud" ] ||
+    fail "The Google Cloud CLI could not be unpacked."
+  mv "$WORK_DIR/gcloud/google-cloud-sdk" "$GCLOUD_DIR" ||
+    fail "The Google Cloud CLI could not be moved to ~/google-cloud-sdk."
+  # No usage reports to Google, for this install only (not the user's own gcloud settings).
+  "$GCLOUD_DIR/bin/gcloud" config set core/disable_usage_reporting true --installation </dev/null >/dev/null 2>&1 || true
+  if ! "$GCLOUD_DIR/bin/gcloud" --version </dev/null >"$LOG_DIR/gcloud.log" 2>&1; then
+    fail "The Google Cloud CLI was installed in ~/google-cloud-sdk, but it does not run." \
+      "It needs Python 3.10 or later, which step 2 installs." "See the log: $LOG_DIR/gcloud.log"
+  fi
+  info "Installed in ~/google-cloud-sdk. Your shell profile does not change: Zeus finds gcloud there."
+  record "done" "Google Cloud CLI"
+}
+
+# Step 13/15 - The EU workspace: a second clone of the zeus repo, for EU mode only.
+clone_eu_workspace() {
+  step $((EU_FIRST_STEP + 1)) "EU workspace"
+  # shellcheck disable=SC2088 # A name for the user, not a path.
+  clone_workspace "$EU_WORKSPACE" "~/Code/zeus-eu"
+}
+
+# Runs claude with the EU Claude Code folder.
+eu_claude() {
+  CLAUDE_CONFIG_DIR="$EU_CONFIG_DIR" claude "$@" </dev/null
+}
+
+# All Zeus plugins (the Zeus Editor and the skill plugins), as "plugin@marketplace:owner/repo".
+eu_plugin_entries() {
+  printf '%s\n' "$EDITOR_PLUGIN:$EDITOR_REPO"
+  # shellcheck disable=SC2086 # SKILL_PLUGINS is a space-separated list.
+  printf '%s\n' $SKILL_PLUGINS
+}
+
+eu_plugins_installed() {
+  local list entry
+  list="$(eu_claude plugin list 2>/dev/null)" || return 1
+  while IFS= read -r entry; do
+    printf '%s' "$list" | grep -qF "${entry%%:*}" || return 1
+  done < <(eu_plugin_entries)
+}
+
+# The first start of Claude Code in the EU folder asks for a theme and for trust in the EU workspace, which the Zeus app
+# can not answer. The installer answers them as the Standard Claude Code of this Mac did: the same theme, and trust for
+# the EU workspace, which is the same zeus repo as ~/Code/zeus. Imports of files outside the workspace stay off.
+eu_first_start_settings() {
+  python3 - "$EU_CONFIG_DIR/.claude.json" "$HOME/.claude.json" "$EU_WORKSPACE" <<'PY'
+import json, os, sys, tempfile
+target, standard, workspace = sys.argv[1], sys.argv[2], os.path.realpath(sys.argv[3])
+def read(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+config, theme = read(target), read(standard).get("theme")
+config["hasCompletedOnboarding"] = True
+if isinstance(theme, str) and theme and "theme" not in config:
+    config["theme"] = theme
+projects = config.setdefault("projects", {})
+entry = projects.setdefault(workspace, {})
+entry["hasTrustDialogAccepted"] = True
+entry.setdefault("hasClaudeMdExternalIncludesApproved", False)
+entry["hasClaudeMdExternalIncludesWarningShown"] = True
+os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
+handle, temporary = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".claude.json.")
+with os.fdopen(handle, "w", encoding="utf-8") as out:
+    json.dump(config, out, indent=2)
+os.replace(temporary, target)
+PY
+}
+
+eu_first_start_done() {
+  python3 - "$EU_CONFIG_DIR/.claude.json" "$EU_WORKSPACE" <<'PY' 2>/dev/null
+import json, os, sys
+try:
+    config = json.load(open(sys.argv[1], encoding="utf-8"))
+    entry = config["projects"][os.path.realpath(sys.argv[2])]
+    sys.exit(0 if config.get("hasCompletedOnboarding") is True and entry.get("hasTrustDialogAccepted") is True
+             and entry.get("hasClaudeMdExternalIncludesWarningShown") is True else 1)
+except Exception:
+    sys.exit(1)
+PY
+}
+
+# Step 14/16 - The Zeus plugins in the EU Claude Code folder. EU Claude Code reads its plugins, settings, and chats there
+# only, never from ~/.claude. Each run updates them, as step 10 does for Standard.
+install_eu_plugins() {
+  step $((EU_FIRST_STEP + 2)) "Zeus plugins of EU mode"
+  mkdir -p "$EU_CONFIG_DIR"
+  chmod 700 "$HOME/.zeus/eu" "$EU_CONFIG_DIR" 2>/dev/null || true
+  local entry plugin repo marketplace log="$LOG_DIR/eu-plugins.log"
+  : >"$log"
+  while IFS= read -r entry; do
+    plugin="${entry%%:*}"
+    repo="${entry#*:}"
+    marketplace="${plugin#*@}"
+    eu_claude plugin marketplace add "$repo" --scope user >>"$log" 2>&1 ||
+      fail "The $marketplace marketplace could not be added for EU mode." "See the log: $log"
+    eu_claude plugin marketplace update "$marketplace" >>"$log" 2>&1 ||
+      fail "The $marketplace marketplace could not be updated for EU mode." "See the log: $log"
+    if eu_claude plugin list 2>/dev/null | grep -qF "$plugin"; then
+      eu_claude plugin update "$plugin" --scope user >>"$log" 2>&1 ||
+        fail "The $plugin plugin could not be updated for EU mode." "See the log: $log"
+    else
+      info "Installing $plugin"
+      eu_claude plugin install "$plugin" --scope user >>"$log" 2>&1 ||
+        fail "The $plugin plugin could not be installed for EU mode." "See the log: $log"
+    fi
+  done < <(eu_plugin_entries)
+  eu_first_start_settings || fail "The first-start settings of EU mode could not be written in ~/.zeus/eu/claude."
+  info "Installed in ~/.zeus/eu/claude."
+  info "For EU mode, sign in to Google once in the Zeus app, and ask $ZEUS_OWNER for access to the EU project."
+  record "done" "Zeus plugins of EU mode"
+}
+
+install_eu() {
+  install_gcloud
+  clone_eu_workspace
+  install_eu_plugins
 }
 
 # Step 12 (app mode) - The Zeus skill plugins, for the current user, like the Zeus Editor plugin.
@@ -784,6 +973,9 @@ check_steps() {
   fi
   state 12 "$all"
   if command -v claude >/dev/null 2>&1 && claude_logged_in; then state 13 ok; else state 13 todo; fi
+  if find_gcloud >/dev/null; then state 14 ok; else state 14 todo; fi
+  if [ -d "$EU_WORKSPACE/.git" ]; then state 15 ok; else state 15 todo; fi
+  if command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state 16 ok; else state 16 todo; fi
   emit "checked"
 }
 
@@ -1267,7 +1459,9 @@ main() {
   if [ -n "$APP_MODE" ]; then
     install_skill_plugins
     login_claude
+    install_eu
   else
+    install_eu
     install_zeus_app
   fi
   print_summary
