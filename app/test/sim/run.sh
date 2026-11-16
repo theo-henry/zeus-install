@@ -29,6 +29,8 @@ PREFS_DOMAIN="$ZEUS_APP_DEFAULTS_SUITE"
 export ZEUS_APP_TEST_BACKGROUND=1
 # The app copies download no dictation model (a test that needs one serves its own and sets this to 0).
 export ZEUS_APP_NO_MODEL_DOWNLOAD=1
+# A fixed euro rate for the cost, so no app copy asks the European Central Bank.
+export ZEUS_APP_EURO_RATE="1.05@2026-11-16"
 mkdir -p "$BIN"
 [ -n "$SHOTS" ] && mkdir -p "$SHOTS"
 
@@ -260,6 +262,8 @@ check "Start Zeus starts a hidden zeus session" 'wait_for "state: running(" 30'
 check "the chat page loads in the app window" 'wait_for "page loaded: http://127.0.0.1" 20'
 check "the first chat gets the globe hand-over" 'wait_for "hand-over: globe moves to" 10'
 check "zeus runs in ~/Code/zeus with --no-open" 'grep -q "\"--no-open\"" "$STATE/zeus-started" && grep -q "/Code/zeus\"" "$STATE/zeus-started"'
+check "the app clones the EU workspace into ~/Code/zeus-eu when it is missing" \
+  'wait_for "eu workspace: ready" 30 && [ -f "$SANDBOX/Code/zeus-eu/scripts/zeus.py" ] && [ ! -e "$SANDBOX/Code/.zeus-eu.partial" ]'
 shot 6-chat
 # A close with draft text must preserve the same WebView and PTY.
 act test-draft
@@ -835,13 +839,18 @@ check "the Standard chat ends and one EU chat runs" 'wait_count "state: running(
 act mode-standard
 check "the switch back runs the handover: build and scan in the EU workspace" \
   'wait_for "handover: pilot built 20261116T100000Z-abc123 files=2 findings=3 groups=2" 30 && grep -q "^build pilot" "$STATE/handover-calls" && grep -q "^scan 20261116T100000Z-abc123" "$STATE/handover-calls"'
+need "the handover sheet shows the two groups" 'wait_for "handover: sheet shown projects=1 groups=2" 20'
 shot 14-handover-sheet
 act handover:release
 check "Release stays off while a group is undecided" 'wait_for "handover: release is disabled" 10 && ! grep -q "^mask" "$STATE/handover-calls"'
 act handover:keep
+act handover:state
+check "a single Keep redraws the sheet, which counts the group as decided" 'wait_for "handover: sheet state undecided=1 release=off redraws=[1-9]" 10'
 act handover:release
 check "Release stays off while the e-mail group is not masked" 'wait_count "handover: release is disabled" 2 10'
 act handover:mask
+act handover:state
+check "with every group decided, Release turns on" 'wait_for "handover: sheet state undecided=0 release=on" 10'
 shot 15-handover-masked
 act handover:release
 check "Release masks the masked groups, scans again, and releases" \
@@ -860,12 +869,14 @@ check "with nothing new to hand over, the switch back asks nothing" 'wait_for "h
 wait_count "state: running(" 5 30 >/dev/null && newest_page_loaded >/dev/null && sleep 1
 STD_COST='{"mode":"standard","currency":"USD","session_total":0.42,"chat_total":0.31,"calls":7,"unpriced_calls":0,"prices_as_of":"2026-11-16"}'
 act "test-cost:$STD_COST"
-wait_for "cost: [0-9]* Session 0.42 USD · Chat total 0.31 USD mode=standard" 10 >/dev/null
+wait_for "cost: [0-9]* Session €0.40 · Chat total €0.30 mode=standard" 10 >/dev/null
 act test-cost-shown
 check "a Standard cost stays hidden by default" 'wait_for "cost shown: -" 10'
+act test-mode-bar
+check "Standard mode shows the switch and no EU badge" 'wait_for "mode bar: badge=false switch=true" 10'
 act dev-setting:costStandard=on
 act test-cost-shown
-check "with the developer setting on, Standard shows the session and the chat total" 'wait_for "cost shown: Session 0.42 USD · Chat total 0.31 USD" 10'
+check "with the developer setting on, Standard shows the session and the chat total in euros" 'wait_for "cost shown: Session €0.40 · Chat total €0.30" 10'
 shot 16-cost-standard
 act dev-setting:costStandard=off
 act mode-eu
@@ -873,7 +884,9 @@ wait_count "state: running(" 6 30 >/dev/null && newest_page_loaded >/dev/null &&
 act "test-cost:${STD_COST/standard/eu}"
 wait_for "cost: [0-9]* .* mode=eu" 10 >/dev/null
 act test-cost-shown
-check "EU shows the session and the chat total by default" 'wait_count "cost shown: Session 0.42 USD · Chat total 0.31 USD" 2 10'
+check "EU shows the session and the chat total by default" 'wait_count "cost shown: Session €0.40 · Chat total €0.30" 2 10'
+act test-mode-bar
+check "EU mode shows the green EU badge and the switch" 'wait_for "mode bar: badge=true switch=true" 10'
 act dev-setting:costEU=off
 act test-cost-shown
 check "the EU cost hides when its developer setting is off" 'wait_count "cost shown: -" 2 10'

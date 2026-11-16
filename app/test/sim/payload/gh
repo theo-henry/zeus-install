@@ -28,6 +28,7 @@ case "${1:-} ${2:-}" in
     mkdir -p "$4"
     git -C "$4" init -q
     git -C "$4" remote add origin "https://github.com/$3.git"
+    mkdir -p "$4/scripts" && echo "# simulated zeus" >"$4/scripts/zeus.py"
     echo "Cloning into '$4'... (simulated)"
     ;;
   api\ repos/*/releases*)

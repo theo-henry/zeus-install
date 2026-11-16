@@ -109,18 +109,22 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The third-party notices of whisper.cpp, OpenSuperWhisper, Silero VAD, and the Whisper models are in `Resources/THIRD-PARTY-NOTICES.md` (also in the app bundle).
 - **Standard | EU.** One app-wide mode (`Sources/Zeus/Mode.swift`; zeus `references/eu-mode.md`, zeus-editor `docs/chat.md`, "EU mode").
   Standard starts `zeus --no-open` in `~/Code/zeus`; EU starts `zeus --eu --no-open` in `~/Code/zeus-eu`, and `zeus --eu` builds the EU environment and checks the Google Cloud access itself.
-  The switch is in the tab strip and in the Zeus menu; it shows when this Mac has the EU workspace (`~/Code/zeus-eu/scripts/zeus.py`), or while the app is in EU mode.
+  The switch is at the right of the tab strip (`Sources/Zeus/ModeBar.swift`, drawn like the tabs) and in the Zeus menu; in EU mode a green **EU** badge with a shield shows next to it in every window.
+  It shows when this Mac has the EU workspace (`~/Code/zeus-eu/scripts/zeus.py`), and always in EU mode.
+  When `~/Code/zeus-eu` is missing, the app clones it in the background whenever a chat starts (`EUWorkspace`): the repo of `~/Code/zeus` with `gh repo clone`
+  (git as the fallback, never asking for a password), using `~/Code/zeus` as a local reference and then independent of it, into a hidden folder that becomes `~/Code/zeus-eu` only when complete.
   A switch asks first, then ends every open chat and starts one new chat in each window: a chat never moves between modes.
   Tabs that the app opens again after an update start in the app's mode.
 - **Cost.** Zeus Editor counts the session cost after each reply and the chat page passes it on (`cost:<JSON>`, zeus-editor `docs/chat.md`, "Session cost"):
   EU at Vertex AI EU prices, Standard at the Anthropic API list prices (the value of the work, not a charge on the subscription).
-  The tab strip shows the selected tab's "Session 0.42 USD · Chat total 0.31 USD"; the tooltip names the prices, the number of model calls, and the calls without a price.
+  The tab strip shows the selected tab's "Session €0.39 · Chat total €0.29" in euros, converted from the editor's US dollars at the European Central Bank's daily reference rate
+  (fetched at most once a day, kept in the settings; until one is known the cost shows in dollars). The tooltip names the prices, the rate and its date, the number of model calls, and the calls without a price ("+" in the label).
 - **Developer Settings** (Zeus > Developer > Developer Settings…, `Sources/Zeus/DeveloperSettings.swift`): show the Standard | EU switch (on; it always shows in EU mode),
   show the session and chat total in EU (on), and in Standard (off). Each change shows at once in every window.
 - **Handover from EU to Standard** (`Sources/Zeus/Handover.swift`). Before a switch from EU, the app runs `handoff pending` in the EU workspace.
   With nothing new, Standard starts at once. Otherwise the tab shows "Handing off data securely" on the loading screen while `handoff build` and `handoff scan` run, then the release sheet:
   - a project with EU work but no summary gets **Ask EU Claude to write it**, which puts the request into the EU chat's message box (the user sends it) and stays in EU;
-  - each finding group (one kind and value, in every file) gets **Keep** (not client data) or **Mask** (replaced in what crosses); e-mail and IBAN groups offer only Mask; **Mask all** decides every group;
+  - each finding group (one kind and value, in every file) shows the value in its line, read from the handover's copy on this Mac (the scan output itself stays masked), with the file names only, and gets **Keep** (not client data) or **Mask** (replaced in what crosses); e-mail and IBAN groups offer only Mask; **Mask all** decides every group;
   - **Release and switch to Standard** stays off until every group is decided. It runs `handoff mask` for the masked groups, scans again,
     checks that only kept groups are left, copies the files with matching hashes into `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/`
     with `released.json` (groups and kinds, never a value), writes `released.json` into the EU handover too, and switches;
@@ -288,7 +292,8 @@ It presses the app's buttons through the debug test actions and checks the trace
 5. The Standard | EU switch, with a simulated EU `scripts/zeus.py` (`app/test/sim/payload/handover-zeus.py`): the switch to EU starts `zeus --eu` in `~/Code/zeus-eu`;
    the switch back builds and scans the handover; Release stays off while a group is undecided or the e-mail group is kept; Release masks, scans again,
    copies the masked files with `released.json` into the Standard workspace, closes the EU handover, and starts Standard; with nothing new, the next switch back asks nothing.
-   A Standard cost stays hidden until its developer setting is on, then shows "Session … · Chat total …"; EU shows it by default and hides it when its setting is off;
+   The app clones a missing `~/Code/zeus-eu` (scenario 1); EU mode shows the green badge, Standard does not.
+   A Standard cost stays hidden until its developer setting is on, then shows "Session €… · Chat total €…" (a fixed test rate, `ZEUS_APP_EURO_RATE`); EU shows it by default and hides it when its setting is off;
    Zeus > Developer > Developer Settings… opens.
    The test actions skip the switch question, which is not tested.
 6. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.

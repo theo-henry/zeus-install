@@ -21,7 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// and no Zeus session opens until it ends.
     private var updating = false
     /// A Standard | EU switch is in progress: its question, the handover, or the restart of the tabs.
-    private var switching = false
+    private var switching = false { didSet { if switching != oldValue { ModeSwitch.refresh() } } }
+    var isSwitching: Bool { switching }
     private var handover: HandoverFlow?
     #if DEBUG
     /// The user's pasteboard before the paste test actions, given back by "test-pasteboard-restore".
@@ -232,6 +233,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     @objc func newChat(_ sender: Any?) {
         guard !updating else { return }
+        // EU mode needs its own workspace: the app clones it in the background when it is missing (every Mac, also after
+        // the first setup). The euro rate of the cost is fetched once a day.
+        EUWorkspace.ensure()
+        EuroRate.refresh()
         do {
             let session = try SessionManager.shared.start()
             Trace.log("session \(session.pid) started")
@@ -290,11 +295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The Standard | EU control of a tab strip, or a menu item: switch the whole app to the other mode.
     @objc func switchMode(_ sender: Any?) {
         let target: ZeusMode
-        if let control = sender as? NSSegmentedControl {
-            target = control.selectedSegment == 1 ? .eu : .standard
-        } else {
-            target = ZeusMode.current == .eu ? .standard : .eu
-        }
+        target = ZeusMode.current == .eu ? .standard : .eu
         requestSwitch(to: target)
     }
 
@@ -303,8 +304,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         guard target != ZeusMode.current, !updating, !switching else { ModeSwitch.refresh(); return }
         if target == .eu, !FileManager.default.fileExists(atPath: ZeusMode.eu.workspace + "/scripts/zeus.py") {
             let alert = NSAlert()
-            alert.messageText = "EU mode is not set up on this Mac"
-            alert.informativeText = "EU mode needs its own Zeus workspace in \(ZeusMode.eu.workspace). Run the Zeus setup, then switch again."
+            alert.messageText = EUWorkspace.isCloning ? "EU mode is being prepared" : "EU mode is not set up on this Mac"
+            alert.informativeText = EUWorkspace.isCloning
+                ? "Zeus is copying its workspace for EU mode to \(ZeusMode.eu.workspace). Switch again in a minute."
+                : "EU mode needs its own Zeus workspace in \(ZeusMode.eu.workspace), and Zeus could not create it. Check the GitHub login of the Zeus setup, then switch again."
+            EUWorkspace.ensure()
             alert.addButton(withTitle: "OK")
             ModeSwitch.refresh()
             if let window = keyChatWindow?.window ?? chatWindows.last?.window { Front.beginSheet(alert, for: window) { _ in } } else { alert.runModal() }
@@ -597,6 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 self.keyChatTab?.webView.callAsyncJavaScript("window.webkit.messageHandlers.zeusApp.postMessage('cost:' + json)",
                                                                arguments: ["json": argument], in: nil, in: .page) { _ in }
             case "test-cost-shown": Trace.log("cost shown: \(self.chatWindows.map { $0.costText }.joined(separator: " | "))")
+            case "test-mode-bar": Trace.log("mode bar: \(self.chatWindows.map { "badge=\($0.badgeShown) switch=\($0.switchShown)" }.joined(separator: " | "))")
             case "test-cmd-t", "test-cmd-j":
                 let key = action == "test-cmd-t" ? "t" : "j"
                 if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The EU to Standard handover through the Zeus command line of the EU workspace (zeus references/eu-mode.md, "Handover").
@@ -40,6 +41,9 @@ enum HandoverCLI {
     struct Finding: Equatable {
         let file: String
         let line: Int
+        /// 1-based, in characters (Unicode scalars, as Python counts them); in a file name, counted without "files/".
+        let col: Int
+        let length: Int
         let kind: String
         let excerpt: String
         let blocking: Bool
@@ -117,7 +121,8 @@ enum HandoverCLI {
     static func scan(_ id: String) -> Result<Scan, Failure> {
         call(["scan", id], timeout: 120, findingsOK: true).map { object in
             let findings = (object["findings"] as? [[String: Any]] ?? []).map { item in
-                Finding(file: item["file"] as? String ?? "", line: item["line"] as? Int ?? 0, kind: item["kind"] as? String ?? "finding",
+                Finding(file: item["file"] as? String ?? "", line: item["line"] as? Int ?? 0, col: item["col"] as? Int ?? 0,
+                        length: item["length"] as? Int ?? 0, kind: item["kind"] as? String ?? "finding",
                         excerpt: item["excerpt_masked"] as? String ?? "", blocking: item["blocking"] as? Bool ?? true,
                         group: item["group"] as? String ?? "")
             }
@@ -169,6 +174,41 @@ struct FindingGroup: Identifiable, Equatable {
     /// A file that changed after the build, or is missing: no choice, only a new build.
     var fileLevel: Bool { HandoverCLI.fileKinds.contains(kind) }
     var files: [String] { Array(Set(places.map(\.file))).sorted() }
+    /// The file names without their folders, for the sheet.
+    var fileNames: [String] { Array(Set(places.map { ($0.file as NSString).lastPathComponent })).sorted() }
+    /// The value in its line, read from the handover's copy: the consultant decides on what they see.
+    /// The app shows it on this Mac only; the scan's own output stays masked.
+    var preview: Preview?
+
+    struct Preview: Equatable {
+        let before: String
+        let value: String
+        let after: String
+    }
+
+    /// The text around the first place of the group, with the value apart. Nil when the copy no longer has it.
+    static func preview(of finding: HandoverCLI.Finding, in dir: String) -> Preview? {
+        guard finding.col > 0, finding.length > 0 else { return nil }
+        let text: String
+        if finding.line == 0 {
+            text = finding.file.hasPrefix("files/") ? String(finding.file.dropFirst(6)) : finding.file
+        } else {
+            guard let data = FileManager.default.contents(atPath: dir + "/" + finding.file) else { return nil }
+            // Python's splitlines: each line without its line end.
+            let lines = String(decoding: data, as: UTF8.self).split(omittingEmptySubsequences: false,
+                                                                     whereSeparator: { $0.isNewline }).map(String.init)
+            guard finding.line <= lines.count else { return nil }
+            text = lines[finding.line - 1]
+        }
+        let scalars = Array(text.unicodeScalars)
+        let start = finding.col - 1, end = start + finding.length
+        guard end <= scalars.count else { return nil }
+        func string(_ range: Range<Int>) -> String { String(String.UnicodeScalarView(scalars[range])) }
+        var before = string(max(0, start - 40) ..< start), after = string(end ..< min(scalars.count, end + 40))
+        if start > 40 { before = "…" + before.drop(while: { $0 != " " }) }
+        if scalars.count > end + 40 { after += "…" }
+        return Preview(before: before.trimmingCharacters(in: .whitespaces) == "" ? "" : before, value: string(start ..< end), after: after)
+    }
 
     static func groups(_ findings: [HandoverCLI.Finding]) -> [FindingGroup] {
         var order: [String] = []
@@ -178,7 +218,7 @@ struct FindingGroup: Identifiable, Equatable {
             if byGroup[key] == nil { order.append(key) }
             byGroup[key, default: []].append(finding)
         }
-        return order.map { FindingGroup(id: $0, kind: byGroup[$0]![0].kind, places: byGroup[$0]!) }
+        return order.map { FindingGroup(id: $0, kind: byGroup[$0]![0].kind, places: byGroup[$0]!, preview: nil) }
     }
 }
 
@@ -199,7 +239,11 @@ final class ProjectHandover: ObservableObject, Identifiable {
 
     func update(scan: HandoverCLI.Scan) {
         self.scan = scan
-        groups = FindingGroup.groups(scan.findings)
+        groups = FindingGroup.groups(scan.findings).map { group in
+            var group = group
+            if let dir = built?.dir, let first = group.places.first { group.preview = FindingGroup.preview(of: first, in: dir) }
+            return group
+        }
         // A choice stays for a group that the new scan still shows; e-mail and IBAN groups can only be masked.
         choices = choices.filter { key, choice in groups.contains { $0.id == key && !$0.fileLevel && (choice == .mask || !$0.blocking) } }
     }
@@ -362,6 +406,7 @@ final class HandoverFlow {
         let sheet = HandoverSheet(model: model)
         self.sheet = sheet
         sheet.present(on: window)
+        Trace.log("handover: sheet shown projects=\(projects.count) groups=\(projects.reduce(0) { $0 + $1.groups.count })")
     }
 
     /// Masks the masked groups, scans again, and releases every handover; then switches. A changed scan shows again for review.
@@ -447,12 +492,14 @@ final class HandoverFlow {
         guard let model = sheet?.model else { Trace.log("handover: no sheet to press"); return }
         switch button {
         case "release": model.canRelease ? model.onRelease?() : Trace.log("handover: release is disabled")
+        case "state": Trace.log("handover: sheet state undecided=\(model.undecided) release=\(model.canRelease ? "on" : "off") redraws=\(model.redraws)")
         case "continue": model.onContinue?()
         case "stay": model.onStay?()
-        case "mask": model.projects.forEach { $0.maskAll() }; model.objectWillChange.send()
+        // As clicks on the rows: each choice changes only its project, so the sheet must follow it by itself.
+        case "mask":
+            for project in model.projects { for group in project.groups where !group.fileLevel { project.choices[group.id] = .mask } }
         case "keep":
             for project in model.projects { for group in project.groups where !group.fileLevel && !group.blocking { project.choices[group.id] = .keep } }
-            model.objectWillChange.send()
         default: break
         }
     }
@@ -520,10 +567,22 @@ final class HandoverModel: ObservableObject {
     var onContinue: (() -> Void)?
     var onStay: (() -> Void)?
 
+    /// A Keep or Mask click changes one project; the sheet's counts and the Release button follow it.
+    private var projectChanges: [AnyCancellable] = []
+
     init(projects: [ProjectHandover], error: String?) {
         self.projects = projects
         self.error = error
+        projectChanges = projects.map { project in
+            project.objectWillChange.sink { [weak self] _ in
+                self?.redraws += 1
+                self?.objectWillChange.send()
+            }
+        }
     }
+
+    /// How often the sheet was told to redraw (for the test actions).
+    var redraws = 0
 
     var building: [ProjectHandover] { projects.filter { $0.built != nil } }
     var undecided: Int { building.reduce(0) { $0 + $1.undecided } }
@@ -542,7 +601,7 @@ final class HandoverModel: ObservableObject {
             return "EU Claude writes what it learned, without client data values. Then switch again."
         }
         if findings > 0 {
-            return "The scan found possible data values. Keep a group that is not client data, or mask it in what crosses. Nothing in EU changes."
+            return "Check each value. Keep it when it is not client data; Mask replaces it in what crosses. Nothing in EU changes."
         }
         return "The summary and the listed files cross to Standard. EU chats and work files stay in EU."
     }
@@ -691,17 +750,13 @@ private struct ProjectCard: View {
                     .buttonStyle(HandoverButtonStyle())
             } else if let built = project.built {
                 HStack(spacing: 14) {
-                    Text("\(built.files.count) file\(built.files.count == 1 ? "" : "s") cross, with the summary").foregroundStyle(HandoverColors.dim)
+                    Text(crossing(built)).foregroundStyle(HandoverColors.dim)
+                        .help(built.skipped.isEmpty ? "" : "Left out: " + built.skipped.map { "\(($0.path as NSString).lastPathComponent) (\($0.reason))" }.joined(separator: "; "))
                     if let path = project.summaryPath {
                         Button("Read the summary") { model.onOpenSummary?(path) }
                             .buttonStyle(.plain).foregroundStyle(HandoverColors.link)
                     }
                     Spacer()
-                }
-                if !built.skipped.isEmpty {
-                    Text("Left out: " + built.skipped.map { "\($0.path) (\($0.reason))" }.joined(separator: "; "))
-                        .foregroundStyle(HandoverColors.dim).font(.custom("ObjectSans-Regular", size: 12))
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if !project.groups.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -715,6 +770,14 @@ private struct ProjectCard: View {
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 10).fill(HandoverColors.card))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(HandoverColors.line))
+    }
+
+    /// "2 files and the summary cross · 1 left out"
+    private func crossing(_ built: HandoverCLI.Built) -> String {
+        let files = built.files.filter { $0.path != "summary.md" }.count
+        var text = files == 0 ? "The summary crosses" : "\(files) file\(files == 1 ? "" : "s") and the summary cross"
+        if !built.skipped.isEmpty { text += " · \(built.skipped.count) left out" }
+        return text
     }
 
     private var badge: some View {
@@ -746,7 +809,13 @@ private struct GroupRow: View {
                         .background(Capsule().fill((group.blocking ? HandoverColors.bad : HandoverColors.warn).opacity(0.14)))
                     Text(places).foregroundStyle(HandoverColors.dim).lineLimit(1).truncationMode(.middle)
                 }
-                if let excerpt = group.places.first?.excerpt, !excerpt.isEmpty {
+                if let preview = group.preview {
+                    (Text(preview.before).foregroundColor(HandoverColors.dim)
+                        + Text(preview.value).bold().foregroundColor(group.blocking ? HandoverColors.bad : HandoverColors.warn)
+                        + Text(preview.after).foregroundColor(HandoverColors.dim))
+                        .font(.system(size: 12, design: .monospaced)).lineLimit(1).truncationMode(.tail)
+                        .textSelection(.enabled)
+                } else if let excerpt = group.places.first?.excerpt, !excerpt.isEmpty {
                     Text(excerpt).font(.system(size: 11.5, design: .monospaced)).lineLimit(1).truncationMode(.middle)
                 }
             }
@@ -766,9 +835,9 @@ private struct GroupRow: View {
     }
 
     private var places: String {
-        let files = group.files.map { $0.replacingOccurrences(of: "files/", with: "") }
         let count = group.places.count
-        return "\(count) place\(count == 1 ? "" : "s") · " + files.joined(separator: ", ")
+        let inName = group.places.contains { $0.line == 0 }
+        return "\(count)× in " + group.fileNames.joined(separator: ", ") + (inName ? " (also its file name)" : "")
     }
 
     private func choice(_ title: String, _ value: HandoverChoice) -> some View {

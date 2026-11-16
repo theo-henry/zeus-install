@@ -47,6 +47,22 @@ enum Preferences {
         set { defaults.set(newValue, forKey: "showCostStandard") }
     }
 
+    /// The European Central Bank's rate for the cost in euros (`EuroRate`).
+    static var usdPerEuro: Double {
+        get { defaults.double(forKey: "usdPerEuro") }
+        set { defaults.set(newValue, forKey: "usdPerEuro") }
+    }
+
+    static var usdPerEuroDate: String? {
+        get { defaults.string(forKey: "usdPerEuroDate") }
+        set { defaults.set(newValue, forKey: "usdPerEuroDate") }
+    }
+
+    static var usdPerEuroFetchedAt: Date? {
+        get { defaults.object(forKey: "usdPerEuroFetchedAt") as? Date }
+        set { defaults.set(newValue, forKey: "usdPerEuroFetchedAt") }
+    }
+
     static func showCost(in mode: ZeusMode) -> Bool { mode == .eu ? showCostEU : showCostStandard }
 
     /// The dictation settings (see `DictationSettings`).

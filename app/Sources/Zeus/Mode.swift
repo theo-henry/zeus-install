@@ -139,17 +139,31 @@ struct SessionCost: Equatable {
         pricesAsOf = object["prices_as_of"] as? String ?? ""
     }
 
-    static func usd(_ value: Double) -> String { value > 0 && value < 0.01 ? "< 0.01 USD" : String(format: "%.2f USD", value) }
+    /// "€0.39", or "$0.42" while no euro rate is known; below a cent, "< €0.01".
+    static func amount(_ usd: Double) -> String {
+        if let rate = EuroRate.current {
+            let euro = usd / rate.usdPerEuro
+            return euro > 0 && euro < 0.01 ? "< €0.01" : String(format: "€%.2f", euro)
+        }
+        return usd > 0 && usd < 0.01 ? "< $0.01" : String(format: "$%.2f", usd)
+    }
 
-    /// "Session 0.42 USD · Chat total 0.31 USD"
-    var label: String { "Session \(Self.usd(sessionTotal)) · Chat total \(Self.usd(chatTotal))" }
+    /// "Session €0.39 · Chat total €0.29"; a "+" says that some calls have no price.
+    var label: String {
+        "Session \(Self.amount(sessionTotal))\(unpricedCalls > 0 ? "+" : "") · Chat total \(Self.amount(chatTotal))"
+    }
 
     var tooltip: String {
-        let prices = mode == "eu" ? "Vertex AI EU prices" : "Anthropic API list prices (not a charge on the Claude subscription)"
-        var text = "Estimate at \(prices) of \(pricesAsOf). Session: every chat of this tab's Zeus session. "
-            + "Chat total: the chat on screen. \(calls) model call\(calls == 1 ? "" : "s")"
-        if unpricedCalls > 0 { text += ", \(unpricedCalls) not priced (fast mode or an unknown model)" }
-        return text + "."
+        let prices = mode == "eu" ? "Vertex AI EU list prices" : "Anthropic API list prices (not a charge on the Claude subscription)"
+        var lines = ["Session: every chat of this tab's Zeus session, \(Self.amount(sessionTotal)).",
+                     "Chat total: the chat on screen, \(Self.amount(chatTotal)).",
+                     "\(calls) model call\(calls == 1 ? "" : "s")\(unpricedCalls > 0 ? ", \(unpricedCalls) without a price (fast mode or an unknown model) and not in the amount" : "")."]
+        var source = "An estimate at \(prices) of \(pricesAsOf), in US dollars"
+        if let rate = EuroRate.current {
+            source += String(format: ", converted at $%.4f for €1 (European Central Bank, %@)", rate.usdPerEuro, rate.date)
+        }
+        lines.append(source + ".")
+        return lines.joined(separator: "\n")
     }
 }
 

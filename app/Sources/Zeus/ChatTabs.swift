@@ -146,6 +146,8 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
 
     /// The cost text of the tab strip, "-" when it is hidden (for the test actions).
     var costText: String { strip.costText }
+    var badgeShown: Bool { strip.modeBar.badgeShown }
+    var switchShown: Bool { strip.modeBar.switchShown }
 
     func select(_ tab: ChatTab) {
         guard tabs.contains(where: { $0 === tab }) else { return }
@@ -283,10 +285,8 @@ final class TabStripView: NSView {
     private weak var controller: ChatWindowController?
     private let stack = NSStackView()
     private let addButton = HoverButton(symbol: "plus", label: "New Tab")
-    /// The app-wide Standard | EU switch; shown when this Mac has the EU workspace, or while the app is in EU mode.
-    private let modeControl = NSSegmentedControl(labels: ["Standard", "EU"], trackingMode: .selectOne, target: nil, action: nil)
-    /// The cost of the selected tab, when the developer settings show it for the tab's mode.
-    private let costLabel = NSTextField(labelWithString: "")
+    /// The cost of the selected tab, the green EU badge, and the app-wide Standard | EU switch.
+    let modeBar = ModeBarView()
     private var leadingConstraint: NSLayoutConstraint!
 
     init(controller: ChatWindowController) {
@@ -304,32 +304,22 @@ final class TabStripView: NSView {
         addButton.target = self
         addButton.action = #selector(newTab)
         addSubview(addButton)
-        modeControl.translatesAutoresizingMaskIntoConstraints = false
-        modeControl.controlSize = .small
-        modeControl.segmentStyle = .rounded
-        modeControl.target = self
-        modeControl.action = #selector(modeChanged)
-        modeControl.setAccessibilityLabel("Claude mode")
-        modeControl.toolTip = "Standard: your Claude login. EU: Claude in the EU (Vertex AI), for client data. A switch starts new chats."
-        addSubview(modeControl)
-        costLabel.translatesAutoresizingMaskIntoConstraints = false
-        costLabel.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
-        costLabel.textColor = TabColors.dimText
-        costLabel.lineBreakMode = .byTruncatingHead
-        costLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        costLabel.setAccessibilityLabel("Session cost")
-        addSubview(costLabel)
+        modeBar.onSwitch = { [weak self] mode in
+            guard let self else { return }
+            Front.show(self.window)
+            (NSApp.delegate as? AppDelegate)?.requestSwitch(to: mode)
+        }
+        addSubview(modeBar)
         leadingConstraint = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 80)
         NSLayoutConstraint.activate([
             leadingConstraint,
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             addButton.leadingAnchor.constraint(equalTo: stack.trailingAnchor, constant: 4),
             addButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            addButton.trailingAnchor.constraint(lessThanOrEqualTo: costLabel.leadingAnchor, constant: -12),
-            costLabel.trailingAnchor.constraint(equalTo: modeControl.leadingAnchor, constant: -10),
-            costLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            modeControl.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            modeControl.centerYAnchor.constraint(equalTo: centerYAnchor),
+            addButton.trailingAnchor.constraint(lessThanOrEqualTo: modeBar.leadingAnchor, constant: -16),
+            modeBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            modeBar.centerYAnchor.constraint(equalTo: centerYAnchor),
+            modeBar.heightAnchor.constraint(equalToConstant: 26),
         ])
         NotificationCenter.default.addObserver(self, selector: #selector(updateMode), name: ModeSwitch.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(updateMode), name: CostDisplay.changed, object: nil)
@@ -404,28 +394,19 @@ final class TabStripView: NSView {
     func select(_ tab: ChatTab) { controller?.select(tab) }
     func close(_ tab: ChatTab) { controller?.close(tab) }
 
-    @objc private func updateMode() {
-        modeControl.selectedSegment = ZeusMode.current == .eu ? 1 : 0
-        // In EU mode the switch always shows, so that the way back to Standard is never hidden.
-        modeControl.isHidden = ZeusMode.current == .standard
-            && (!Preferences.showModeSwitch || !FileManager.default.fileExists(atPath: ZeusMode.eu.workspace + "/scripts/zeus.py"))
-        updateCost()
-    }
+    @objc private func updateMode() { updateCost() }
 
-    var costText: String { costLabel.isHidden ? "-" : costLabel.stringValue }
+    var costText: String { modeBar.costText }
 
-    /// The cost of the selected tab: "Session 0.42 USD · Chat total 0.31 USD".
+    /// The mode bar of the selected tab: its cost ("Session €0.39 · Chat total €0.29") when Developer Settings show it,
+    /// the EU badge in EU mode, and the switch. In EU mode the switch always shows, so the way back is never hidden.
     func updateCost() {
         let tab = controller?.selectedTab
         let cost = tab.flatMap { tab in Preferences.showCost(in: tab.session.mode) ? tab.cost : nil }
-        costLabel.stringValue = cost?.label ?? ""
-        costLabel.toolTip = cost?.tooltip
-        costLabel.isHidden = cost == nil
-    }
-
-    @objc private func modeChanged() {
-        Front.show(window)
-        NSApp.sendAction(#selector(AppDelegate.switchMode(_:)), to: nil, from: modeControl)
+        let mode = ZeusMode.current
+        let showSwitch = mode == .eu
+            || (Preferences.showModeSwitch && FileManager.default.fileExists(atPath: ZeusMode.eu.workspace + "/scripts/zeus.py"))
+        modeBar.update(mode: mode, showSwitch: showSwitch, cost: cost, switching: (NSApp.delegate as? AppDelegate)?.isSwitching ?? false)
     }
 
     @objc private func newTab() {
@@ -435,7 +416,7 @@ final class TabStripView: NSView {
 }
 
 /// The Zeus chat colours of the tab strip (zeus-editor src/chat/chat.css).
-private enum TabColors {
+enum TabColors {
     static let selected = NSColor(srgbRed: 19/255, green: 53/255, blue: 97/255, alpha: 1)       // --ink-600
     static let selectedBorder = NSColor(srgbRed: 36/255, green: 71/255, blue: 122/255, alpha: 1) // --line-strong
     static let hover = NSColor(srgbRed: 13/255, green: 42/255, blue: 78/255, alpha: 1)          // --ink-800
