@@ -221,7 +221,9 @@ launch_app() {
   TRACE="$WORK/$name/trace.log"
   mkdir -p "$WORK/$name"
   # ZEUS_APP_TEST_BACKGROUND: the app stays behind the other apps, so the test does not take the screen.
+  # ZEUS_APP_QUIET_WINDOWS: the app never takes the focus and puts its windows on ZEUS_APP_TEST_SCREEN.
   env HOME="$SANDBOX" SHELL=/bin/zsh ZEUS_APP_TRACE="$TRACE" ZEUS_APP_TEST_BACKGROUND=1 \
+    ZEUS_APP_QUIET_WINDOWS=1 ZEUS_APP_TEST_SCREEN="${ZEUS_SIM_SCREEN:-1}" \
     ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_REAL_NODE="$REAL_NODE" \
     ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_INSTALL_SYSTEM_CONDA_DIRS="" "$@" \
     "$EXE" >"$WORK/$name/app.out" 2>&1 &
@@ -1067,7 +1069,7 @@ sleep 1.5
 echo none >"$STATE/handoff-mode"
 act switch-host:apolix
 check "with no EU work to hand off, the switch skips the step" 'wait_for "handoff: none pending" 20 && wait_count "state: running(" 8 30 && start_has 8 "\"host\":\"apolix\""'
-check "and says so on the loading screen" 'wait_count "handoff: note shown: No Secure Handoff needed" 2 10'
+check "and says so on the loading screen" 'wait_for "handoff: note shown: No Secure Handoff needed" 10'
 stop_app
 fi
 

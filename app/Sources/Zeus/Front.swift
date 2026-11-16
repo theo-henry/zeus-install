@@ -14,7 +14,7 @@ enum Front {
     }()
 
     static func activate() {
-        guard !background else { return }
+        guard !background, !QuietWindows.isOn else { return }
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -40,8 +40,11 @@ enum Front {
 
     static func show(_ window: NSWindow?) {
         guard let window else { return }
+        QuietWindows.place(window)
         if background {
             putBack(window, among: NSApp.orderedWindows)
+        } else if QuietWindows.isOn {
+            window.orderFront(nil)   // In front of the app's own windows only, without the focus.
         } else {
             window.makeKeyAndOrderFront(nil)
         }
