@@ -4,8 +4,9 @@
 # (app/test/sim/payload/gh): no repo, release, or tag is made, and nothing is downloaded. Each part uses its own
 # temporary home folder; the real one is not used.
 #
-# Usage: app/test/update/run.sh [release] [install] [app] [upgrade] [settings]     (default: all five parts)
+# Usage: app/test/update/run.sh [release] [globe] [install] [app] [upgrade] [settings]     (default: all six parts)
 #   release   app/release.sh in a temporary copy of this repo. It builds the app for both architectures (slow).
+#   globe     app/check-globe-sync.sh (the release check of the globe and the loader colour) with a stubbed gh.
 #   install   install-app.sh on a simulated new Mac: the access check first, then the newest app release.
 #   app       the app updates itself, starts its current version without access, and rolls back a failed update.
 #   upgrade   install-app.sh on a Mac with an older app and user data: it updates the app (also an open app),
@@ -29,7 +30,7 @@ APP_DIR="$(cd "$TEST_DIR/../.." && pwd)"
 REPO_DIR="$(dirname "$APP_DIR")"
 SIM_DIR="$APP_DIR/test/sim"
 BUNDLE_ID="io.github.theo-henry.zeus"
-PARTS="${*:-release install app upgrade settings}"
+PARTS="${*:-release globe install app upgrade settings}"
 
 # The real path (/private/var, not /var): the app copies that macOS starts run from it, and pgrep sees that path.
 WORK="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/zeus-update-test.XXXXXX")" && pwd -P)"
@@ -155,7 +156,7 @@ if wants release; then
   git -C "$CLONE" remote add origin "$WORK/release/origin.git"
   git -C "$CLONE" push -q origin main
   releases "$STATE" "v4.0.0:false:false" "app-v1.9.0:false:false" "app-v1.10.0:false:false" "app-v1.11.0:true:false"
-  release() { env PATH="$BIN:$PATH" ZEUS_SIM_STATE="$STATE" "$CLONE/app/release.sh" "$@" >"$WORK/release/out" 2>&1; }
+  release() { env PATH="$BIN:$PATH" ZEUS_SIM_STATE="$STATE" ZEUS_SKIP_GLOBE_CHECK=1 "$CLONE/app/release.sh" "$@" >"$WORK/release/out" 2>&1; }
   created() { grep -c '^release create' "$STATE/gh.log" 2>/dev/null || true; }
 
   touch "$CLONE/untracked-file"
@@ -167,6 +168,8 @@ if wants release; then
   check "a version that is not X.Y.Z is refused" '! release 1.2 && grep -q "must be X.Y.Z" "$WORK/release/out"'
   check "a version that is not higher than the newest app release is refused" '! release 1.9.5 && grep -q "not higher" "$WORK/release/out"'
   check "an existing release is refused (also a draft)" '! release 1.11.0 && grep -q "already exists" "$WORK/release/out"'
+  check "a release is refused when zeus-editor cannot be checked (the simulated gh returns nothing for it)" \
+    '! env PATH="$BIN:$PATH" ZEUS_SIM_STATE="$STATE" "$CLONE/app/release.sh" >"$WORK/release/out" 2>&1 && grep -q "from theo-henry/zeus-editor is empty" "$WORK/release/out"'
   check "nothing was released for the refused runs" '[ "$(created)" = 0 ]'
 
   echo "  (building the release app; this takes some minutes)"
@@ -184,6 +187,52 @@ if wants release; then
      [ "$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$WORK/release/unpacked/Zeus.app/Contents/Info.plist")" = "$BUNDLE_ID" ]'
   check "the released app is for Apple silicon and Intel" \
     'lipo -archs "$WORK/release/unpacked/Zeus.app/Contents/MacOS/Zeus" | grep -q arm64 && lipo -archs "$WORK/release/unpacked/Zeus.app/Contents/MacOS/Zeus" | grep -q x86_64'
+fi
+
+# ---------------------------------------------------------------------------------------------------------
+if wants globe; then
+  echo
+  echo "Part 1b: app/check-globe-sync.sh and release.sh with a stubbed gh"
+  G="$WORK/globe"
+  mkdir -p "$G/bin" "$G/editor" "$G/app/Resources" "$G/app/Sources/Zeus"
+  # The stub answers "gh api ... repos/<repo>/contents/<path>?ref=main" with the file in $G/editor (a missing file fails).
+  cat >"$G/bin/gh" <<'STUB'
+#!/bin/bash
+for a in "$@"; do last="$a"; done
+file="$GLOBE_STUB_DIR/$(basename "${last%%\?*}")"
+[ -f "$GLOBE_STUB_DIR/.unreadable" ] && exit 1
+[ -f "$file" ] && cat "$file"
+STUB
+  chmod +x "$G/bin/gh"
+  cp "$APP_DIR/check-globe-sync.sh" "$G/app/"
+  cp "$APP_DIR/Resources/globe.js" "$G/app/Resources/"
+  cp "$APP_DIR/Sources/Zeus/Loader.swift" "$APP_DIR/Sources/Zeus/StatusPage.swift" "$G/app/Sources/Zeus/"
+  # The editor copy: another header comment and "export" before the function.
+  { echo "// Another header comment."; echo "//"; awk 'body || !/^\/\// { body = 1; sub(/^function createZeusGlobe/, "export function createZeusGlobe"); print }' "$APP_DIR/Resources/globe.js"; } >"$G/editor/globe.js"
+  printf ':root {\n  --ink-900: #0B2545;\n}\n' >"$G/editor/chat.css"
+  guard() { env PATH="$G/bin:$PATH" GLOBE_STUB_DIR="$G/editor" "$G/app/check-globe-sync.sh" >"$G/out" 2>&1; }
+
+  check "the editor copy has export and the app copy does not (the test data is valid)" \
+    'grep -q "^export function createZeusGlobe" "$G/editor/globe.js" && ! grep -q "^export" "$G/app/Resources/globe.js"'
+  check "the same globe and colour pass (another header comment, export, and a capital letter in the colour are ignored)" 'guard'
+  cp "$G/editor/globe.js" "$G/editor/globe.ok"
+  sed -i '' 's/createZeusGlobe/createZeusGlobeX/' "$G/editor/globe.js"
+  check "a different globe is refused and the difference is shown" '! guard && grep -q "is not the same as" "$G/out" && grep -q "createZeusGlobeX" "$G/out"'
+  cp "$G/editor/globe.ok" "$G/editor/globe.js"
+  printf ':root {\n  --ink-900: #0b2546;\n}\n' >"$G/editor/chat.css"
+  check "a different --ink-900 is refused for the loader and the status page" \
+    '! guard && grep -q "Loader.swift (#0b2545)" "$G/out"'
+  printf ':root {\n  --ink-900: #0b2545;\n}\n' >"$G/editor/chat.css"
+  sed -i '' 's/--bg:#0b2545/--bg:#0b2546/' "$G/app/Sources/Zeus/StatusPage.swift"
+  check "a different status page colour is refused" '! guard && grep -q "StatusPage.swift (#0b2546)" "$G/out"'
+  cp "$APP_DIR/Sources/Zeus/StatusPage.swift" "$G/app/Sources/Zeus/"
+  sed -i '' 's/0x45 \/ 255/0x46 \/ 255/' "$G/app/Sources/Zeus/Loader.swift"
+  check "a different LoaderPage.background is refused" '! guard && grep -q "LoaderPage.background" "$G/out"'
+  cp "$APP_DIR/Sources/Zeus/Loader.swift" "$G/app/Sources/Zeus/"
+  touch "$G/editor/.unreadable"
+  check "a zeus-editor that gh cannot read is refused" '! guard && grep -q "cannot read" "$G/out"'
+  rm "$G/editor/.unreadable"
+  check "the same files pass again" 'guard'
 fi
 
 # ---------------------------------------------------------------------------------------------------------

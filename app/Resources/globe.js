@@ -105,41 +105,51 @@ function createZeusGlobe() {
   const gl = canvas.getContext("webgl", { alpha: true, premultipliedAlpha: true, antialias: true });
   if (!gl) return null;
 
+  // Everything that lives on the GPU. It is made again after a lost context (see below).
+  /** @type {Record<string, any>} */
+  let U = {};
+  let A = -1;
+  let E = -1;
+  /** @type {any[]} */
+  let shapes = [];
   const compile = (type, source) => {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
     return gl.getShaderParameter(shader, gl.COMPILE_STATUS) ? shader : null;
   };
-  const vertex = compile(gl.VERTEX_SHADER, VERTEX);
-  const fragment = compile(gl.FRAGMENT_SHADER, FRAGMENT);
-  const program = gl.createProgram();
-  if (!vertex || !fragment) return null;
-  gl.attachShader(program, vertex);
-  gl.attachShader(program, fragment);
-  gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
-  gl.useProgram(program);
-
-  const U = {};
-  for (const name of ["t", "en", "now", "px", "mini", "calm", "mode", "sc", "rot", "em", "es", "ed"])
-    U[name] = gl.getUniformLocation(program, name);
-  const A = gl.getAttribLocation(program, "a");
-  const E = gl.getAttribLocation(program, "e");
   const upload = (data) => {
     const buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     return buffer;
   };
-  const shapes = [sphere(3600), sphere(420)].map((shape) => ({
-    ...shape,
-    pointBuffer: upload(shape.points),
-    rayBuffer: upload(shape.rays),
-  }));
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.ONE, gl.ONE);
-  gl.clearColor(0, 0, 0, 0);
+  const setup = () => {
+    const vertex = compile(gl.VERTEX_SHADER, VERTEX);
+    const fragment = compile(gl.FRAGMENT_SHADER, FRAGMENT);
+    const program = gl.createProgram();
+    if (!vertex || !fragment || !program) return false;
+    gl.attachShader(program, vertex);
+    gl.attachShader(program, fragment);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return false;
+    gl.useProgram(program);
+    U = {};
+    for (const name of ["t", "en", "now", "px", "mini", "calm", "mode", "sc", "rot", "em", "es", "ed"])
+      U[name] = gl.getUniformLocation(program, name);
+    A = gl.getAttribLocation(program, "a");
+    E = gl.getAttribLocation(program, "e");
+    shapes = [sphere(3600), sphere(420)].map((shape) => ({
+      ...shape,
+      pointBuffer: upload(shape.points),
+      rayBuffer: upload(shape.rays),
+    }));
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.clearColor(0, 0, 0, 0);
+    return true;
+  };
+  if (!setup()) return null;
 
   const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   const em = new Float32Array(SLOTS * 4).fill(-99);
@@ -157,6 +167,9 @@ function createZeusGlobe() {
   let skip = false;
   let width = 0;
   let height = 0;
+  let lost = false;
+  /** @type {((lost: boolean) => void) | null} */
+  let onLostChange = null;
 
   // The turn of the globe and the time of its ring of light at this moment, from the wall clock,
   // so that two globes on one screen are the same.
@@ -190,6 +203,7 @@ function createZeusGlobe() {
 
   function frame(ms) {
     request = requestAnimationFrame(frame);
+    if (lost) return;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     if (!canvas.isConnected || w === 0 || h === 0) {
@@ -264,8 +278,34 @@ function createZeusGlobe() {
     gl.drawArrays(gl.POINTS, 0, shape.count);
   }
 
+  // The GPU can take the context away (a GPU reset, or a Mac that sleeps and wakes). Then the canvas
+  // stays blank, so the page shows its logo or bolt until the browser gives the context back. The
+  // buffers and the program are gone with the context: they are made again, and the size is set again.
+  canvas.addEventListener("webglcontextlost", (event) => {
+    event.preventDefault(); // Without this the browser never restores the context.
+    lost = true;
+    canvas.style.display = "none";
+    onLostChange?.(true);
+  });
+  canvas.addEventListener("webglcontextrestored", () => {
+    if (!setup()) return; // Stays lost: the page keeps its logo or bolt.
+    width = 0;
+    height = 0;
+    lost = false;
+    canvas.style.display = "";
+    onLostChange?.(false);
+  });
+
   return {
     canvas,
+    /** True while the context is lost, so the canvas is hidden. */
+    get lost() {
+      return lost;
+    },
+    /** Calls `callback(true)` when the context is lost and `callback(false)` when the globe is back. */
+    onLostChange(callback) {
+      onLostChange = callback;
+    },
     start() {
       if (!request) request = requestAnimationFrame(frame);
     },

@@ -93,4 +93,5 @@ jobs:
             ZEUS_RELEASE_NOTE="$(printf 'Changes:\n%s' "$(git log --format='- %s' "$RELEASED..HEAD" -- app install.sh install-app.sh)")"
             export ZEUS_RELEASE_NOTE
           fi
-          app/release.sh
+          # The CI token cannot read the private zeus-editor repo, so CI skips the globe check of release.sh.
+          ZEUS_SKIP_GLOBE_CHECK=1 app/release.sh

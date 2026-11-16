@@ -46,7 +46,8 @@ run_test() {
 
 run_test "pty" 300 "$TEST_DIR/pty/run.sh"
 run_test "plugin-scope" 300 "$TEST_DIR/plugin-scope/run.sh"
-run_test "update install" 300 "$TEST_DIR/update/run.sh" install
+# Each update part builds the development app first (swift build): on a busy Mac that alone can take minutes.
+run_test "update install" 600 "$TEST_DIR/update/run.sh" install
 run_test "update app" 600 "$TEST_DIR/update/run.sh" app
 run_test "update upgrade" 600 "$TEST_DIR/update/run.sh" upgrade
 run_test "sim" 600 "$TEST_DIR/sim/run.sh"

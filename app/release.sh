@@ -6,6 +6,7 @@
 #   version   X.Y.Z, higher than the newest app release. Default: the newest app release with the
 #             last number plus 1, or 0.1.0 for the first release.
 #
+# It first checks that the globe and the loader colour are the same as in zeus-editor (app/check-globe-sync.sh).
 # It builds the app (app/build.sh) from the newest main commit, checks the zip, and makes the release
 # "app-v<version>" with the assets Zeus.zip and Zeus.zip.sha256 in the private zeus repo.
 # The release is not marked as the latest release of that repo, so the repo's other releases do not change.
@@ -16,6 +17,8 @@
 #   ZEUS_RELEASE_REPO="owner/name"   replaces the repo of the release (for tests).
 #   ZEUS_RELEASE_NOTE="text"         is added to the end of the release notes (CI puts there the subjects of the commits
 #                                    that changed the app since the newest app release).
+#   ZEUS_SKIP_GLOBE_CHECK=1          skips the check of the globe and the loader colour against zeus-editor (CI sets it: its token
+#                                    cannot read that private repo).
 #   GH_TOKEN                         a token for gh, when gh is not logged in (CI uses a secret).
 set -euo pipefail
 
@@ -69,6 +72,9 @@ main() {
   command -v gh >/dev/null 2>&1 || fail "The GitHub CLI (gh) is not installed."
   gh auth status -h github.com >/dev/null 2>&1 || fail "gh is not logged in to GitHub." "Run: gh auth login"
   check_checkout
+  if [ "${ZEUS_SKIP_GLOBE_CHECK:-}" != 1 ]; then
+    "$APP_DIR/check-globe-sync.sh" || exit 1
+  fi
 
   local tags newest version="${1:-}"
   tags="$(gh api "repos/$RELEASE_REPO/releases?per_page=100" --jq '.[].tag_name')" ||
