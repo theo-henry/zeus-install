@@ -5,7 +5,9 @@ import SwiftUI
 /// The app is not a Claude Code session, so it may build, scan, and release a handoff.
 ///
 /// The calls, each `python3 <workspace>/scripts/zeus.py --workspace <workspace> <arguments>` in the workspace, with one JSON object on stdout:
-/// - `handoff pending --json`: `{"projects": [{"project_id", "name", "eu_work": {"first_at", "last_at"}, "released_at", "needs_handoff"}]}`
+/// - `handoff pending --json`: `{"projects": [{"project_id", "name", "eu_work": {"first_at", "last_at"}, "released_at", "needs_handoff",
+///   "draft_ready", "draft_hash", "draft_ok"}]}`. `draft_ready`: a current draft exists (Zeus built it when the EU session ended), so
+///   `scan` alone gives the summary; `draft_hash` and `draft_ok` come with it.
 /// - `handoff build <project> --json`, then `handoff scan <project> --json`: `{"project_id", "ok", "hash", "findings": [{"kind", "where", "preview"}],
 ///   "summary": {<name>: <count>}, "stages": [{"id", "label", "status": "done" | "blocked"}], "review_page", ...}`.
 ///   While they run, they print `{"stage", "label"}` on stderr as each step starts; build has the stages collect, strip, aggregate,
@@ -21,6 +23,8 @@ enum HandoffCLI {
     struct Project: Equatable {
         let id: String
         let name: String
+        /// Zeus has a current draft of this handoff (built when the EU session ended): only the scan runs, not the build.
+        var draftReady = false
     }
 
     struct Finding: Identifiable, Equatable {
@@ -120,7 +124,8 @@ enum HandoffCLI {
             (object["projects"] as? [[String: Any]] ?? []).compactMap { entry in
                 guard entry["needs_handoff"] as? Bool == true, let id = entry["project_id"] as? String, !id.isEmpty else { return nil }
                 let name = (entry["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? id
-                return Project(id: id, name: name)
+                let ready = entry["draft_ready"] as? Bool == true && !((entry["draft_hash"] as? String) ?? "").isEmpty
+                return Project(id: id, name: name, draftReady: ready)
             }
         }
     }
@@ -133,32 +138,53 @@ enum HandoffCLI {
         }
     }
 
+    /// The steps of a build that the draft of an ended EU session has done already (the ids and labels of scripts/handoff.py, STAGES_BUILD).
+    static let preparedStages: [Stage] = [
+        ("collect", "Collecting structure from Zeus records"),
+        ("strip", "Removing row values, figures, and free text"),
+        ("aggregate", "Aggregating findings to verdicts"),
+    ].map { Stage(id: $0.0, label: "\($0.1) (prepared when the EU session ended)") }
+
     /// Builds the handoff of a project, then scans it. The stages are those of the build, with the scan's own at the end.
+    /// A project with a current draft (draftReady) is only scanned, and its build stages show as prepared; when that scan
+    /// fails (for example, a referenced file changed since), the full build runs after all.
     static func buildAndScan(_ project: Project, progress: ((Stage) -> Void)? = nil) -> Result<Scan, Failure> {
+        if project.draftReady {
+            // No live progress here: when this scan fails, the build's stages come next, in their own order.
+            let scanned = call(["handoff", "scan", project.id, "--json"], timeout: 120)
+            if case let .success(object) = scanned {
+                Trace.log("handoff: \(project.id) draft ready, scan only")
+                return summarize(project, object, built: preparedStages)
+            }
+            Trace.log("handoff: \(project.id) ready draft did not scan, building")
+        }
         var built: [Stage] = []
         return call(["handoff", "build", project.id, "--json"], timeout: 120, progress: progress).flatMap { object in
             built = stages(object)
             return call(["handoff", "scan", project.id, "--json"], timeout: 120, progress: progress)
-        }.flatMap { object in
-            guard let hash = object["hash"] as? String, !hash.isEmpty else {
-                return .failure(Failure(message: "The scan of \(project.name) gave no handoff hash.", fix: nil))
-            }
-            let findings = (object["findings"] as? [[String: Any]] ?? []).map { item in
-                Finding(kind: item["kind"] as? String ?? "finding", location: item["where"] as? String ?? "",
-                        preview: item["preview"] as? String ?? "")
-            }
-            let summary = (object["summary"] as? [String: Any] ?? [:]).compactMap { key, value -> (String, Int)? in
-                // What goes over, not what the scan found or left out (those show apart); empty sections stay out.
-                guard !["scan_findings", "omitted"].contains(key), let number = value as? NSNumber,
-                      CFGetTypeID(number) != CFBooleanGetTypeID(), number.intValue > 0 else { return nil }
-                return (key, number.intValue)
-            }.sorted { $0.0 < $1.0 }
-            let scanned = stages(object)
-            let merged = built.filter { stage in !scanned.contains { $0.id == stage.id } } + scanned
-            return .success(Scan(project: project, hash: hash, ok: object["ok"] as? Bool ?? false, findings: findings,
-                                 summary: summary.map { (name: $0.0, count: $0.1) }, stages: merged,
-                                 reviewPage: (object["review_page"] as? String).flatMap { $0.isEmpty ? nil : $0 }))
+        }.flatMap { object in summarize(project, object, built: built) }
+    }
+
+    /// The Scan of a `scan` answer; `built` are the stages before the scan's own.
+    private static func summarize(_ project: Project, _ object: [String: Any], built: [Stage]) -> Result<Scan, Failure> {
+        guard let hash = object["hash"] as? String, !hash.isEmpty else {
+            return .failure(Failure(message: "The scan of \(project.name) gave no handoff hash.", fix: nil))
         }
+        let findings = (object["findings"] as? [[String: Any]] ?? []).map { item in
+            Finding(kind: item["kind"] as? String ?? "finding", location: item["where"] as? String ?? "",
+                    preview: item["preview"] as? String ?? "")
+        }
+        let summary = (object["summary"] as? [String: Any] ?? [:]).compactMap { key, value -> (String, Int)? in
+            // What goes over, not what the scan found or left out (those show apart); empty sections stay out.
+            guard !["scan_findings", "omitted"].contains(key), let number = value as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(), number.intValue > 0 else { return nil }
+            return (key, number.intValue)
+        }.sorted { $0.0 < $1.0 }
+        let scanned = stages(object)
+        let merged = built.filter { stage in !scanned.contains { $0.id == stage.id } } + scanned
+        return .success(Scan(project: project, hash: hash, ok: object["ok"] as? Bool ?? false, findings: findings,
+                             summary: summary.map { (name: $0.0, count: $0.1) }, stages: merged,
+                             reviewPage: (object["review_page"] as? String).flatMap { $0.isEmpty ? nil : $0 }))
     }
 
     static func release(_ scan: Scan) -> Result<Void, Failure> {
@@ -171,7 +197,8 @@ enum HandoffCLI {
 }
 
 /// The switch of a tab from EU to Apolix: the app hands off the EU work before the EU session stops.
-/// It checks which projects need a handoff; with none, it does nothing visible. Otherwise the tab shows the
+/// It checks which projects need a handoff; with none, the loading screen of the Apolix session says so for a moment
+/// (nothingToHandOff, shown by ChatTab), without a step or a sheet. Otherwise the tab shows the
 /// handoff step on the loading screen while Zeus builds and scans each handoff, then a summary sheet:
 /// release and continue on Apolix, open the review page, continue without handoff, or stay on EU.
 /// No error starts Apolix by itself: the consultant always picks.
@@ -182,6 +209,10 @@ final class HandoffFlow {
     static let subtitle = "Removing and aggregating sensitive information"
     /// The stage that shows while Zeus builds and scans, before it names its own stages.
     static let firstStage = "Collecting the EU work"
+    /// The stage that shows while Zeus scans a draft that it prepared when the EU session ended.
+    static let preparedScanStage = "Scanning the prepared handoff"
+    /// The note on the loading screen when no project needs a handoff.
+    static let nothingToHandOff = "Nothing to hand off — this EU session didn't work on a client project."
 
     private weak var tab: ChatTab?
     private var overlay: LoaderOverlay?
@@ -274,6 +305,15 @@ final class HandoffFlow {
         Trace.log("handoff: stage started: \(stage.label)")
     }
 
+    /// A stage that was done before this step began.
+    private func addDoneStage(_ stage: HandoffCLI.Stage) {
+        guard !shownStages.contains(stage.id) else { return }
+        overlay?.addStage(stage.label)
+        shownStages.append(stage.id)
+        overlay?.markStage(shownStages.count - 1, "done")
+        Trace.log("handoff: stage already done: \(stage.label)")
+    }
+
     private func run(index: Int) {
         guard !ended else { return }
         guard index < projects.count else {
@@ -286,8 +326,14 @@ final class HandoffFlow {
             guard let self else { return }
             self.overlay?.clearStages(group: self.projects.count > 1 ? project.name : nil)
             self.shownStages = []
-            // Until Zeus names its first step; Zeus's own "collect" step then takes this place.
-            self.startStage(HandoffCLI.Stage(id: "collect", label: Self.firstStage))
+            if project.draftReady {
+                // Zeus built this draft when the EU session ended: its build steps are done, and only the scan runs now.
+                for stage in HandoffCLI.preparedStages { self.addDoneStage(stage) }
+                self.startStage(HandoffCLI.Stage(id: "scan", label: Self.preparedScanStage))
+            } else {
+                // Until Zeus names its first step; Zeus's own "collect" step then takes this place.
+                self.startStage(HandoffCLI.Stage(id: "collect", label: Self.firstStage))
+            }
         }
         queue.async { [weak self] in
             let result = HandoffCLI.buildAndScan(project) { stage in

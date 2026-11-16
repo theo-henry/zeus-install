@@ -18,6 +18,11 @@ final class ChatTab: NSObject {
     /// An opaque cover over the old page during a host switch. Not alphaValue 0: WebKit stops painting a
     /// transparent web view and may not paint again when it becomes visible (a blank tab after the switch).
     private var curtain: NSView?
+    /// A note for the loading screen of the next session of a switch (HandoffFlow.nothingToHandOff), then the one that shows.
+    private var switchNote: String?
+    private var loaderNote: String?
+    /// How long a switch note stays on the loading screen; the session starts meanwhile.
+    private static let noteTime: TimeInterval = 1.2
 
     /// The same page without the fragment: the chat page removes its token (#k=…) from its address as it loads.
     static func samePage(_ a: URL?, _ b: URL?) -> Bool {
@@ -132,7 +137,7 @@ final class ChatTab: NSObject {
         case let .running(url):
             guard shownURL != url else { return }
             shownURL = url
-            loader?.setStatus("Opening the chat…")
+            if loaderNote == nil { loader?.setStatus("Opening the chat…") }
             webView.load(URLRequest(url: url))   // Behind the loading screen, until the hand-over.
         case let .failed(message):
             shownURL = nil
@@ -182,6 +187,10 @@ final class ChatTab: NSObject {
 
     private func updateLoaderStatus() {
         guard shownURL == nil, let loader else { return }
+        if let loaderNote {
+            loader.setStatus(loaderNote)
+            return
+        }
         if let status = session.startStatus {
             loader.setStatus(status)
             return
@@ -298,7 +307,10 @@ final class ChatTab: NSObject {
                 guard let self else { return }
                 self.handoff = nil
                 switch outcome {
-                case .noHandoffNeeded: self.confirmSwitch(to: target)
+                case .noHandoffNeeded:
+                    // Not silent: the loading screen of the Apolix session says why there was no handoff step.
+                    self.switchNote = HandoffFlow.nothingToHandOff
+                    self.confirmSwitch(to: target)
                 case .switchNow: self.finishSwitch(to: target)
                 case .stay: self.cancelSwitch()
                 }
@@ -310,6 +322,7 @@ final class ChatTab: NSObject {
 
     private func cancelSwitch() {
         switching = false
+        switchNote = nil
         Trace.log("host switch cancelled: \(session.host.rawValue)")
         host?.tabStateChanged(self)
     }
@@ -388,9 +401,26 @@ final class ChatTab: NSObject {
         handingOver = false
         // The old chat page stops; the loading screen covers the tab until the new one is ready.
         showLoader()
+        showSwitchNote()
         webView.loadHTMLString(StatusPage.blank, baseURL: nil)
         terminal.show(next)
         attach(next)
+    }
+
+    /// Shows the switch's note on the new loading screen for a moment, while the new session starts; nothing waits for it.
+    private func showSwitchNote() {
+        guard let note = switchNote else { return }
+        switchNote = nil
+        loaderNote = note
+        loader?.setStatus(note)
+        Trace.log("handoff: note shown: \(note)")
+        let generation = self.generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.noteTime) { [weak self] in
+            guard let self, self.loaderNote == note else { return }
+            self.loaderNote = nil
+            guard generation == self.generation else { return }
+            if self.shownURL != nil { self.loader?.setStatus("Opening the chat…") } else { self.updateLoaderStatus() }
+        }
     }
 
     #if DEBUG
