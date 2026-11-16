@@ -969,6 +969,7 @@ check "a new tab starts on the host picked last" 'wait_count "state: running(" 3
 check "blind build mode off: the new session has no ZEUS_BLIND_MODE" 'start_has 3 "\"blind\":null"'
 act switch-host:apolix
 check "EU to Apolix without EU work to hand off asks Zeus and skips the handoff step" 'wait_for "handoff: none pending" 20'
+check "the loading screen says that there was nothing to hand off" 'wait_for "handoff: note shown: Nothing to hand off" 10'
 check "the Apolix session starts in the new tab" 'wait_count "state: running(" 4 30 && start_has 4 "\"host\":\"apolix\""'
 check "the host bar follows the selected tab" 'wait_bar "apolix switch=true pill=false"'
 act test-select-first
@@ -1052,9 +1053,21 @@ act switch-host:apolix
 check "a failed pending check asks the consultant" 'wait_count "handoff: summary projects=0 clean=true findings=0 error=true release=false" 2 20 && grep -q "handoff: pending failed: The project records cannot be read." "$TRACE"'
 act test-handoff:stay
 check "Stay on EU after a failed check keeps EU" 'wait_count "handoff: outcome stay" 2 5 && sleep 1 && [ "$(starts)" = 5 ]'
+echo ready >"$STATE/handoff-mode"
+act switch-host:apolix
+check "a draft prepared when the EU session ended is scanned, not built again" 'wait_for "handoff: solvias draft ready, scan only" 20 && [ "$(grep -c "handoff build" "$STATE/handoff-calls")" = 3 ]'
+check "its build stages show as already done" 'grep -q "handoff: stage already done: Aggregating findings to verdicts (prepared when the EU session ended)" "$TRACE"'
+check "the prepared draft offers the release" 'wait_count "handoff: summary projects=1 clean=true findings=0 error=false release=true" 2 10'
+act test-handoff:continue
+check "Continue starts Apolix" 'wait_count "state: running(" 6 30 && start_has 6 "\"host\":\"apolix\""'
+act switch-host:eu
+check "back on EU" 'wait_count "state: running(" 7 30 && start_has 7 "\"host\":\"eu\""'
+wait_count "page loaded: http://127.0.0.1" 7 20 >/dev/null
+sleep 1.5
 echo none >"$STATE/handoff-mode"
 act switch-host:apolix
-check "with no EU work to hand off, the switch skips the step" 'wait_for "handoff: none pending" 20 && wait_count "state: running(" 6 30 && start_has 6 "\"host\":\"apolix\""'
+check "with no EU work to hand off, the switch skips the step" 'wait_for "handoff: none pending" 20 && wait_count "state: running(" 8 30 && start_has 8 "\"host\":\"apolix\""'
+check "and says so on the loading screen" 'wait_count "handoff: note shown: Nothing to hand off" 2 10'
 stop_app
 fi
 

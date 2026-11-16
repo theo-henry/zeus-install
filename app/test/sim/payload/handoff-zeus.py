@@ -2,7 +2,8 @@
 """Simulated scripts/zeus.py of a Zeus workspace, for the EU handoff of the Zeus app (test scenario 6).
 
 It answers `handoff pending|build|scan|release ... --json` with canned JSON. The file <state>/handoff-mode chooses the case:
-none (no project needs a handoff), clean, findings, error (the build fails), pending-error (the pending check fails).
+none (no project needs a handoff), clean, findings, error (the build fails), pending-error (the pending check fails),
+ready (a clean draft that Zeus built when the EU session ended: the app scans it and does not build).
 Each call is written to <state>/handoff-calls and, with the time order of the zeus sessions, to <state>/sessions.
 """
 import json
@@ -47,12 +48,13 @@ if command == "pending":
     if mode == "pending-error":
         answer({"error": "The project records cannot be read.", "fix": "Run zeus doctor."}, 1)
     needs = mode != "none"
+    ready = {"draft_ready": True, "draft_hash": "a" * 64, "draft_ok": True} if mode == "ready" else {"draft_ready": False}
     answer({"projects": [
         {"project_id": "solvias", "name": "Solvias", "eu_work": {"first_at": "2026-11-13T09:00:00Z", "last_at": "2026-11-13T15:40:00Z"},
-         "released_at": None, "needs_handoff": needs},
-        {"project_id": "vicat", "name": "Vicat", "eu_work": None, "released_at": "2026-11-10T10:00:00Z", "needs_handoff": False},
+         "released_at": None, "needs_handoff": needs, **ready},
+        {"project_id": "vicat", "name": "Vicat", "eu_work": None, "released_at": "2026-11-10T10:00:00Z", "needs_handoff": False, "draft_ready": False},
     ]})
-findings = [] if mode == "clean" else [
+findings = [] if mode in ("clean", "ready") else [
     {"kind": "email", "where": "sql/transformations/vendor.sql:14", "preview": "j***@***.com"},
     {"kind": "long-number", "where": "work/view-ap/spec.json:/filters/2", "preview": "4*** (10 characters)"},
 ]

@@ -131,8 +131,9 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
 ### The EU handoff when a tab switches from EU to Apolix
 
 Before the EU session stops, the app (not Claude) asks the workspace's Zeus which projects need a handoff: `python3 <workspace>/scripts/zeus.py --workspace <workspace> handoff pending --json`, in the workspace, without the variables of a Claude Code session.
-With none, the switch goes on as above. Otherwise the tab shows **Handing off data securely** on the loading screen while Zeus runs `handoff build <project> --json` and `handoff scan <project> --json` (off the main thread, with time limits),
-and shows each step as Zeus starts it (its `{"stage", "label"}` progress lines on stderr), each for a moment, then ticks them off; a blocked review step shows as failed. Then a summary sheet shows what goes over (counts), the scan result, and any findings (masked previews from Zeus), with:
+With none, the switch goes on as above, and the loading screen of the Apolix session says "Nothing to hand off — this EU session didn't work on a client project." for about 1.2 s while the session starts (no step, no sheet). Otherwise the tab shows **Handing off data securely** on the loading screen while Zeus runs `handoff build <project> --json` and `handoff scan <project> --json` (off the main thread, with time limits),
+and shows each step as Zeus starts it (its `{"stage", "label"}` progress lines on stderr), each for a moment, then ticks them off; a blocked review step shows as failed.
+When `pending` says `draft_ready` (Zeus built the draft when the EU session ended, and it is still current), only `handoff scan` runs: collect, strip, and aggregate show as done, "prepared when the EU session ended". If that scan fails, the full build runs. Then a summary sheet shows what goes over (counts), the scan result, and any findings (masked previews from Zeus), with:
 
 - **Release and continue on Apolix**: `handoff release <project> <hash> --json`, then the Apolix session starts. Disabled while the scan has findings or after an error.
 - **Open review page**: the HTML review page of the scan.
@@ -307,7 +308,7 @@ It presses the app's buttons through the debug test actions and checks the trace
    and starts `zeus` with the EU variables and without keys, proxies, or region overrides; blind build mode reaches new sessions only; the cost of each report reaches the title bar;
    the host bar follows the selected tab; without a sign-in the EU start is refused and nothing starts on Apolix; **Try again** starts on EU after the sign-in.
 7. The EU handoff with a simulated `scripts/zeus.py` (`payload/handoff-zeus.py`): a clean scan ticks off its stages in under 3 s and releases before the EU session stops;
-   a scan with findings disables Release and **Stay on EU** keeps EU; a failed build or pending check asks, and **Continue without handoff** starts Apolix without a release; with no EU work the step is skipped.
+   a scan with findings disables Release and **Stay on EU** keeps EU; a failed build or pending check asks, and **Continue without handoff** starts Apolix without a release; a draft prepared when the EU session ended is scanned, not built; with no EU work the step is skipped and the loading screen says so.
 
 `ZEUS_SIM_SCENARIOS="6 7"` runs only the named scenarios (2 and 3 run with 1).
 
