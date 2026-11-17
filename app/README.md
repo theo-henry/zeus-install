@@ -15,11 +15,14 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   Development versions (such as `0.0.0-dev`), a read-only app folder, and `ZEUS_APP_NO_UPDATE=1` (debug builds) turn the check off.
 - **Update from the settings.** **Check for updates** and **Update now** in the settings of the chat and Zeus Editor pages ask the app about the app (`Sources/Zeus/AppUpdate.swift`).
   At document start, every Zeus page gets `window.zeusApp.update = {version: 1}`.
-  A page posts `{type: "app-update-check"}` to `window.webkit.messageHandlers.zeusApp`; the app asks the zeus repo for its `app-v` releases (as at launch, but it waits up to 20 s)
-  and answers in that page with `window.zeusApp.onUpdateEvent({type: "app-update", current, latest, notes, available, error?, message?})`.
-  `latest` is the newest app release (or null), `notes` has the release notes of each release newer than `current` (or null), and `available` is true when the app can install `latest` now.
-  `error` is `no-gh`, `unreachable` (no answer from GitHub, or no access), `no-release`, `development` (a development build), or `cannot-update` (a read-only app folder, or `ZEUS_APP_NO_UPDATE=1`), and `message` says it in words.
-  A page posts `{type: "app-update-apply"}` for **Update now**. The app downloads and checks the newest release as at launch, while the user keeps working.
+  A page posts `{type: "app-update-check"}` to `window.webkit.messageHandlers.zeusApp`; the app asks the zeus repo for its `app-v` releases (as at launch, but it waits up to 12 s, because the page waits 15 s)
+  and answers in that page with `window.zeusApp.onUpdateEvent({type: "app-update-check", status, version, latest, notes, available, error?, message?})` (the contract of zeus-editor, `docs/chat.md`).
+  `status` is `current`, `available` (the app can install `latest` now), or `error`.
+  `version` is the installed version, `latest` is the newest app release (or null), `notes` has the release notes of each release newer than `version` (an array), and `available` is true when the app can install `latest` now.
+  When `status` is `error`, `error` is `no-gh`, `unreachable` (no answer from GitHub, or no access), `no-release`, `development` (a development build), or `cannot-update` (a read-only app folder, or `ZEUS_APP_NO_UPDATE=1`), and `message` says it in words.
+  A page posts `{type: "app-update-apply"}` for **Update now**.
+  The app asks for the releases (it waits up to 12 s) and answers in that page with `{type: "app-update-apply", status: "started" | "error", message?}` as soon as it finds the new release (`error` when it does not, or when this copy cannot update itself).
+  The app downloads and checks the newest release as at launch, while the user keeps working.
   Then it waits until Zeus works in no tab (a turn, a question or permission prompt in a turn, a message on its way, or a start).
   Then it shows the loading screen with "Installing Zeus X.Y.Z…" in the place of the front chat window and hides the chat windows, so that no message can start a turn.
   When a tab started to work just before, the chat windows come back and the update waits again.

@@ -142,7 +142,7 @@ final class AppUpdate {
         version = nil
         sendProgress()
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = Updater.checkAndDownload(timeout: Updater.userCheckTimeout) { version in
+            let result = Updater.checkAndDownload(timeout: Updater.pageCheckTimeout) { version in
                 DispatchQueue.main.async {
                     self.version = version
                     self.reply(["type": "app-update-apply", "status": "started"])
