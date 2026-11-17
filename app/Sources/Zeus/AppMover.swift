@@ -18,8 +18,7 @@ enum AppMover {
 
     /// A development build, or a test run, stays where it is.
     static var shouldMove: Bool {
-        let env = ProcessInfo.processInfo.environment
-        if env["ZEUS_APP_NO_MOVE"] == "1" || env["ZEUS_APP_TRACE"] != nil { return false }
+        if DebugEnvironment.value("ZEUS_APP_NO_MOVE") == "1" || DebugEnvironment.value("ZEUS_APP_TRACE") != nil { return false }
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         if version.contains("dev") { return false }
         return Bundle.main.bundleURL.pathExtension == "app" && !isInApplications

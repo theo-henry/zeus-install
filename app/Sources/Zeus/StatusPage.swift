@@ -41,7 +41,7 @@ enum StatusPage {
             ? "<button class=\"primary\" onclick=\"send('eu-sign-in')\">Sign in to Google Cloud</button>" : ""
         let setup = failure.needsSetup ? "<button class=\"primary\" onclick=\"send('setup')\">Run the Zeus setup</button>" : ""
         let signInHelp = failure.needsSignIn
-            ? "<p>Sign in with the Google account that has access to the Apolix EU project. Your browser opens; the terminal below shows the steps.</p>"
+            ? "<p>Sign in with the Google account that has access to the EU project of Zeus. Your browser opens; the terminal below shows the steps.</p>"
             : ""
         return """
         <!doctype html><html><head><meta charset="utf-8"><style>\(style)

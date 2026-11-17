@@ -156,7 +156,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         for other in tabs { other.view.isHidden = other !== tab }
         window?.title = tab.tabName.title
         strip.reload()
-        strip.modeBar.update(cost: tab.cost)
+        strip.modeBar.update(cost: tab.cost, project: tab.tabName.project)
         WebViewHandler.matchTitleBar(of: window, to: tab.webView)
         if changed {
             window?.makeFirstResponder(tab.focusView)
@@ -209,11 +209,11 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
     /// EU mode: a tab has a new session cost. The title bar shows the cost of the selected tab.
     func tabCostChanged(_ tab: ChatTab) {
         guard tab === selectedTab else { return }
-        strip.modeBar.update(cost: tab.cost)
+        strip.modeBar.update(cost: tab.cost, project: tab.tabName.project)
     }
 
     /// The app changed its mode, or a switch started or ended.
-    func modeChanged() { strip.modeBar.update(cost: selectedTab?.cost) }
+    func modeChanged() { strip.modeBar.update(cost: selectedTab?.cost, project: selectedTab?.tabName.project) }
 
     #if DEBUG
     /// Test action: what the mode bar of this window shows.
@@ -228,7 +228,10 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func tabNameChanged(_ notification: Notification) {
         guard tabs.contains(where: { $0.tabName === notification.object as AnyObject }) else { return }
-        if let selectedTab { window?.title = selectedTab.tabName.title }
+        if let selectedTab {
+            window?.title = selectedTab.tabName.title
+            strip.modeBar.update(cost: selectedTab.cost, project: selectedTab.tabName.project)
+        }
         strip.reload()
     }
 
@@ -637,13 +640,16 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     }
 }
 
-/// The right side of the title bar of a chat window: in EU mode the green EU pill and the EU session cost of the selected
-/// tab (an estimate, in USD), then the `Standard | EU` switch of the whole app. Standard shows no cost.
+/// The right side of the title bar of a chat window: in EU mode the green EU pill, the EU data access switch of the selected
+/// tab's project, and the EU session cost of the selected tab (an estimate), then the `Standard | EU` switch of the whole
+/// app. Standard shows no cost and no data access switch.
 final class ModeBarView: NSView {
     static let euGreen = NSColor(srgbRed: 31/255, green: 122/255, blue: 77/255, alpha: 1)
     private let pill = NSView()
     private let pillLabel = NSTextField(labelWithString: "EU")
     private let costLabel = NSTextField(labelWithString: "")
+    /// EU data access of the selected tab's project (zeus `eu-access`): only the user turns it on or off, here.
+    private let accessSwitch = NSButton(checkboxWithTitle: "EU data access", target: nil, action: nil)
     private let control = NSSegmentedControl(labels: ZeusMode.allCases.map(\.title), trackingMode: .selectOne,
                                              target: nil, action: nil)
 
@@ -665,13 +671,23 @@ final class ModeBarView: NSView {
         costLabel.textColor = TabColors.dimText
         costLabel.lineBreakMode = .byTruncatingTail
         costLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        accessSwitch.attributedTitle = NSAttributedString(string: "EU data access", attributes: [
+            .font: NSFont(name: "ObjectSans-Regular", size: 12) ?? .systemFont(ofSize: 12), .foregroundColor: TabColors.dimText,
+            .baselineOffset: 1,
+        ])
+        accessSwitch.contentTintColor = Self.euGreen
+        accessSwitch.target = self
+        accessSwitch.action = #selector(toggleAccess)
+        accessSwitch.setAccessibilityLabel("EU data access")
+        NotificationCenter.default.addObserver(self, selector: #selector(accessChanged), name: EUDataAccess.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(accessChanged), name: EuroRate.changed, object: nil)
         control.segmentStyle = .rounded
         control.controlSize = .small
         control.target = self
         control.action = #selector(choose)
         control.setAccessibilityLabel("Zeus mode")
-        control.toolTip = "Standard: Claude on the Apolix Team plan. EU: Claude on Google Vertex AI in the EU, for client data work."
-        let stack = NSStackView(views: [pill, costLabel, control])
+        control.toolTip = "Standard: Claude on the Claude Team plan. EU: Claude on Google Vertex AI in the EU, for client data work."
+        let stack = NSStackView(views: [pill, accessSwitch, costLabel, control])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
@@ -698,10 +714,26 @@ final class ModeBarView: NSView {
 
     /// The cost of the selected tab, which the bar shows in EU mode.
     private var cost: EUCost?
+    /// The project of the selected tab.
+    private var project: String?
 
-    func update(cost: EUCost?) {
+    func update(cost: EUCost?, project: String? = nil) {
         self.cost = cost
+        let changed = self.project != project
+        self.project = project.flatMap { Handover.validProject($0) ? $0 : nil }
+        if ZeusMode.current == .eu, let project = self.project, changed || EUDataAccess.shared.state[project] == nil {
+            EUDataAccess.shared.load(project)
+        }
         refresh()
+    }
+
+    @objc private func accessChanged() { refresh() }
+
+    @objc private func toggleAccess() {
+        let on = accessSwitch.state == .on
+        refresh()
+        guard let project else { return }
+        (NSApp.delegate as? AppDelegate)?.setEUDataAccess(project: project, on: on)
     }
 
     func refresh() {
@@ -711,14 +743,24 @@ final class ModeBarView: NSView {
         control.isEnabled = !(app?.isSwitchingMode ?? false)
         pill.isHidden = mode != .eu
         costLabel.isHidden = mode != .eu || cost == nil
-        costLabel.stringValue = cost?.label ?? ""
-        costLabel.toolTip = cost?.detail
-        costLabel.setAccessibilityLabel(cost.map { "\($0.label). \($0.detail)" })
+        let rate = EuroRate.shared.current
+        costLabel.stringValue = cost?.label(rate: rate) ?? ""
+        costLabel.toolTip = cost?.detail(rate: rate)
+        costLabel.setAccessibilityLabel(cost.map { "\($0.label(rate: rate)). \($0.detail(rate: rate))" })
+        let access = project.flatMap { EUDataAccess.shared.state[$0] }
+        accessSwitch.isHidden = mode != .eu || project == nil
+        accessSwitch.state = access?.enabled == true ? .on : .off
+        accessSwitch.isEnabled = access != nil && !(app?.isSwitchingMode ?? false)
+        accessSwitch.toolTip = project.map { project in
+            access?.enabled == true
+                ? "On: Zeus may read client data rows of \(project) in EU mode. Click to turn it off."
+                : "Off: Zeus shows no client data rows of \(project). Only you can turn it on, here; Zeus can not."
+        }
     }
 
     #if DEBUG
     var state: String {
-        "mode=\(ZeusMode.allCases[max(0, control.selectedSegment)].rawValue) enabled=\(control.isEnabled) pill=\(!pill.isHidden) cost=\(costLabel.isHidden ? "-" : costLabel.stringValue)"
+        "mode=\(ZeusMode.allCases[max(0, control.selectedSegment)].rawValue) enabled=\(control.isEnabled) pill=\(!pill.isHidden) access=\(accessSwitch.isHidden ? "-" : (accessSwitch.state == .on ? "on" : "off") + (accessSwitch.isEnabled ? "" : "(loading)")) cost=\(costLabel.isHidden ? "-" : costLabel.stringValue)"
     }
     #endif
 

@@ -36,7 +36,7 @@ struct DictationManifest: Codable, Equatable {
     static func load() -> DictationManifest {
         var url = Bundle.main.url(forResource: "dictation-models", withExtension: "json")
         #if DEBUG
-        if let path = ProcessInfo.processInfo.environment["ZEUS_APP_DICTATION_MANIFEST"], !path.isEmpty {
+        if let path = DebugEnvironment.value("ZEUS_APP_DICTATION_MANIFEST"), !path.isEmpty {
             url = URL(fileURLWithPath: path)
         }
         #endif
@@ -93,7 +93,7 @@ final class DictationModels: NSObject, ObservableObject {
     private var lastProgress: [String: Date] = [:]
     private var started = false
     /// `ZEUS_APP_NO_MODEL_DOWNLOAD=1`: no download (the tests of other parts); dictation then uses Apple's recognizer.
-    let downloadsOff = ProcessInfo.processInfo.environment["ZEUS_APP_NO_MODEL_DOWNLOAD"] == "1"
+    let downloadsOff = DebugEnvironment.value("ZEUS_APP_NO_MODEL_DOWNLOAD") == "1"
     private static let retryDelays: [TimeInterval] = [30, 120, 600, 1800, 3600]
     /// Space that must stay free after a download.
     private static let spareBytes: Int64 = 256 * 1024 * 1024

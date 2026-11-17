@@ -5,7 +5,7 @@ enum Preferences {
     private static let defaults: UserDefaults = {
         #if DEBUG
         // The tests give each run its own settings domain, so that runs do not share the settings of the user.
-        if let suite = ProcessInfo.processInfo.environment["ZEUS_APP_DEFAULTS_SUITE"], !suite.isEmpty,
+        if let suite = DebugEnvironment.value("ZEUS_APP_DEFAULTS_SUITE"), !suite.isEmpty,
            let suiteDefaults = UserDefaults(suiteName: suite) {
             return suiteDefaults
         }

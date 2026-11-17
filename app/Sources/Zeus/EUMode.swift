@@ -135,7 +135,8 @@ enum VertexError {
     static func message(status: Int, model: String) -> String {
         switch status {
         case 401: return "Your Google sign-in expired."
-        case 403: return "Your Google account has no access to the Apolix EU project. Ask the Zeus maintainer for the Vertex AI User role."
+        case 403:
+            return "Your Google account has no access to the EU project of Zeus. Ask the Zeus maintainer for the Vertex AI User and Service Usage Consumer roles."
         case 404: return "The EU model \(model) is not available. Tell the Zeus maintainer."
         case 429: return "The EU project has no capacity for \(model) now. Try again later or tell the Zeus maintainer."
         default: return "Google Cloud refused the EU model \(model) (HTTP \(status)). Try again later or tell the Zeus maintainer."
@@ -144,7 +145,9 @@ enum VertexError {
 }
 
 /// The EU session cost that an EU chat page sends after each reply (zeus-editor src/eu/cost.js, the bridge message
-/// `cost:<JSON>`). It is an estimate in USD from the transcripts and the Vertex EU prices. Standard sends none.
+/// `cost:<JSON>`). It is an estimate in USD from the transcripts and the Vertex EU prices; USD stays the source of truth.
+/// The title bar shows it in euros at the daily ECB rate (`EuroRate`), or in USD with a note when there is no rate today.
+/// Standard sends none.
 struct EUCost: Equatable {
     var sessionTotal: Double
     var chatTotal: Double
@@ -159,24 +162,215 @@ struct EUCost: Equatable {
               let session = (object["session_total"] as? NSNumber)?.doubleValue, session.isFinite, session >= 0
         else { return nil }
         sessionTotal = session
-        chatTotal = (object["chat_total"] as? NSNumber)?.doubleValue ?? 0
+        let chat = (object["chat_total"] as? NSNumber)?.doubleValue ?? 0
+        chatTotal = chat.isFinite && chat >= 0 ? chat : 0
         calls = (object["calls"] as? NSNumber)?.intValue ?? 0
         unpricedCalls = (object["unpriced_calls"] as? NSNumber)?.intValue ?? 0
         pricesAsOf = object["prices_as_of"] as? String ?? ""
     }
 
-    static func usd(_ value: Double) -> String {
-        value > 0 && value < 0.01 ? "< 0.01 USD" : String(format: "%.2f USD", value)
+    static func amount(_ value: Double, _ currency: String) -> String {
+        value > 0 && value < 0.01 ? "< 0.01 \(currency)" : String(format: "%.2f \(currency)", value)
     }
 
-    var label: String { "EU session cost (estimate): \(Self.usd(sessionTotal))" }
+    static func usd(_ value: Double) -> String { amount(value, "USD") }
 
-    var detail: String {
-        var text = "This chat: \(Self.usd(chatTotal)). \(calls) model call\(calls == 1 ? "" : "s")"
+    /// The amount in euros at the rate, or in USD without a rate.
+    static func shown(_ usd: Double, rate: EuroRate.Rate?) -> String {
+        guard let rate else { return amount(usd, "USD") }
+        return amount(usd / rate.usdPerEUR, "EUR")
+    }
+
+    func label(rate: EuroRate.Rate?) -> String {
+        "EU session cost (estimate): \(Self.shown(sessionTotal, rate: rate))" + (rate == nil ? " (no euro rate)" : "")
+    }
+
+    func detail(rate: EuroRate.Rate?) -> String {
+        var text = "This chat: \(Self.shown(chatTotal, rate: rate)). \(calls) model call\(calls == 1 ? "" : "s")"
         if unpricedCalls > 0 { text += ", \(unpricedCalls) not priced (not in the total)" }
         text += "."
+        if let rate {
+            text += " The estimate is \(Self.usd(sessionTotal)) (this chat: \(Self.usd(chatTotal))), in euros at the ECB rate of \(rate.date): "
+                + String(format: "1 EUR = %.4f USD.", rate.usdPerEUR)
+        } else {
+            text += " The ECB euro rate of today could not be loaded, so the estimate shows in USD."
+        }
         if !pricesAsOf.isEmpty { text += " Vertex EU prices of \(pricesAsOf)." }
         return text
+    }
+}
+
+/// The daily euro reference rate of the European Central Bank (USD per EUR), for the EU cost label. The app loads it
+/// in EU mode only, once a day, and keeps it for that day in `~/Library/Application Support/Zeus/euro-rate.json`
+/// (no user data). Without a rate of today, the label shows USD with a note.
+final class EuroRate {
+    struct Rate: Codable, Equatable {
+        let usdPerEUR: Double
+        /// The ECB date of the rate.
+        let date: String
+        /// The local day on which the app loaded it.
+        let loadedOn: String
+    }
+
+    static let shared = EuroRate()
+    static let changed = Notification.Name("ZeusEuroRateChanged")
+    private static let address = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+    /// A failed load is tried again after this time, at the next cost.
+    private static let retryAfter: TimeInterval = 10 * 60
+
+    private var rate: Rate?
+    private var loading = false
+    private var failedAt: Date?
+
+    private var file: String { Paths.appSupport + "/euro-rate.json" }
+
+    static func today(_ date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    /// The rate of today, or nil.
+    var current: Rate? {
+        if let rate, rate.loadedOn == Self.today() { return rate }
+        if let data = FileManager.default.contents(atPath: file), let saved = try? JSONDecoder().decode(Rate.self, from: data),
+           saved.loadedOn == Self.today(), Self.plausible(saved.usdPerEUR) {
+            rate = saved
+            return saved
+        }
+        return nil
+    }
+
+    /// Loads the rate of today when the app has none (main queue). EU mode only: the caller is an EU cost.
+    func load() {
+        guard current == nil, !loading else { return }
+        if let failedAt, Date().timeIntervalSince(failedAt) < Self.retryAfter { return }
+        var address = Self.address
+        if let override = DebugEnvironment.value("ZEUS_APP_EURO_RATE_URL"), !override.isEmpty { address = override }
+        guard let url = URL(string: address) else { return }
+        loading = true
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        request.setValue("Zeus app", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            let ok = (response as? HTTPURLResponse).map { (200 ..< 300).contains($0.statusCode) } ?? (url.isFileURL && data != nil)
+            let parsed = ok ? data.flatMap { Self.parse(String(decoding: $0, as: UTF8.self)) } : nil
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.loading = false
+                guard let parsed else {
+                    self.failedAt = Date()
+                    Trace.log("euro rate: not loaded")
+                    NotificationCenter.default.post(name: Self.changed, object: nil)
+                    return
+                }
+                let rate = Rate(usdPerEUR: parsed.usdPerEUR, date: parsed.date, loadedOn: Self.today())
+                self.rate = rate
+                self.failedAt = nil
+                if let data = try? JSONEncoder().encode(rate) { try? data.write(to: URL(fileURLWithPath: self.file), options: .atomic) }
+                Trace.log("euro rate: \(rate.usdPerEUR) of \(rate.date)")
+                NotificationCenter.default.post(name: Self.changed, object: nil)
+            }
+        }.resume()
+    }
+
+    /// The USD rate and the date of the ECB daily file (`<Cube time='…'>` and `<Cube currency='USD' rate='…'/>`).
+    static func parse(_ xml: String) -> (usdPerEUR: Double, date: String)? {
+        guard let rateMatch = xml.range(of: #"currency=['"]USD['"]\s+rate=['"]([0-9]+\.[0-9]+)['"]"#, options: .regularExpression),
+              let dateMatch = xml.range(of: #"time=['"]([0-9]{4}-[0-9]{2}-[0-9]{2})['"]"#, options: .regularExpression)
+        else { return nil }
+        let rateText = String(xml[rateMatch]).components(separatedBy: CharacterSet(charactersIn: "'\"")).dropLast().last ?? ""
+        let dateText = String(xml[dateMatch]).components(separatedBy: CharacterSet(charactersIn: "'\"")).dropLast().last ?? ""
+        guard let value = Double(rateText), plausible(value), dateText.count == 10 else { return nil }
+        return (value, dateText)
+    }
+
+    /// A USD rate that can be true: no file of another kind or a broken number changes the cost by a large factor.
+    static func plausible(_ value: Double) -> Bool { value.isFinite && value > 0.5 && value < 2.5 }
+
+    #if DEBUG
+    /// Test action: forget the rate, so that the next cost loads it again.
+    func reset() {
+        rate = nil
+        failedAt = nil
+        try? FileManager.default.removeItem(atPath: file)
+    }
+    #endif
+}
+
+/// EU data access of an EU project (zeus references/eu-mode.md, "EU data access"): whether Zeus may read client data rows
+/// of the project in EU mode. Only the user turns it on or off, with the switch in the title bar. The app runs
+/// `eu-access <project> [on|off] --json` with the Standard workspace's Zeus, outside Claude, as it runs the handover commands;
+/// Zeus refuses the change from any Claude session.
+final class EUDataAccess {
+    struct State: Equatable {
+        let enabled: Bool
+        let by: String?
+        let at: String?
+    }
+
+    static let shared = EUDataAccess()
+    static let changed = Notification.Name("ZeusEUDataAccessChanged")
+
+    /// The known state of each project; a project that is loading has none.
+    private(set) var state: [String: State] = [:]
+    private var loading: Set<String> = []
+    private let queue = DispatchQueue(label: "zeus.eu-access")
+
+    private func cli() -> HandoffCLI {
+        let profile = EUProfile.load()
+        return HandoffCLI(workspace: profile.workspace, profile: profile, scriptsWorkspace: Paths.zeusDir)
+    }
+
+    /// Reads the state of a project (main queue).
+    func load(_ project: String) {
+        guard Handover.validProject(project), !loading.contains(project) else { return }
+        loading.insert(project)
+        queue.async { [weak self] in
+            guard let self else { return }
+            var result: State?
+            var failure: String?
+            do { result = try self.parse(self.cli().run(["eu-access", project]).json, project: project) } catch { failure = error.localizedDescription }
+            DispatchQueue.main.async {
+                Trace.log("eu access: \(project) read \(result.map { $0.enabled ? "on" : "off" } ?? "failed: \(failure ?? "-")")")
+                self.loading.remove(project)
+                if let result { self.state[project] = result } else { self.state.removeValue(forKey: project) }
+                NotificationCenter.default.post(name: Self.changed, object: nil)
+            }
+        }
+    }
+
+    /// Turns EU data access on or off (main queue). The completion gets the error words, or nil.
+    func set(_ project: String, on: Bool, completion: @escaping (String?) -> Void) {
+        guard Handover.validProject(project) else { completion("The project name is not valid."); return }
+        state.removeValue(forKey: project)
+        loading.insert(project)
+        NotificationCenter.default.post(name: Self.changed, object: nil)
+        queue.async { [weak self] in
+            guard let self else { return }
+            var error: String?
+            var result: State?
+            do {
+                result = try self.parse(self.cli().run(["eu-access", project, on ? "on" : "off"]).json, project: project)
+                if result?.enabled != on { error = "Zeus did not change EU data access of \(project)." }
+            } catch let failure {
+                error = failure.localizedDescription
+            }
+            if result == nil { result = try? self.parse(self.cli().run(["eu-access", project]).json, project: project) }
+            DispatchQueue.main.async {
+                self.loading.remove(project)
+                if let result { self.state[project] = result }
+                NotificationCenter.default.post(name: Self.changed, object: nil)
+                completion(error)
+            }
+        }
+    }
+
+    private func parse(_ json: [String: Any], project: String) throws -> State {
+        guard json["project"] as? String == project, let enabled = json["enabled"] as? Bool else {
+            throw HandoffCLI.Failure(message: "Zeus eu-access gave an answer for another project.")
+        }
+        return State(enabled: enabled, by: json["by"] as? String, at: json["at"] as? String)
     }
 }
 

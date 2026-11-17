@@ -59,23 +59,34 @@ struct TabRestore: Codable {
         return copy
     }
 
-    private static var url: URL { URL(fileURLWithPath: Paths.appSupport + "/restore.json") }
+    /// The folder of the tab records of a mode (`TabFiles.folder`).
+    private static func url(_ mode: ZeusMode) -> URL { URL(fileURLWithPath: TabFiles.folder(mode) + "/restore.json") }
     /// A file older than this is left from an update that did not finish, and is not used.
     private static let maximumAge: TimeInterval = 15 * 60
 
+    /// Each mode's tabs go into the folder of that mode, so the unsent text of an EU tab stays in an EU folder.
     func write() throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(self).write(to: Self.url, options: .atomic)
+        for mode in ZeusMode.allCases {
+            let kept = only(mode)
+            guard kept.tabCount > 0 else { try? FileManager.default.removeItem(at: Self.url(mode)); continue }
+            try TabFiles.prepare(mode)
+            try encoder.encode(kept).write(to: Self.url(mode), options: .atomic)
+        }
     }
 
-    static func remove() { try? FileManager.default.removeItem(at: url) }
+    static func remove() {
+        for mode in ZeusMode.allCases { try? FileManager.default.removeItem(at: url(mode)) }
+        try? FileManager.default.removeItem(at: TabFiles.legacy("restore.json"))
+    }
 
-    /// The tabs for this version of the app and this mode, read once: the file is removed.
+    /// The tabs for this version of the app and this mode, read once: the files are removed.
     /// A tab of the other mode does not open.
     static func take(mode: ZeusMode) -> TabRestore? {
         defer { remove() }
-        guard let data = try? Data(contentsOf: url), let restore = decode(data) else { return nil }
+        let data = (try? Data(contentsOf: url(mode))) ?? (try? Data(contentsOf: TabFiles.legacy("restore.json")))
+        guard let data, let restore = decode(data) else { return nil }
         guard restore.version == Updater.currentVersion, Date().timeIntervalSince(restore.createdAt) < maximumAge else {
             Trace.log("restore: not used (for \(restore.version), written \(restore.createdAt))")
             return nil
@@ -94,17 +105,37 @@ struct TabRestore: Codable {
     }
 }
 
+/// Where the app keeps the tab records of a mode. They hold the unsent text of each tab, so an EU tab's text, which can
+/// name client data, stays in an EU folder: the EU Zeus Editor state of the EU profile (`<EU editor state>/app`), which
+/// Standard sessions can not read (zeus-editor src/eu/profile.js). Standard tabs stay in `~/Library/Application Support/Zeus`.
+enum TabFiles {
+    static func folder(_ mode: ZeusMode) -> String {
+        mode == .eu ? Paths.editorStateDir(for: .eu) + "/app" : Paths.appSupport
+    }
+
+    /// Makes the folder, owner only for EU.
+    static func prepare(_ mode: ZeusMode) throws {
+        let attributes: [FileAttributeKey: Any]? = mode == .eu ? [.posixPermissions: 0o700] : nil
+        try FileManager.default.createDirectory(atPath: folder(mode), withIntermediateDirectories: true, attributes: attributes)
+    }
+
+    /// A file of an app from before this change, in `~/Library/Application Support/Zeus`: read once, then removed.
+    static func legacy(_ name: String) -> URL { URL(fileURLWithPath: Paths.appSupport + "/" + name) }
+}
+
 /// The tabs of the mode that the app left at a mode switch, so that a switch back opens them again with their chats.
-/// One file per mode: `~/Library/Application Support/Zeus/tabs-<mode>.json`. Only tabs of that mode go in it.
+/// One file per mode, `tabs-<mode>.json` in the folder of the mode (`TabFiles`). Only tabs of that mode go in it.
 enum ModeTabs {
-    private static func url(_ mode: ZeusMode) -> URL { URL(fileURLWithPath: Paths.appSupport + "/tabs-\(mode.rawValue).json") }
+    private static func url(_ mode: ZeusMode) -> URL { URL(fileURLWithPath: TabFiles.folder(mode) + "/tabs-\(mode.rawValue).json") }
 
     static func save(_ restore: TabRestore, mode: ZeusMode) {
         let kept = restore.only(mode)
+        try? FileManager.default.removeItem(at: TabFiles.legacy("tabs-\(mode.rawValue).json"))
         guard kept.tabCount > 0 else { try? FileManager.default.removeItem(at: url(mode)); return }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         do {
+            try TabFiles.prepare(mode)
             try encoder.encode(kept).write(to: url(mode), options: .atomic)
         } catch {
             Trace.log("mode tabs: not written: \(error.localizedDescription)")
@@ -113,8 +144,13 @@ enum ModeTabs {
 
     /// The kept tabs of this mode, read once: the file is removed.
     static func take(_ mode: ZeusMode) -> TabRestore? {
-        defer { try? FileManager.default.removeItem(at: url(mode)) }
-        guard let data = try? Data(contentsOf: url(mode)), let restore = TabRestore.decode(data) else { return nil }
+        let legacy = TabFiles.legacy("tabs-\(mode.rawValue).json")
+        defer {
+            try? FileManager.default.removeItem(at: url(mode))
+            try? FileManager.default.removeItem(at: legacy)
+        }
+        let data = (try? Data(contentsOf: url(mode))) ?? (try? Data(contentsOf: legacy))
+        guard let data, let restore = TabRestore.decode(data) else { return nil }
         let kept = restore.only(mode)
         return kept.tabCount > 0 ? kept : nil
     }

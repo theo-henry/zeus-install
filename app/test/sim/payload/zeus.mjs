@@ -21,7 +21,7 @@ if (eu) {
  const login = 'Run `gcloud auth application-default login`, then `gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99`, and start EU mode again.';
  const failures = {
   signin: `You are not signed in to Google Cloud for EU mode. ${login}`,
-  403: 'Your Google account sim@example.com has no access to the Apolix EU project. Ask the Zeus maintainer for the Vertex AI User role. Try again later.',
+  403: 'Your Google account sim@example.com has no access to the EU project of Zeus. Ask the Zeus maintainer for the Vertex AI User and Service Usage Consumer roles. Try again later.',
   404: 'The EU model claude-sonnet-5-5 is not available. Tell the Zeus maintainer. Try again later.',
   429: 'The EU project has no capacity for claude-sonnet-5-5 now. Try again later or tell the Zeus maintainer. Try again later.',
  };

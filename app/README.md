@@ -4,7 +4,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
 
 - **Applications folder.** At the first start, an app that runs from another folder (Downloads, a build folder)
   copies itself to `/Applications` (`~/Applications` without administrator rights), opens the copy, and quits.
-  A copy in Downloads goes to the Trash. Development builds, `ZEUS_APP_TRACE`, and `ZEUS_APP_NO_MOVE=1` turn this off.
+  A copy in Downloads goes to the Trash. Development versions turn this off, and so do `ZEUS_APP_TRACE` and `ZEUS_APP_NO_MOVE=1` in debug builds.
 - **Updates.** At each start, before any chat window or Zeus session opens, the app asks the private zeus repo for the newest release with a tag `app-v<version>` (`gh api`, with the user's GitHub CLI login; the app holds no token).
   While it checks, the app shows the loading screen (the Zeus globe) with "Checking for updates…"; the check stops after 5 s, and the app then starts its current version.
   When that version is higher, the loading screen shows "Downloading Zeus X.Y.Z…", the app downloads `Zeus.zip` and `Zeus.zip.sha256` (`gh release download`), and checks the checksum, the zip, the bundle identifier, the version, and the signature.
@@ -12,7 +12,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   After the confirmation, it removes the old copy and quits; without it, it stops the new copy, swaps the old app back, and starts as before.
   For 2 minutes after a roll back, `update.json` marks the roll back: a new copy that macOS starts late (under a high load) quits at once and does not update again.
   Offline, without `gh`, without access, or with any error, the app starts its current version and shows nothing.
-  Development versions (such as `0.0.0-dev`), a read-only app folder, and `ZEUS_APP_NO_UPDATE=1` turn the check off.
+  Development versions (such as `0.0.0-dev`), a read-only app folder, and `ZEUS_APP_NO_UPDATE=1` (debug builds) turn the check off.
 - **Update from the settings.** **Check for updates** and **Update now** in the settings of the chat and Zeus Editor pages ask the app about the app (`Sources/Zeus/AppUpdate.swift`).
   At document start, every Zeus page gets `window.zeusApp.update = {version: 1}`.
   A page posts `{type: "app-update-check"}` to `window.webkit.messageHandlers.zeusApp`; the app asks the zeus repo for its `app-v` releases (as at launch, but it waits up to 20 s)
@@ -28,7 +28,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   (`{op: "restart", resume: <session id>}`, zeus-editor `packages/launcher/control.js`), and then shows the chat.
   The tab keeps its project, its name, its open terminal, the unsent text of the message box (`#zeus-message`), and the unsent text of the terminal (typed back without Enter).
   Attachments that were not sent are not kept.
-  The tabs are in `~/Library/Application Support/Zeus/restore.json` until the new copy reads them.
+  The tabs are in `restore.json` until the new copy reads them: Standard tabs in `~/Library/Application Support/Zeus`, EU tabs in `~/.zeus/eu/editor/app`.
   When the new copy does not confirm, the old copy is put back, opens the same tabs again, and says that the new version did not start.
   On the way, each chat page and the page that asked get `{type: "app-update-progress", state: "checking" | "downloading" | "waiting" | "installing", version?, busy?}`
   (`busy`: the number of tabs that the update waits for), or `{type: "app-update-failed", error, message}` with `error` `up-to-date`, `download-failed`, or one of the check errors.
@@ -49,9 +49,11 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   Cmd+J shows or hides the live terminal of the tab, for login prompts, slash commands, or debugging.
 - **Standard | EU.** The mode switch at the right of the tab bar switches between Standard mode and EU mode
   (`Sources/Zeus/EUMode.swift`). EU mode runs `zeus --eu --no-open` in `~/Code/zeus-eu` (from the EU launch profile `eu-profile.json` of Zeus Editor),
-  shows a green EU pill, and shows the session cost estimate in USD from the `cost:` messages of the chat page.
+  shows a green EU pill, and shows the session cost estimate (in euros, see below) from the `cost:` messages of the chat page.
   A switch closes and stops every session of the old mode before the new mode starts, and asks first about unsent text or busy tabs.
-  The tabs of each mode are kept apart (`tabs-standard.json`, `tabs-eu.json`), and an EU tab never resumes in Standard mode.
+  The tabs of each mode are kept apart, and an EU tab never resumes in Standard mode.
+  Standard tabs are in `~/Library/Application Support/Zeus/tabs-standard.json`.
+  EU tabs, with their unsent text, are in the EU editor state (`~/.zeus/eu/editor/app/tabs-eu.json`), never in the app folder.
   Each mode has its own web data store, and the terminal of a tab runs in the environment of its mode.
   When EU mode does not start, the tab shows the `zeus:` message with **Sign in to Google Cloud** (it runs the gcloud sign-in in the tab's terminal),
   **Run the Zeus setup**, **Try again**, and **Switch to Standard**. An `eu-error:` message (Vertex AI 403, 404, or 429) shows a question with the fix.
@@ -59,10 +61,22 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   **Ask Zeus in this chat** sends the summary request to an EU tab, with the project that the tab shows.
   The app runs the handoff commands of `scripts/zeus.py` of the Standard workspace (`~/Code/zeus`, which EU Claude can not write) with `--workspace` set to the EU workspace.
   It runs `python3 -E -s`, so no module of the EU workspace loads, and EU Claude can not change the scan.
-  The app shows the summary, the files, and the scan findings,
-  and lets the user edit the summary, remove files, and accept findings. E-mail and IBAN findings can not be accepted.
-  **Release to Standard** scans again, then the app copies the checked files to `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/`
-  and writes `released.json`. Claude never releases a handover.
+  `handoff build`, `scan`, and `mask` get `--dir ~/Library/Application Support/Zeus/handover/<project>/<id>` (owner only, mode 700), the handover's own folder: the handover is built, scanned, masked, and released only there, where no Claude session can write.
+  The app takes `<id>` from the newest `clients/<project>/handoff/<id>/summary.md` of the EU workspace, as `handoff build` does, and refuses a build answer for another ID.
+  The app refuses an answer whose `id` or `project` is not the handover of the review (a decoy folder), and every path that is not in that folder.
+  The app shows the summary, the files, and one row per finding group with its real values, read from the app's copy (not selectable, never written to a file or the trace).
+  For each group the user chooses Keep or Mask (`Mask All` for the rest); e-mail and IBAN groups offer only Mask, and a changed or missing file needs **Build Again**.
+  A Keep holds for the group and a hash of each value, so a new value in the same group needs a new choice.
+  **Release to Standard** runs `handoff mask` for the Mask groups, scans again, and releases only when every finding left is a kept one.
+  A failed step goes back to the review with the user's choices; the masks that were made stay.
+  The app copies the checked files to `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/` and writes `released.json`
+  (`kept` and `masked` as kinds and counts, never a group ID or a value), and a copy of it into the EU handover folder without following a link.
+  Claude never releases a handover.
+- **EU data access.** In EU mode, the title bar shows **EU data access** for the project of the selected tab (`EUDataAccess` in `Sources/Zeus/EUMode.swift`).
+  The app reads it with `eu-access <project> --json` and changes it with `eu-access <project> on|off --json` (the Standard workspace's `zeus.py`, outside Claude, as for the handover); on asks first.
+- **EU cost in euros.** The EU cost shows in euros at the daily ECB reference rate (`EuroRate`), loaded in EU mode once a day and kept in
+  `~/Library/Application Support/Zeus/euro-rate.json`. Without a rate of today, it shows USD with "(no euro rate)". The tooltip shows the USD estimate.
+  `ZEUS_APP_EURO_RATE_URL` (debug builds) replaces the ECB address.
 - **Keyboard.** Typing and pasting (Cmd+V or Edit > Paste) go to the part of the tab that the user clicked last: the chat page or the terminal.
   Cmd+J gives the keyboard to the terminal it shows; the terminal header then says "typing and pasting go here".
   A click in the chat page gives the keyboard back to the chat, also the click that only brings the window to the front, which WebKit does not give to the page.
@@ -145,28 +159,31 @@ It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in t
 
 ## Debug
 
+Only debug builds (`swift build`, `app/dev-bundle.sh`) read these settings; a release build ignores every `ZEUS_APP_*` setting and `ZEUS_EDITOR_STATE_DIR`.
+The app reads them only through `DebugEnvironment.value` (`Sources/Zeus/Environment.swift`), and `app/test/run-all.sh` fails on any other read.
+
 `ZEUS_APP_TRACE=/path/to/file` adds setup events, update events, session states, and page loads to the end of that file.
-`ZEUS_APP_REPO=owner/name` (debug builds) replaces the repo of the app releases, as in `install.sh`.
+`ZEUS_APP_REPO=owner/name` replaces the repo of the app releases, as in `install.sh`.
 `ZEUS_APP_NO_UPDATE=1` turns off the update check at start.
-`ZEUS_APP_TEST_NO_CONFIRM=1` (debug builds) makes the new copy of an update not confirm, so that the old copy rolls back. That copy then starts nothing.
-`ZEUS_APP_INSTALLER=/path/to/install.sh` (debug builds) replaces the bundled installer.
-`ZEUS_APP_ZEUS_COMMAND=/path/to/zeus` (debug builds) replaces `~/.local/bin/zeus`.
-`ZEUS_APP_PTY_CAPTURE=/path/to/folder` (debug builds) writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
-`ZEUS_APP_TEST_SPEECH=1` (debug builds) replaces Apple's speech recognition with a simulated recognizer that "hears" "Hello Zeus" (`denied`: no permission).
-`ZEUS_APP_TEST_SPEECH=whisper` (debug builds) also replaces the Whisper model with a simulated one (a file that starts with `ZEUS-SIMULATED-MODEL`) and the microphone with a simulated voice.
-`ZEUS_APP_DICTATION_MANIFEST=/path/to/models.json` (debug builds) replaces the model list of the app.
-`ZEUS_APP_TEST_AUDIO_FILE=/path/to/sound.wav` (debug builds) replaces the microphone with that sound file, played in real time and then silence, for the real Whisper model.
-`ZEUS_APP_TEST_RECORDING_LIMIT=<seconds>` (debug builds) replaces the 10-minute recording limit.
-`ZEUS_APP_TEST_V1_DEADLINE=<seconds>` (debug builds) replaces the 2.8 s that Whisper has for the text of a version 1 session.
+`ZEUS_APP_EURO_RATE_URL=<url>` replaces the address of the ECB daily rates for the EU cost (a `file://` URL works).
+`ZEUS_APP_TEST_NO_CONFIRM=1` makes the new copy of an update not confirm, so that the old copy rolls back. That copy then starts nothing.
+`ZEUS_APP_INSTALLER=/path/to/install.sh` replaces the bundled installer.
+`ZEUS_APP_ZEUS_COMMAND=/path/to/zeus` replaces `~/.local/bin/zeus`.
+`ZEUS_APP_PTY_CAPTURE=/path/to/folder` writes every byte of each session's PTY to `pty-<pid>.log` in that folder.
+`ZEUS_APP_TEST_SPEECH=1` replaces Apple's speech recognition with a simulated recognizer that "hears" "Hello Zeus" (`denied`: no permission).
+`ZEUS_APP_TEST_SPEECH=whisper` also replaces the Whisper model with a simulated one (a file that starts with `ZEUS-SIMULATED-MODEL`) and the microphone with a simulated voice.
+`ZEUS_APP_DICTATION_MANIFEST=/path/to/models.json` replaces the model list of the app.
+`ZEUS_APP_TEST_AUDIO_FILE=/path/to/sound.wav` replaces the microphone with that sound file, played in real time and then silence, for the real Whisper model.
+`ZEUS_APP_TEST_RECORDING_LIMIT=<seconds>` replaces the 10-minute recording limit.
+`ZEUS_APP_TEST_V1_DEADLINE=<seconds>` replaces the 2.8 s that Whisper has for the text of a version 1 session.
 `ZEUS_APP_NO_MODEL_DOWNLOAD=1` turns off the download of the dictation models; dictation then uses a model that is already on the Mac, or Apple's recognizer.
 The tests set it.
-`ZEUS_APP_TEST_ID=<id>` (debug builds) makes the test actions reach only this app copy.
-`ZEUS_APP_DEFAULTS_SUITE=<domain>` (debug builds) makes the app read and write its settings (`setupDone`, `showMenuBar`, and the dictation settings) in that defaults domain instead of `io.github.theo-henry.zeus`.
-`ZEUS_APP_TEST_BACKGROUND=1` (debug builds) makes the app never come to the front: it does not activate and puts its windows behind the windows of other apps.
+`ZEUS_APP_TEST_ID=<id>` makes the test actions reach only this app copy.
+`ZEUS_APP_DEFAULTS_SUITE=<domain>` makes the app read and write its settings (`setupDone`, `showMenuBar`, and the dictation settings) in that defaults domain instead of `io.github.theo-henry.zeus`.
+`ZEUS_APP_TEST_BACKGROUND=1` makes the app never come to the front: it does not activate and puts its windows behind the windows of other apps.
 Its pages keep running and drawing while other windows cover them.
 The tests in `app/test` set it, so they do not come in front of your work.
 Screenshots use the window number, so they work for windows behind other windows.
-Release builds ignore it.
 Start the app's binary directly to pass them, for example
 `ZEUS_APP_TRACE=/tmp/zeus.log app/build/Zeus-dev.app/Contents/MacOS/Zeus`.
 The web pages can be inspected with Safari's Develop menu.

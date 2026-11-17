@@ -7,7 +7,7 @@ import WebKit
 enum Front {
     static let background: Bool = {
         #if DEBUG
-        return ProcessInfo.processInfo.environment["ZEUS_APP_TEST_BACKGROUND"] == "1"
+        return DebugEnvironment.value("ZEUS_APP_TEST_BACKGROUND") == "1"
         #else
         return false
         #endif

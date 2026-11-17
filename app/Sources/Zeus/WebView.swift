@@ -87,7 +87,7 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         #if DEBUG
         // A test app behind the other apps: its pages keep running and drawing while other windows cover them.
         let setOcclusionDetection = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
-        if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_BACKGROUND"] == "1", webView.responds(to: setOcclusionDetection) {
+        if DebugEnvironment.value("ZEUS_APP_TEST_BACKGROUND") == "1", webView.responds(to: setOcclusionDetection) {
             typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
             unsafeBitCast(webView.method(for: setOcclusionDetection), to: Setter.self)(webView, setOcclusionDetection, false)
         }

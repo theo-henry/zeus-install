@@ -44,6 +44,16 @@ run_test() {
   echo "=== END $name after ${took}s"
 }
 
+# A release build must ignore the test settings: the app reads ZEUS_APP_* and ZEUS_EDITOR_STATE_DIR only through
+# DebugEnvironment.value (app/Sources/Zeus/Environment.swift), which is empty outside debug builds.
+direct_reads="$(grep -rnE 'environment\[\"ZEUS_|env\[\"ZEUS_(APP_|EDITOR_STATE_DIR)' "$TEST_DIR/../Sources" || true)"
+if [ -n "$direct_reads" ]; then
+  echo "=== FAIL debug settings: read ZEUS_APP_* and ZEUS_EDITOR_STATE_DIR only through DebugEnvironment.value:"
+  echo "$direct_reads"
+  exit 1
+fi
+echo "=== END debug settings check"
+
 run_test "pty" 300 "$TEST_DIR/pty/run.sh"
 run_test "plugin-scope" 300 "$TEST_DIR/plugin-scope/run.sh"
 # Each update part builds the development app first (swift build): on a busy Mac that alone can take minutes.
