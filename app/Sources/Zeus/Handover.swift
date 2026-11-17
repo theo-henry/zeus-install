@@ -38,8 +38,9 @@ enum Handover {
     static func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
     /// The folder where the app builds, scans, and masks each handover: `~/Library/Application Support/Zeus/handover`,
-    /// owner only. Neither mode's Claude can write it: the EU sandbox and the Standard sandbox write only their own folders
-    /// (zeus-editor src/eu/profile.js). Each handover is in `<root>/<project>/<id>`.
+    /// owner only. Neither mode's Claude can write it: the EU sandbox writes only its own folders (zeus-editor
+    /// src/eu/profile.js), and the Standard read block denies this folder (`StandardJail`). Each handover is in
+    /// `<root>/<project>/<id>`.
     static var root: String { Paths.appSupport + "/handover" }
 
     /// Makes the root folder if needed; fails when it, or the app folder above it, is a link or not a folder.

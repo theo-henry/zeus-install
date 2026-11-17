@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var checkingQuit = false
     /// The quit is approved: the next terminate stops every session.
     private var quitApproved = false
+    /// No session runs, and the quit waits for the EU vault to lock.
+    private var lockingForQuit = false
     /// The approved quit is stopping the sessions; the app quits when they have ended.
     private var stoppingForQuit = false
     /// The window that shows the quit question as a sheet.
@@ -31,6 +33,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before anything else: a EU vault that stayed open after a crash locks now, while no session runs.
+        EUVault.shared.lockAtStart()
+        // The read block of Standard sessions on a Mac with an EU vault, from the EU folders of the installed Zeus Editor
+        // (written again before each Standard start).
+        if StandardJail.vaultExists {
+            do { _ = try StandardJail.prepare() } catch { Trace.log("jail: profile not written: \(error.localizedDescription)") }
+        }
         Brand.registerFonts()
         NSApp.mainMenu = makeMainMenu()
         ShortcutSettings.shared.onChange = { [weak self] in self?.applyShortcuts() }
@@ -139,7 +148,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// reaches the app. A quit that macOS starts asks nothing and ends within 12 s.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         setupWindow?.model.stop()
-        guard SessionManager.shared.sessions.contains(where: \.isAlive) else { return .terminateNow }
+        guard SessionManager.shared.sessions.contains(where: \.isAlive) else {
+            // The EU vault locks when the app quits (EUVault).
+            guard EUVault.shared.isMounted || lockingForQuit else { return .terminateNow }
+            if !lockingForQuit {
+                lockingForQuit = true
+                EUVault.shared.lockForQuit { NSApp.reply(toApplicationShouldTerminate: true) }
+            }
+            return .terminateLater
+        }
         Trace.log("quit requested: approved=\(quitApproved) checking=\(checkingQuit)")
         if Self.quitStartedByMacOS {
             Trace.log("quit by macOS")
@@ -222,11 +239,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         window.endSheet(sheet, returnCode: .abort)
     }
 
-    /// The close check takes at most `closeCheckLimit`, so the quit ends within 12 s.
+    /// The close check takes at most `closeCheckLimit`, so the quit ends within 12 s, and the EU vault lock within 4 s more.
+    /// The vault locks after the sessions stopped, so no EU session uses it then.
     private func stopAllAndQuit() {
         SpeechService.shared.cancelAll(reason: "app quits")
         SessionManager.shared.stopAll(timeout: 12 - ChatTab.closeCheckLimit) {
-            NSApp.reply(toApplicationShouldTerminate: true)
+            EUVault.shared.lockForQuit { NSApp.reply(toApplicationShouldTerminate: true) }
         }
     }
 
@@ -860,6 +878,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 guard parts.count == 2 else { break }
                 self.setEUDataAccess(project: parts[0], on: parts[1] == "on")
             case "test-euro-rate-reset": EuroRate.shared.reset()
+            // The EU vault (EUVault). The answer of the test Touch ID: "test-vault-auth:allow|cancel|fail".
+            case "test-vault-auth": (EUVault.shared.authenticator as? TestVaultAuthenticator)?.answer = argument
+            case "test-vault-create": EUVault.shared.create { _ in }
+            case "test-vault-unlock": EUVault.shared.unlock { _ in }
+            // A lock that does not force: it fails while a program uses a file of the vault.
+            case "test-vault-lock": EUVault.shared.lock(force: false) { _ in }
+            // A new key in the keychain that does not open the vault.
+            case "test-vault-wrong-key":
+                do { try EUVault.shared.keys.save(EUVault.newKey()); Trace.log("vault: wrong key saved") } catch {
+                    Trace.log("vault: wrong key not saved: \(error.localizedDescription)")
+                }
+            case "test-vault-state":
+                Trace.log("vault state: exists=\(EUVault.shared.exists) mounted=\(EUVault.shared.isMounted) marker=\(EUVault.markerIsValid())")
             // Asks the last EU tab, the tab that the other test actions (test-pick-project) use.
             case "test-handover-ask":
                 guard let model = self.handoverWindow?.model, let chat = model.chats.last else { Trace.log("handover: no chat"); break }

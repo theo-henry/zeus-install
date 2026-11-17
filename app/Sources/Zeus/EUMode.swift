@@ -21,32 +21,49 @@ enum ZeusMode: String, Codable, CaseIterable {
 /// the newest installed `dist/zeus.mjs`, which the zeus command starts). `zeus --eu` reads the same file, so the app
 /// and the command use the same folders. Without a valid profile (a Zeus Editor from before EU mode) the app uses the
 /// defaults of the profile; `found` is then false and EU mode needs the Zeus setup.
+/// Schema 1 names the EU workspace; schema 2 may leave it out, and the app then uses the default EU workspace.
 struct EUProfile: Equatable {
     var vertexProject: String
     var configDir: String
     var editorStateDir: String
     var workspace: String
+    /// The EU temporary folder (`tmp_dir`, with `{uid}` replaced by the user ID), as the profile writes it.
+    var tmpDir: String
     /// The path of the profile, or nil when the app uses the defaults.
     var file: String?
 
     var found: Bool { file != nil }
 
+    static let defaultTmpDir = "/tmp/zeus-eu-\(getuid())"
+
     static let defaults = EUProfile(vertexProject: "project-4bf0bacd-fec4-406b-a99",
                                     configDir: Paths.home + "/.zeus/eu/claude",
                                     editorStateDir: Paths.home + "/.zeus/eu/editor",
-                                    workspace: Paths.home + "/Code/zeus-eu", file: nil)
+                                    workspace: Paths.home + "/Code/zeus-eu", tmpDir: defaultTmpDir, file: nil)
 
     /// The profile of the newest installed Zeus Editor, read again on each call (an update can change it).
     static func load() -> EUProfile {
         guard let file = newestProfileFile(),
               let data = FileManager.default.contents(atPath: file),
               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              object["schema"] as? Int == 1,
+              let schema = object["schema"] as? Int, schema == 1 || schema == 2,
               let project = object["vertex_project"] as? String, project.range(of: #"^[a-z][a-z0-9-]{4,61}[a-z0-9]$"#, options: .regularExpression) != nil,
-              let config = expand(object["config_dir"]), let state = expand(object["editor_state_dir"]),
-              let workspace = expand(object["workspace"])
+              let config = expand(object["config_dir"]), let state = expand(object["editor_state_dir"])
         else { return defaults }
-        return EUProfile(vertexProject: project, configDir: config, editorStateDir: state, workspace: workspace, file: file)
+        let workspace: String
+        if object["workspace"] == nil, schema == 2 {
+            workspace = defaults.workspace
+        } else if let value = expand(object["workspace"]) {
+            workspace = value
+        } else {
+            return defaults
+        }
+        var tmp = defaults.tmpDir
+        if let raw = object["tmp_dir"] {
+            guard let text = raw as? String, let value = expand(text.replacingOccurrences(of: "{uid}", with: String(getuid()))) else { return defaults }
+            tmp = value
+        }
+        return EUProfile(vertexProject: project, configDir: config, editorStateDir: state, workspace: workspace, tmpDir: tmp, file: file)
     }
 
     /// `~/` is the home folder; any other value must be an absolute path.
@@ -56,23 +73,29 @@ struct EUProfile: Equatable {
         return text.hasPrefix("/") ? (text as NSString).standardizingPath : nil
     }
 
-    /// The same choice as the zeus command of the installer (`write_zeus_shim` in install.sh): the newest
-    /// `~/.claude/plugins/cache/*/zeus-editor/*/dist/zeus.mjs`; the profile is in the folder of its plugin.
+    /// The profile of the newest installed Zeus Editor plugin, or nil.
     private static func newestProfileFile() -> String? {
+        guard let root = newestEditorRoot() else { return nil }
+        let profile = root + "/eu-profile.json"
+        return FileManager.default.fileExists(atPath: profile) ? profile : nil
+    }
+
+    /// The folder of the newest installed Zeus Editor plugin, the same choice as the zeus command of the installer
+    /// (`write_zeus_shim` in install.sh): the newest `~/.claude/plugins/cache/*/zeus-editor/*/dist/zeus.mjs`.
+    static func newestEditorRoot() -> String? {
         let cache = Paths.home + "/.claude/plugins/cache"
         let manager = FileManager.default
-        var newest: (date: Date, profile: String)?
+        var newest: (date: Date, root: String)?
         for marketplace in (try? manager.contentsOfDirectory(atPath: cache)) ?? [] {
             let plugin = "\(cache)/\(marketplace)/zeus-editor"
             for version in (try? manager.contentsOfDirectory(atPath: plugin)) ?? [] {
                 let root = "\(plugin)/\(version)"
                 guard let date = (try? manager.attributesOfItem(atPath: root + "/dist/zeus.mjs"))?[.modificationDate] as? Date
                 else { continue }
-                if newest == nil || date > newest!.date { newest = (date, root + "/eu-profile.json") }
+                if newest == nil || date > newest!.date { newest = (date, root) }
             }
         }
-        guard let profile = newest?.profile, manager.fileExists(atPath: profile) else { return nil }
-        return profile
+        return newest?.root
     }
 }
 
