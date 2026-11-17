@@ -212,6 +212,8 @@ gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99
   Tell Zeus in the chat when you turned it on.
 - In EU mode, the tab bar shows an estimate of the session cost in euros, at the daily reference rate of the European Central Bank.
   The estimate itself is in USD, from the token counts of the chat and the Vertex AI EU prices of the model; the tooltip shows the USD value.
+  The euro value is only a conversion of that USD estimate at the ECB daily reference rate.
+  It is not the amount that Google bills.
   When the app can not load the euro rate of today, the cost shows in USD with the note "no euro rate".
 - When the EU start fails, the app shows why and what to do: sign in to Google Cloud, run the Zeus setup, try again, or switch to Standard.
 
@@ -235,7 +237,7 @@ A person releases it in the app:
 4. Click **Release to Standard** (**Mask and Release** when you chose Mask). It is available when every group has a choice.
    The app masks the values, scans again, and stops when a new finding shows.
    If a step fails, the masks that are made stay, and **Back to the Review** keeps your choices.
-   Then the app copies the released files into `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/` and writes `released.json` there, with the kinds and the number of kept and masked values, never a value.
+   Then the app copies the released files into `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/` and writes `released.json` there, with the kinds and the number of kept and masked values and the number of removed files, never a value or the path of a removed file.
    The Standard project must already exist.
 
 The "Zeus feedback" section of the handover summary goes to Standard with the release.

@@ -70,12 +70,14 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   **Release to Standard** runs `handoff mask` for the Mask groups, scans again, and releases only when every finding left is a kept one.
   A failed step goes back to the review with the user's choices; the masks that were made stay.
   The app copies the checked files to `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/` and writes `released.json`
-  (`kept` and `masked` as kinds and counts, never a group ID or a value), and a copy of it into the EU handover folder without following a link.
+  (`kept` and `masked` as kinds and counts, never a group ID or a value; `removed_count`, never the path of a removed file, because the scan does not check those paths).
+  A copy of it with the removed paths (`removed`) goes into the EU handover folder without following a link.
   Claude never releases a handover.
 - **EU data access.** In EU mode, the title bar shows **EU data access** for the project of the selected tab (`EUDataAccess` in `Sources/Zeus/EUMode.swift`).
   The app reads it with `eu-access <project> --json` and changes it with `eu-access <project> on|off --json` (the Standard workspace's `zeus.py`, outside Claude, as for the handover); on asks first.
 - **EU cost in euros.** The EU cost shows in euros at the daily ECB reference rate (`EuroRate`), loaded in EU mode once a day and kept in
   `~/Library/Application Support/Zeus/euro-rate.json`. Without a rate of today, it shows USD with "(no euro rate)". The tooltip shows the USD estimate.
+  The euro value is a conversion of the Vertex USD estimate at the ECB daily reference rate, not the amount that Google bills; the label stays an estimate.
   `ZEUS_APP_EURO_RATE_URL` (debug builds) replaces the ECB address.
 - **Keyboard.** Typing and pasting (Cmd+V or Edit > Paste) go to the part of the tab that the user clicked last: the chat page or the terminal.
   Cmd+J gives the keyboard to the terminal it shows; the terminal header then says "typing and pasting go here".
@@ -160,7 +162,8 @@ It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in t
 ## Debug
 
 Only debug builds (`swift build`, `app/dev-bundle.sh`) read these settings; a release build ignores every `ZEUS_APP_*` setting and `ZEUS_EDITOR_STATE_DIR`.
-The app reads them only through `DebugEnvironment.value` (`Sources/Zeus/Environment.swift`), and `app/test/run-all.sh` fails on any other read.
+The app reads them only through `DebugEnvironment.value` (`Sources/Zeus/Environment.swift`).
+`app/test/release-env/run.sh` (in `app/test/run-all.sh`) starts a release build with `ZEUS_APP_TRACE` and `ZEUS_EDITOR_STATE_DIR` and checks that it writes no trace file and makes no editor state folder; the debug build, started the same way, writes the trace file.
 
 `ZEUS_APP_TRACE=/path/to/file` adds setup events, update events, session states, and page loads to the end of that file.
 `ZEUS_APP_REPO=owner/name` replaces the repo of the app releases, as in `install.sh`.

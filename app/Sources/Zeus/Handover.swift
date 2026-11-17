@@ -728,6 +728,7 @@ final class HandoverModel: ObservableObject {
             .map { [$0.group, $0.kind] }), by: { $0[1] }).mapValues(\.count)
         let maskedKinds = Dictionary(grouping: review.maskedKinds, by: { $0 }).mapValues(\.count)
         let counts = { (kinds: [String: Int]) in kinds.keys.sorted().map { ["kind": $0, "count": kinds[$0]!] as [String: Any] } }
+        let removed = review.files.filter { !$0.include }.map(\.path)
         let record: [String: Any] = [
             "schema": 2,
             "id": review.id,
@@ -736,7 +737,7 @@ final class HandoverModel: ObservableObject {
             "released_by": NSUserName(),
             "released_with": "Zeus app \(Updater.currentVersion)",
             "files": chosen.map { ["path": $0.path, "sha256": $0.sha256, "bytes": $0.bytes] },
-            "removed": review.files.filter { !$0.include }.map(\.path),
+            "removed_count": removed.count,
             "kept": counts(keptKinds),
             "masked": counts(maskedKinds),
             "summary_edited_in_app": review.summaryEdited,
@@ -755,10 +756,12 @@ final class HandoverModel: ObservableObject {
             try? manager.removeItem(atPath: staging)
             throw error
         }
-        // The EU handover folder gets the same record, so that `handoff pending` shows the handover as closed. EU Claude
-        // can write that folder, so no part of the path may be a link, and only a new file is written.
+        // The EU handover folder gets the same record with the removed paths, so that `handoff pending` shows the handover
+        // as closed. EU Claude can write that folder, so no part of the path may be a link, and only a new file is written.
         do {
-            try Handover.writeNew(json, "clients/\(review.project)/handoff/\(review.id)/released.json", under: profile.workspace)
+            let euRecord = record.merging(["removed": removed]) { _, new in new }
+            let euJSON = try JSONSerialization.data(withJSONObject: euRecord, options: [.prettyPrinted, .sortedKeys])
+            try Handover.writeNew(euJSON, "clients/\(review.project)/handoff/\(review.id)/released.json", under: profile.workspace)
         } catch {
             Trace.log("handover: EU record not written: \(error.localizedDescription)")
         }

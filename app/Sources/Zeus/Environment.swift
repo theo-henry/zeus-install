@@ -3,7 +3,7 @@ import Foundation
 /// The test and development settings of the app: `ZEUS_APP_*` and `ZEUS_EDITOR_STATE_DIR`. Only a debug build reads them.
 /// A release build ignores them, so that no value from outside the app can turn on a trace file (paths, handover IDs),
 /// move the editor state, stop updates, or change any other behavior of the app that users get.
-/// Read these settings only through this function (app/test/run-all.sh checks it).
+/// Read these settings only through this function (app/test/release-env/run.sh checks a release build).
 enum DebugEnvironment {
     static func value(_ name: String) -> String? {
         #if DEBUG
