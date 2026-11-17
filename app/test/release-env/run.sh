@@ -1,7 +1,8 @@
 #!/bin/bash
-# A release build ignores the debug settings: started with ZEUS_APP_TRACE and ZEUS_EDITOR_STATE_DIR, it writes no
-# trace file and makes no editor state folder there. The debug build, started the same way, writes the trace file, so
-# the test shows that the settings reach the app.
+# A release build ignores the debug settings. Environment.swift, compiled without DEBUG, ignores ZEUS_APP_TRACE and
+# ZEUS_EDITOR_STATE_DIR (the default editor state, and none for the commands that the app starts); with DEBUG, it uses
+# them. A release build of the app, started with ZEUS_APP_TRACE, writes no trace file; the debug build, started the same
+# way, writes it, so the test shows that the settings reach the app.
 #
 # Each build is wrapped as app/dev-bundle.sh does (this Mac's architecture), with version 9.9.9 (not a development
 # version) and a test bundle identifier, and starts from <temporary home>/Applications, so that it does not move
@@ -92,17 +93,35 @@ launch() {
   stop_app
 }
 
+echo "Settings (Environment.swift, compiled without and with DEBUG)"
+settings() {
+  local binary="$WORK/settings-$#"
+  swiftc "$@" -o "$binary" "$APP_DIR/Sources/Zeus/Environment.swift" "$TEST_DIR/main.swift" 2>/dev/null
+  HOME="$WORK/settings-home" ZEUS_APP_TRACE="$WORK/settings-trace.log" ZEUS_EDITOR_STATE_DIR="$WORK/settings-editor" "$binary"
+}
+release_settings="$(settings)"
+debug_settings="$(settings -D DEBUG)"
+expected_release="$(printf 'value=-\neditor=%s\ncommand-editor=-' "$WORK/settings-home/.zeus-editor")"
+expected_debug="$(printf 'value=%s\neditor=%s\ncommand-editor=%s' "$WORK/settings-trace.log" "$WORK/settings-editor" "$WORK/settings-editor")"
+if [ "$release_settings" = "$expected_release" ]; then
+  pass "without DEBUG, the settings are ignored: the default editor state, and none for the commands"
+else
+  fail "without DEBUG, the settings are ignored: the default editor state, and none for the commands"
+  echo "$release_settings"
+fi
+if [ "$debug_settings" = "$expected_debug" ]; then
+  pass "with DEBUG, ZEUS_APP_TRACE and ZEUS_EDITOR_STATE_DIR are used, also by the commands"
+else
+  fail "with DEBUG, ZEUS_APP_TRACE and ZEUS_EDITOR_STATE_DIR are used, also by the commands"
+  echo "$debug_settings"
+fi
+
 echo "Release build"
 release_home="$WORK/release-home"
 mkdir -p "$release_home/Applications"
 bundle release "$release_home"
 if launch "$release_home"; then pass "the release build runs"; else fail "the release build runs"; fi
 if [ ! -e "$release_home/trace.log" ]; then pass "the release build writes no trace file"; else fail "the release build writes no trace file"; fi
-if [ ! -e "$release_home/editor-state" ]; then
-  pass "the release build makes no editor state folder of ZEUS_EDITOR_STATE_DIR"
-else
-  fail "the release build makes no editor state folder of ZEUS_EDITOR_STATE_DIR"
-fi
 
 echo "Debug build"
 debug_home="$WORK/debug-home"

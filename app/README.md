@@ -163,7 +163,8 @@ It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in t
 
 Only debug builds (`swift build`, `app/dev-bundle.sh`) read these settings; a release build ignores every `ZEUS_APP_*` setting and `ZEUS_EDITOR_STATE_DIR`.
 The app reads them only through `DebugEnvironment.value` (`Sources/Zeus/Environment.swift`).
-`app/test/release-env/run.sh` (in `app/test/run-all.sh`) starts a release build with `ZEUS_APP_TRACE` and `ZEUS_EDITOR_STATE_DIR` and checks that it writes no trace file and makes no editor state folder; the debug build, started the same way, writes the trace file.
+`app/test/release-env/run.sh` (in `app/test/run-all.sh`) compiles `Environment.swift` without and with `DEBUG` and checks that only the `DEBUG` copy uses `ZEUS_APP_TRACE` and `ZEUS_EDITOR_STATE_DIR` (the editor state and the environment of the commands that the app starts).
+It also starts a release build of the app with `ZEUS_APP_TRACE` and checks that it writes no trace file; the debug build, started the same way, writes the trace file.
 
 `ZEUS_APP_TRACE=/path/to/file` adds setup events, update events, session states, and page loads to the end of that file.
 `ZEUS_APP_REPO=owner/name` replaces the repo of the app releases, as in `install.sh`.
