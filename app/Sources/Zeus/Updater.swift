@@ -24,8 +24,9 @@ enum Updater {
         return "theo-henry/zeus"
     }
     static let checkTimeout: TimeInterval = 5
-    /// The check that the user starts in the settings waits longer than the check at launch.
-    static let userCheckTimeout: TimeInterval = 20
+    /// The page of the settings gives up on the app after 15 s (zeus-editor, src/update-panel.js), so the checks that a
+    /// page starts (Check for updates, Update now) end sooner.
+    static let pageCheckTimeout: TimeInterval = 12
     static let downloadTimeout: TimeInterval = 300
     /// The time that the new copy has to start and confirm the update.
     static let confirmTimeout: TimeInterval = 20

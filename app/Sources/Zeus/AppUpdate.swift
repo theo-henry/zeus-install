@@ -5,12 +5,15 @@ import WebKit
 ///
 /// A page posts to `window.webkit.messageHandlers.zeusApp`:
 /// - `{type: "app-update-check"}`: the app asks the zeus repo for its app releases (`Updater.listReleases`) and answers
-///   in that page with `window.zeusApp.onUpdateEvent({type: "app-update", current, latest, notes, available, error?, message?})`.
-///   `latest` is the newest app release (or null), `notes` the release notes of every release newer than `current`
-///   (or null), and `available` is true when the app can install `latest` now. Without an answer from GitHub, or when
-///   this copy cannot update itself, `error` is "no-gh", "unreachable", "no-release", "development", or "cannot-update",
-///   and `message` says it in words.
-/// - `{type: "app-update-apply"}`: the app downloads and checks the newest release as at launch, waits until no tab
+///   in that page with `window.zeusApp.onUpdateEvent({type: "app-update-check", status, version, latest, notes, message?,
+///   error?, available})` (the contract of zeus-editor, docs/chat.md). `status` is "current", "available" (the app can
+///   install `latest` now), or "error". `version` is the installed version, `latest` the newest app release (or null),
+///   and `notes` the release notes of every release newer than `version` (an array). When GitHub does not answer, or
+///   when this copy cannot update itself, `status` is "error", `error` is "no-gh", "unreachable", "no-release",
+///   "development", or "cannot-update", and `message` says it in words.
+/// - `{type: "app-update-apply"}`: the page that asked gets `{type: "app-update-apply", status: "started" | "error",
+///   message?}` as soon as the new release is found ("error" when it is not, or when this copy cannot update itself).
+///   The app downloads and checks the newest release as at launch, waits until no tab
 ///   works (a turn, a message on its way, or a start), then shows the loading screen, keeps the tabs (`TabRestore`),
 ///   ends the sessions, swaps the app, and starts the new copy, which opens the same tabs again.
 ///   On the way, every chat page and the page that asked get `window.zeusApp.onUpdateEvent` with
@@ -56,9 +59,9 @@ final class AppUpdate {
     private func check(for webView: WKWebView?) {
         Trace.log("app update: check")
         DispatchQueue.global(qos: .userInitiated).async {
-            let event = Self.checkEvent(Updater.listReleases(timeout: Updater.userCheckTimeout))
+            let event = Self.checkEvent(Updater.listReleases(timeout: Updater.pageCheckTimeout))
             DispatchQueue.main.async {
-                Trace.log("app update: answer \(event["latest"] as? String ?? "-") available=\(event["available"] as? Bool ?? false) error=\(event["error"] as? String ?? "-")")
+                Trace.log("app update: answer \(event["status"] as? String ?? "-") \(event["latest"] as? String ?? "-") available=\(event["available"] as? Bool ?? false) error=\(event["error"] as? String ?? "-")")
                 if let webView { Self.send(event, to: webView) }
             }
         }
@@ -66,41 +69,42 @@ final class AppUpdate {
 
     private static func checkEvent(_ list: Updater.ReleaseList) -> [String: Any] {
         let current = Updater.currentVersion
-        var event: [String: Any] = ["type": "app-update", "current": current, "latest": NSNull(), "notes": NSNull(), "available": false]
+        var event: [String: Any] = ["type": "app-update-check", "status": "current", "version": current,
+                                    "latest": NSNull(), "notes": [String](), "available": false]
         let releases: [Updater.Release]
         switch list {
         case .failed(let why):
             let error = why == "no gh" ? "no-gh" : "unreachable"
-            event["error"] = error
-            event["message"] = message(for: error)
-            return event
+            return failed(&event, error)
         case .releases(let list):
             releases = list
         }
         guard let newest = releases.first else {
-            event["error"] = "no-release"
-            event["message"] = message(for: "no-release")
-            return event
+            return failed(&event, "no-release")
         }
         event["latest"] = newest.version.description
         guard let installed = Version(current) else {
-            event["error"] = "development"
-            event["message"] = message(for: "development")
-            return event
+            return failed(&event, "development")
         }
         let newer = releases.filter { $0.version > installed }
         guard !newer.isEmpty else { return event }
         event["notes"] = newer.map { release in
             let notes = release.notes.trimmingCharacters(in: .whitespacesAndNewlines)
             return notes.isEmpty ? "Zeus \(release.version)" : "Zeus \(release.version)\n\n\(notes)"
-        }.joined(separator: "\n\n")
+        }
         if let reason = Updater.skipReason() {
             Trace.log("app update: cannot update (\(reason))")
-            event["error"] = "cannot-update"
-            event["message"] = message(for: "cannot-update")
-        } else {
-            event["available"] = true
+            return failed(&event, "cannot-update")
         }
+        event["status"] = "available"
+        event["available"] = true
+        return event
+    }
+
+    private static func failed(_ event: inout [String: Any], _ error: String) -> [String: Any] {
+        event["status"] = "error"
+        event["error"] = error
+        event["message"] = message(for: error)
         return event
     }
 
@@ -122,12 +126,14 @@ final class AppUpdate {
         requester = webView ?? requester
         guard phase == .idle else {
             Trace.log("app update: apply while \(phase.rawValue)")
+            reply(["type": "app-update-apply", "status": "started"])
             sendProgress()
             return
         }
         if let reason = Updater.skipReason() {
             Trace.log("app update: cannot update (\(reason))")
             let error = Version(Updater.currentVersion) == nil ? "development" : "cannot-update"
+            reply(["type": "app-update-apply", "status": "error", "message": Self.message(for: error)])
             broadcast(["type": "app-update-failed", "error": error, "message": Self.message(for: error)])
             return
         }
@@ -136,9 +142,10 @@ final class AppUpdate {
         version = nil
         sendProgress()
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = Updater.checkAndDownload(timeout: Updater.userCheckTimeout) { version in
+            let result = Updater.checkAndDownload(timeout: Updater.pageCheckTimeout) { version in
                 DispatchQueue.main.async {
                     self.version = version
+                    self.reply(["type": "app-update-apply", "status": "started"])
                     self.phase = .downloading
                     self.sendProgress()
                 }
@@ -150,6 +157,8 @@ final class AppUpdate {
                     self.phase = .idle
                     let error = why == "up to date" ? "up-to-date" : why == "no gh" ? "no-gh"
                         : why == "no app release" ? "no-release" : why.hasPrefix("no release list") ? "unreachable" : "download-failed"
+                    // A page that did not get "started" yet (the release was not found) gets its error here.
+                    if self.version == nil { self.reply(["type": "app-update-apply", "status": "error", "message": Self.message(for: error)]) }
                     self.broadcast(["type": "app-update-failed", "error": error, "message": Self.message(for: error)])
                 case .ready(let update):
                     self.version = update.version
@@ -207,6 +216,11 @@ final class AppUpdate {
         if phase == .waiting { event["busy"] = busyTabs }
         Trace.log("app update: progress \(phase.rawValue)")
         broadcast(event)
+    }
+
+    /// To the page that asked, as the answer of its `app-update-apply`.
+    private func reply(_ event: [String: Any]) {
+        if let requester { Self.send(event, to: requester) }
     }
 
     /// To every chat page, and to the page that asked (also a Zeus Editor page).

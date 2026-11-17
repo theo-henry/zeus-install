@@ -682,6 +682,15 @@ if wants settings; then
     line="$(grep "update page: " "$TRACE" | tail -1 | sed 's/.*"events":\[//; s/.*},{//')"
     for text in "$@"; do printf '%s' "$line" | grep -qF -- "$text" || { echo "    (no $text in: $line)"; return 1; }; done
   }
+  # Like update_page_has, but the texts may be in any event that the page got (not only the last one).
+  update_events_have() {
+    local before line text
+    before="$(grep -c "update page: " "$TRACE" || true)"
+    act test-update-page
+    wait_count "update page: " $((before + 1)) 10 >/dev/null || return 1
+    line="$(grep "update page: " "$TRACE" | tail -1)"
+    for text in "$@"; do printf '%s' "$line" | grep -qF -- "$text" || { echo "    (no $text in: $line)"; return 1; }; done
+  }
   # Tabs with unsent text make the quit ask first; a quit of macOS (log out) asks nothing.
   quit_chats() {
     local waited=0
@@ -732,17 +741,18 @@ if wants settings; then
     check "every Zeus page has window.zeusApp.update" 'wait_count "hand-over" 1 30 && page_has "{\"version\":1,"'
     act 'test-post:{"type":"app-update-check"}'
     check "Check for updates: the page gets the newest app release and no update" \
-      'wait_for "app update: answer 1.0.0 available=false" 30 && update_page_has "\"type\":\"app-update\"" "\"current\":\"1.0.0\"" "\"latest\":\"1.0.0\"" "\"notes\":null" "\"available\":false"'
+      'wait_for "app update: answer current 1.0.0 available=false" 30 && update_page_has "\"type\":\"app-update-check\"" "\"status\":\"current\"" "\"version\":\"1.0.0\"" "\"latest\":\"1.0.0\"" "\"notes\":[]" "\"available\":false"'
     releases "$STATE" "app-v1.0.0:false:false" "app-v1.1.0:false:false" "app-v1.2.0:true:false"
     publish "$STATE" app-v1.1.0 1.1.0
     act 'test-post:{"type":"app-update-check"}'
     check "after a new release, the page gets its version and its notes (not drafts)" \
-      'wait_for "app update: answer 1.1.0 available=true" 30 && update_page_has "\"latest\":\"1.1.0\"" "\"notes\":\"Zeus 1.1.0\\n\\nnotes\"" "\"available\":true"'
+      'wait_for "app update: answer available 1.1.0 available=true" 30 && update_page_has "\"type\":\"app-update-check\"" "\"status\":\"available\"" "\"version\":\"1.0.0\"" "\"latest\":\"1.1.0\"" "\"notes\":[\"Zeus 1.1.0\\n\\nnotes\"]" "\"available\":true"'
     check "the check downloads nothing" '! grep -q "release download" "$STATE/gh.log"'
     check "three tabs open: a project with a tab name, unsent text, and a busy turn with unsent terminal text" 'three_tabs'
     act 'test-post:{"type":"app-update-apply"}'
     check "Update now downloads and checks the new version" 'wait_for "app update: progress downloading" 60 && wait_for "update: downloading app-v1.1.0" 60'
     check "the update waits for the busy tab" 'wait_for "app update: waiting for 1 busy tabs" 60 && ! grep -q "update: ending" "$TRACE"'
+    check "Update now answers the page that asked with the status started" 'update_events_have "\"type\":\"app-update-apply\"" "\"status\":\"started\""'
     check "the pages get the progress" 'update_page_has "\"type\":\"app-update-progress\"" "\"state\":\"waiting\"" "\"version\":\"1.1.0\"" "\"busy\":1"'
     check "the turn ends before the update goes on" 'wait_for "update: ending 3 tabs for 1.1.0" 60 && [ "$(sessions_with reply)" = 1 ]'
     check "it keeps each tab's session, project, name, and unsent text" \
@@ -784,7 +794,7 @@ if wants settings; then
     rm "$STATE/releases.json"
     act 'test-post:{"type":"app-update-check"}'
     check "Check for updates without an answer from GitHub says so" \
-      'wait_for "app update: answer - available=false error=unreachable" 30 && update_page_has "\"error\":\"unreachable\""'
+      'wait_for "app update: answer error - available=false error=unreachable" 30 && update_page_has "\"type\":\"app-update-check\"" "\"status\":\"error\"" "\"error\":\"unreachable\"" "GitHub did not answer"'
     quit_chats
   fi
 
