@@ -69,7 +69,7 @@ final class AppUpdate {
 
     private static func checkEvent(_ list: Updater.ReleaseList) -> [String: Any] {
         let current = Updater.currentVersion
-        var event: [String: Any] = ["type": "app-update-check", "status": "current", "version": current, "current": current,
+        var event: [String: Any] = ["type": "app-update-check", "status": "current", "version": current,
                                     "latest": NSNull(), "notes": [String](), "available": false]
         let releases: [Updater.Release]
         switch list {
