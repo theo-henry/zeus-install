@@ -21,7 +21,6 @@ enum ZeusMode: String, Codable, CaseIterable {
 /// the newest installed `dist/zeus.mjs`, which the zeus command starts). `zeus --eu` reads the same file, so the app
 /// and the command use the same folders. Without a valid profile (a Zeus Editor from before EU mode) the app uses the
 /// defaults of the profile; `found` is then false and EU mode needs the Zeus setup.
-/// Schema 1 names the EU workspace; schema 2 may leave it out, and the app then uses the default EU workspace.
 struct EUProfile: Equatable {
     var vertexProject: String
     var configDir: String
@@ -46,18 +45,11 @@ struct EUProfile: Equatable {
         guard let file = newestProfileFile(),
               let data = FileManager.default.contents(atPath: file),
               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let schema = object["schema"] as? Int, schema == 1 || schema == 2,
+              object["schema"] as? Int == 1,
               let project = object["vertex_project"] as? String, project.range(of: #"^[a-z][a-z0-9-]{4,61}[a-z0-9]$"#, options: .regularExpression) != nil,
-              let config = expand(object["config_dir"]), let state = expand(object["editor_state_dir"])
+              let config = expand(object["config_dir"]), let state = expand(object["editor_state_dir"]),
+              let workspace = expand(object["workspace"])
         else { return defaults }
-        let workspace: String
-        if object["workspace"] == nil, schema == 2 {
-            workspace = defaults.workspace
-        } else if let value = expand(object["workspace"]) {
-            workspace = value
-        } else {
-            return defaults
-        }
         var tmp = defaults.tmpDir
         if let raw = object["tmp_dir"] {
             guard let text = raw as? String, let value = expand(text.replacingOccurrences(of: "{uid}", with: String(getuid()))) else { return defaults }

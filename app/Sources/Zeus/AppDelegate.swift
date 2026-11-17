@@ -263,8 +263,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             alert.informativeText = error.localizedDescription
             alert.addButton(withTitle: "Run the Zeus Setup")
             alert.addButton(withTitle: "Cancel")
-            Front.activate()
-            if alert.runModal() == .alertFirstButtonReturn { showSetup(nil) }
+            ask(alert) { [weak self] response in
+                if response == .alertFirstButtonReturn { self?.showSetup(nil) }
+            }
         }
     }
 

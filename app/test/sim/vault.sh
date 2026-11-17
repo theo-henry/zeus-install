@@ -183,7 +183,7 @@ PY
   check "after a crash the vault stays mounted" 'vault_mounted'
   launch_app vault-crash ZEUS_APP_TEST_VAULT_AUTH=allow ZEUS_APP_TEST_KEYCHAIN="$VAULT_KEYCHAIN"
   check "the next start locks the vault before anything else" \
-    'wait_for "vault: detached at start: ok" 30 && ! vault_mounted && [ "$(grep -n "vault: detached at start" "$TRACE" | head -1 | cut -d: -f1)" -lt "$(grep -n "launched: " "$TRACE" | head -1 | cut -d: -f1)" ]'
+    'wait_for "vault: detached at start: ok" 30 && wait_for "launched: " 30 && ! vault_mounted && [ "$(grep -n "vault: detached at start" "$TRACE" | head -1 | cut -d: -f1)" -lt "$(grep -n "launched: " "$TRACE" | head -1 | cut -d: -f1)" ]'
   need "the app opens after the crash" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOAD_LIMIT && sleep 1'
 
   # A key that does not open the vault.
@@ -192,12 +192,38 @@ PY
   act test-vault-unlock
   check "a wrong key does not open the vault" 'wait_for "vault: unlock failed: wrong password" 30 && ! vault_mounted'
 
-  # A Zeus Editor that runs Standard commands in the Claude Code sandbox: Claude Code could not start in the jail.
+  # An EU profile that names other EU folders: the app still denies its own EU folders, and adds the profile's.
   local plugin="$SANDBOX/.claude/plugins/cache/zeus-editor/zeus-editor/sim"
-  printf 'const SANDBOX_EXCLUDED_COMMANDS = ["python3 scripts/zeus.py * --via browser*"];\n' >"$plugin/dist/chunk-old.mjs"
+  python3 - "$SIM_DIR/payload/eu-profile.json" "$plugin/eu-profile.json" <<'PY'
+import json, sys
+profile = json.load(open(sys.argv[1]))
+profile.update(config_dir="~/.zeus/other/claude", editor_state_dir="~/.zeus/other/editor", workspace="~/Code/other-eu",
+               tmp_dir="/tmp/other-eu-{uid}")
+json.dump(profile, open(sys.argv[2], "w"))
+PY
+  local jailed
+  jailed="$(grep -c "jail: on" "$TRACE" || true)"
   act new-chat
-  check "with that Zeus Editor, Standard starts without the read block and says why" \
-    'wait_for "jail: off: the installed Zeus Editor runs Standard commands in the Claude Code sandbox" 30'
+  need "a new Standard session starts in the read block" 'wait_count "jail: on" $((jailed + 1)) 30'
+  for folder in "$real_home/.zeus/eu" "$real_home/Library/Application Support/Zeus/eu-vault.sparsebundle" \
+    "$real_home/.zeus/eu/claude" "$real_home/.zeus/eu/editor" "$real_home/Code/zeus-eu" "/private/tmp/zeus-eu-$(id -u)" \
+    "$real_home/Library/Application Support/Zeus/handover" "$real_home/.zeus/other/claude" "$real_home/.zeus/other/editor" \
+    "$real_home/Code/other-eu" "/private/tmp/other-eu-$(id -u)"; do
+    check "with a profile of other EU folders, the profile denies ${folder#"$real_home"/}" 'grep -qxF "  (subpath \"$folder\")" "$JAIL"'
+  done
+  cp "$SIM_DIR/payload/eu-profile.json" "$plugin/eu-profile.json"
+  newest_page_loaded "$PAGE_LOAD_LIMIT" >/dev/null || true
+
+  # A Zeus Editor that runs Standard commands in the Claude Code sandbox: Claude Code could not start in the jail, so
+  # Standard does not start, and the app says how to fix it.
+  printf 'const SANDBOX_EXCLUDED_COMMANDS = ["python3 scripts/zeus.py * --via browser*"];\n' >"$plugin/dist/chunk-old.mjs"
+  local commands
+  commands="$(grep -c "session command: " "$TRACE" || true)"
+  act new-chat
+  check "with that Zeus Editor on a Mac with a vault, Standard does not start and says to update Zeus Editor" \
+    'wait_for "session not started: The installed Zeus Editor runs Standard commands in the Claude Code sandbox, .* Run the Zeus setup to update Zeus Editor." 30 && [ "$(grep -c "session command: " "$TRACE")" = "$commands" ]'
+  act test-alert:1
+  check "Cancel closes the message" 'wait_for "test alert: Zeus cannot start -> 1" 10'
   rm -f "$plugin/dist/chunk-old.mjs"
   # A quit while a chat page still loads asks first: the page can not answer the close check yet.
   newest_page_loaded "$PAGE_LOAD_LIMIT" >/dev/null || true

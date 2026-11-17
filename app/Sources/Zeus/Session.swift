@@ -96,7 +96,7 @@ final class ZeusSession: TerminalSource {
             let launch = try StandardJail.launch(command: Paths.zeusCommand, arguments: arguments)
             executable = launch.executable
             launchArguments = launch.arguments
-            Trace.log(launch.unjailedReason.map { "jail: off: \($0)" } ?? "jail: on")
+            Trace.log(launch.jailed ? "jail: on" : "jail: off: no EU vault on this Mac")
         }
         Trace.log("session command: \(([executable] + launchArguments).joined(separator: " "))")
         let process = try PTYProcess(executable: executable, arguments: launchArguments, environment: env, directory: workspace)

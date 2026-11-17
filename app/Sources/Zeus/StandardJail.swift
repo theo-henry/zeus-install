@@ -2,12 +2,15 @@ import Foundation
 
 /// The read block of Standard sessions: the app starts every Standard `zeus` through `/usr/bin/sandbox-exec` with a
 /// small macOS sandbox profile that allows everything except reading and writing the EU folders. The Standard Claude
-/// Code, its hooks, its Bash commands, and every program that they start inherit it, so no Standard chat reads EU data:
-/// not with Claude's Read tool, `cat`, Python, or a child shell. The profile does not limit the network, the keychain,
-/// or any other folder, so content-cli and every other Standard tool work as without it.
+/// Code, its hooks, its Bash commands, and the programs that they start as their child processes inherit it, so no
+/// Standard chat reads EU data with Claude's Read tool, `cat`, Python, or a child shell. The profile does not limit the
+/// network, the keychain, or any other folder, so content-cli and every other Standard tool work as without it.
+/// Known limit of phase 1: a program that a Standard session starts through launchd (`launchctl`, a LaunchAgent),
+/// `open`, or `osascript` is not its child process and runs outside the read block.
 ///
 /// The read block applies only on a Mac with an EU vault (its disk image, or a mounted vault with its marker), whether
 /// the vault is open or locked. Without a vault, Standard starts exactly as before: people who never use EU see no change.
+/// With a vault, a Standard session that can not run in the read block does not start.
 ///
 /// The app writes the profile from the EU folders of the EU profile of Zeus Editor (`eu-profile.json`) at start and
 /// again before each Standard start, so that a new EU folder of a Zeus Editor update is in it. EU sessions do not use it.
@@ -19,27 +22,27 @@ enum StandardJail {
     static var folder: String { Paths.appSupport + "/jail" }
     static var profilePath: String { folder + "/standard.sb" }
 
-    /// The command that starts a Standard `zeus`: in the jail, or as it is when the jail can not apply.
+    /// The command that starts a Standard `zeus`: in the jail on a Mac with an EU vault, or as it is without one.
     struct Launch: Equatable {
         let executable: String
         let arguments: [String]
-        /// Why the session runs without the jail, or nil when it runs in it.
-        let unjailedReason: String?
+        let jailed: Bool
     }
 
-    /// The folders that Standard sessions may not read or write: the EU vault (its mount folder and its disk image), the
-    /// EU folders of the EU profile (Claude Code folder, editor state, workspace, temporary folder), and the app's
-    /// handover folder. A folder that holds the home folder, the Standard workspace, or the app folder is left out:
-    /// Standard could not run without them (a schema 2 EU profile can share the Standard workspace).
+    /// The folders that Standard sessions may not read or write. The app always denies its own EU folders: the EU vault
+    /// (its mount folder and its disk image), the default EU folders (Claude Code folder, editor state, workspace,
+    /// temporary folder), and the app's handover folder. The EU profile can only add folders to them; an added folder
+    /// that holds the home folder, the Standard workspace, or the app folder is left out, because Standard could not run
+    /// without them.
     static func deniedFolders(profile: EUProfile = .load()) -> [String] {
-        let candidates = [EUVault.mountPoint, EUVault.bundlePath, profile.configDir, profile.editorStateDir, profile.workspace,
-                          profile.tmpDir, Handover.root]
+        let defaults = EUProfile.defaults
+        let fixed = [EUVault.mountPoint, EUVault.bundlePath, defaults.configDir, defaults.editorStateDir, defaults.workspace,
+                     defaults.tmpDir, Handover.root].flatMap(forms)
         let needed = [Paths.home, Paths.zeusDir, Paths.appSupport].flatMap(forms)
+        let added = [profile.configDir, profile.editorStateDir, profile.workspace, profile.tmpDir].flatMap(forms)
+            .filter { folder in !needed.contains(where: { contains(folder, $0) }) }
         var result: [String] = []
-        for folder in candidates.flatMap(forms) where !result.contains(folder) {
-            if needed.contains(where: { contains(folder, $0) }) { continue }
-            result.append(folder)
-        }
+        for folder in fixed + added where !result.contains(folder) { result.append(folder) }
         return result
     }
 
@@ -79,19 +82,19 @@ enum StandardJail {
         return path
     }
 
-    /// The command of a Standard `zeus`. It throws when the jail should apply but its profile can not be written: a
-    /// Standard session then does not start.
+    /// The command of a Standard `zeus`. On a Mac with an EU vault it throws when the session can not run in the jail:
+    /// a Standard session then does not start.
     static func launch(command: String, arguments: [String]) throws -> Launch {
-        guard vaultExists else { return Launch(executable: command, arguments: arguments, unjailedReason: "no EU vault on this Mac") }
+        guard vaultExists else { return Launch(executable: command, arguments: arguments, jailed: false) }
         guard FileManager.default.isExecutableFile(atPath: sandboxExec) else {
-            return Launch(executable: command, arguments: arguments, unjailedReason: "macOS has no \(sandboxExec)")
+            throw failure("macOS has no \(sandboxExec), so Standard can not start while an EU vault exists on this Mac.")
         }
         if editorSandboxesStandard() {
-            return Launch(executable: command, arguments: arguments,
-                          unjailedReason: "the installed Zeus Editor runs Standard commands in the Claude Code sandbox, which can not run in the jail")
+            throw failure("The installed Zeus Editor runs Standard commands in the Claude Code sandbox, which can not run in "
+                + "the read block of the EU vault. Run the Zeus setup to update Zeus Editor.")
         }
         let path = try prepare()
-        return Launch(executable: sandboxExec, arguments: ["-f", path, command] + arguments, unjailedReason: nil)
+        return Launch(executable: sandboxExec, arguments: ["-f", path, command] + arguments, jailed: true)
     }
 
     /// A Zeus Editor from build 108 to the fix of zeus-editor PR 139 runs Standard Bash commands in the Claude Code

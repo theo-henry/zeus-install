@@ -111,17 +111,17 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   When the chat cannot answer (for example an older Zeus Editor plugin), the app waits 3 s, then asks: **Close anyway** or **Cancel**.
   Then the app sends SIGTERM to its `zeus`; the chat stays in the history.
   In the app, the app owns closing: `zeus` runs with `ZEUS_APP=1`, so the editor does not close terminals when the page closes.
-  The pages of tabs that are not selected keep their normal priority (WebKit's hidden-page process suppression and timer throttling are off for Zeus pages), so they answer the close check without delay on a busy Mac.
-  When the app keeps the tabs for a mode switch or an update, a page that does not give its unsent text within 3 s keeps none, and the switch or update goes on.
 - **Standard read block.** On a Mac with an EU vault (its disk image, or a mounted vault with its marker), open or locked, the app starts every Standard `zeus` through `/usr/bin/sandbox-exec` with a macOS sandbox profile that denies reading and writing the EU folders (`Sources/Zeus/StandardJail.swift`).
-  The Standard Claude Code, its hooks, its Bash commands, and every program that they start inherit it: `cat`, Python, or a child shell get "Operation not permitted" in those folders.
+  The Standard Claude Code, its hooks, its Bash commands, and the programs that they start as child processes inherit it: `cat`, Python, or a child shell get "Operation not permitted" in those folders.
+  Known limit of phase 1: a program that a Standard session starts through launchd (`launchctl` or a LaunchAgent), `open`, or `osascript` is not its child process and runs outside the read block.
   The profile is `(allow default)` with one `(deny file-read* file-write* ...)` rule, so the network, the keychain, and every other folder work as before; content-cli reads a large View as without it.
-  The denied folders are the EU vault (`~/.zeus/eu` and its disk image), the EU folders of the Zeus Editor EU profile (`eu-profile.json`: Claude Code folder, editor state, EU workspace, and the EU temporary folder `/private/tmp/zeus-eu-<uid>`), and the app's handover folder.
-  A folder that holds the home folder, `~/Code/zeus`, or the app folder is never denied.
+  The app always denies its own EU folders, whatever the Zeus Editor EU profile (`eu-profile.json`) says: the EU vault (`~/.zeus/eu` and its disk image), the default EU Claude Code folder and editor state (`~/.zeus/eu/claude`, `~/.zeus/eu/editor`), the default EU workspace `~/Code/zeus-eu`, the default EU temporary folder `/tmp/zeus-eu-<uid>` (`/private/tmp/zeus-eu-<uid>`), and the app's handover folder.
+  The EU profile can only add denied folders (its Claude Code folder, editor state, EU workspace, and `tmp_dir`); an added folder that holds the home folder, `~/Code/zeus`, or the app folder is never denied.
   Without an EU vault, Standard starts exactly as before, without `sandbox-exec`.
   The app writes the profile to `~/Library/Application Support/Zeus/jail/standard.sb` (owner only) at start and again before each Standard start, and the profile also denies writes to its own folder.
   EU sessions do not run in it. A macOS sandbox can not start inside another one, so Standard Claude Code must run its commands without the Claude Code sandbox (zeus-editor PR 139).
-  A Zeus Editor from before that change still runs them in it, and Claude Code could not start in the read block: with that Zeus Editor, or without `sandbox-exec`, Standard starts without the read block, and the permission rules of Zeus Editor and the zeus hooks still refuse the EU folders.
+  A Zeus Editor from before that change still runs them in it, and Claude Code could not start in the read block.
+  On a Mac with an EU vault, Standard never starts without the read block: with that Zeus Editor, the Standard session does not start and the app tells the user to run the Zeus setup to update Zeus Editor; without `sandbox-exec`, it does not start and the app says that Standard can not start while an EU vault exists.
 - **EU vault.** `Sources/Zeus/EUVault.swift` makes and opens the EU vault: one encrypted APFS sparse bundle (AES-256) per user in `~/Library/Application Support/Zeus/eu-vault.sparsebundle`, mounted at `~/.zeus/eu` with `-nobrowse` and `-owners on`.
   It has a `.zeus-vault` marker file with the ID of its volume (`{"schema": 1, "kind": "zeus-eu-vault", "volume_uuid": "..."}`) and a `.metadata_never_index` file; `mdutil -i off` needs administrator rights, so the app only tries it.
   The key is a random 64-character password in the login keychain, in an item that the app makes, so its access list trusts only the Zeus app.

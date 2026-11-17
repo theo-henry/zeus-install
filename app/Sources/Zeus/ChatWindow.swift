@@ -330,21 +330,11 @@ final class ChatTab: NSObject {
         }
         var pageDraft: String?
         if shownURL != nil {
-            // A page that does not answer within the close check limit keeps no draft, so that a quit, a mode switch,
-            // or an update never waits for it without end.
             group.enter()
-            var read = false
-            let finish = { (draft: String?) in
-                guard !read else { return }
-                read = true
-                pageDraft = draft
+            webView.evaluateJavaScript(Self.draftScript) { result, _ in
+                pageDraft = result as? String
                 group.leave()
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeCheckLimit) {
-                if !read { Trace.log("snapshot: \(self.session.pid) page draft not read within \(Int(Self.closeCheckLimit)) s") }
-                finish(nil)
-            }
-            webView.evaluateJavaScript(Self.draftScript) { result, _ in finish(result as? String) }
         }
         group.notify(queue: .main) { [weak self] in
             if let state = launcherState {
@@ -647,12 +637,9 @@ final class ChatTab: NSObject {
     func closeState(completion: @escaping (String?) -> Void) {
         guard session.isAlive, shownURL != nil else { completion(nil); return }
         var answered = false
-        let asked = Date()
-        let pid = session.pid
         let answer = { (reason: String?) in
             guard !answered else { return }
             answered = true
-            Trace.log("close state: \(pid) \(reason ?? "safe") after \(Int(Date().timeIntervalSince(asked) * 1000)) ms")
             completion(reason)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeCheckLimit) { answer("unavailable") }
