@@ -94,14 +94,16 @@ vault_scenario() {
   # The read block: a new Standard session tries the vault and the other EU folders as Claude would.
   mkdir -p "$WORK/large"
   head -c 20000000 /dev/urandom >"$WORK/large/view.json"
-  python3 -m http.server 0 --bind 127.0.0.1 --directory "$WORK/large" >"$WORK/large/server.log" 2>&1 &
+  # The server writes its own port when it listens.
+  python3 -c 'import functools, http.server, os, sys
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1]))
+open(sys.argv[2] + ".tmp", "w").write(str(server.server_address[1]))
+os.replace(sys.argv[2] + ".tmp", sys.argv[2])
+server.serve_forever()' "$WORK/large" "$WORK/large-port" >"$WORK/large-server.log" 2>&1 &
   LARGE_SERVER_PID=$!
-  local port="" waited=0
-  until [ -n "$port" ] || [ "$waited" -ge 40 ]; do
-    sleep 0.25
-    waited=$((waited + 1))
-    port="$( (lsof -nP -a -p "$LARGE_SERVER_PID" -iTCP -sTCP:LISTEN 2>/dev/null || true) | awk 'NR>1{split($9,a,":"); print a[2]; exit}')"
-  done
+  need "the large response server listens" 'wait_file_has "^[0-9][0-9]*$" "$WORK/large-port" 30'
+  local port
+  port="$(cat "$WORK/large-port")"
   printf 'EU handover\n' >"$HANDOVER/probe.txt"
   python3 - "$STATE/jail-probe.json" <<PY
 import json, sys
