@@ -111,6 +111,8 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   When the chat cannot answer (for example an older Zeus Editor plugin), the app waits 3 s, then asks: **Close anyway** or **Cancel**.
   Then the app sends SIGTERM to its `zeus`; the chat stays in the history.
   In the app, the app owns closing: `zeus` runs with `ZEUS_APP=1`, so the editor does not close terminals when the page closes.
+  The pages of tabs that are not selected keep their normal priority (WebKit's hidden-page process suppression and timer throttling are off for Zeus pages), so they answer the close check without delay on a busy Mac.
+  When the app keeps the tabs for a mode switch or an update, a page that does not give its unsent text within 3 s keeps none, and the switch or update goes on.
 - **Standard read block.** On a Mac with an EU vault (its disk image, or a mounted vault with its marker), open or locked, the app starts every Standard `zeus` through `/usr/bin/sandbox-exec` with a macOS sandbox profile that denies reading and writing the EU folders (`Sources/Zeus/StandardJail.swift`).
   The Standard Claude Code, its hooks, its Bash commands, and every program that they start inherit it: `cat`, Python, or a child shell get "Operation not permitted" in those folders.
   The profile is `(allow default)` with one `(deny file-read* file-write* ...)` rule, so the network, the keychain, and every other folder work as before; content-cli reads a large View as without it.

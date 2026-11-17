@@ -30,10 +30,24 @@ final class WebViewHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         configuration.websiteDataStore = ModeWebData.store(for: mode)
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        keepAwakeWhenHidden(configuration.preferences)
         // Pop-ups (Zeus Editor pages) get this configuration too, so every Zeus page can use speech to text
         // and knows the app shortcuts.
         configuration.userContentController.addUserScript(pageBridgeScript)
         return configuration
+    }
+
+    /// The page of a tab that is not selected is a hidden web view. By default WebKit then lowers the priority of its
+    /// web process and slows its timers, so on a busy Mac the page can take seconds to run the app's close check or to
+    /// give its unsent text, and a quit, a mode switch, or an update waits for it. Zeus pages are local and few: they keep
+    /// their normal priority while hidden. The settings are WebKit's own, set only where this WebKit has them.
+    private static func keepAwakeWhenHidden(_ preferences: WKPreferences) {
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        for name in ["_setPageVisibilityBasedProcessSuppressionEnabled:", "_setHiddenPageDOMTimerThrottlingEnabled:"] {
+            let selector = NSSelectorFromString(name)
+            guard preferences.responds(to: selector) else { continue }
+            unsafeBitCast(preferences.method(for: selector), to: Setter.self)(preferences, selector, false)
+        }
     }
 
     /// Runs at document start in every Zeus page: `window.zeusApp.speech` (speech to text, see `SpeechService`),
