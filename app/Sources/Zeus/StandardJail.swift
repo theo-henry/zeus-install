@@ -3,7 +3,9 @@ import Foundation
 /// The read block of Standard sessions: the app starts every Standard `zeus` through `/usr/bin/sandbox-exec` with a
 /// small macOS sandbox profile that allows everything except reading and writing the EU folders. The Standard Claude
 /// Code, its hooks, its Bash commands, and the programs that they start as their child processes inherit it, so no
-/// Standard chat reads EU data with Claude's Read tool, `cat`, Python, or a child shell. The profile does not limit the
+/// Standard chat reads EU data with Claude's Read tool, `cat`, Python, or a child shell. No Standard process can rename
+/// or delete a denied folder or a folder that holds one, so no EU folder gets a new path outside the denies. The profile
+/// does not limit the
 /// network, the keychain, or any other folder, so content-cli and every other Standard tool work as without it.
 /// Known limit of phase 1: a program that a Standard session starts through launchd (`launchctl`, a LaunchAgent),
 /// `open`, or `osascript` is not its child process and runs outside the read block.
@@ -47,7 +49,8 @@ enum StandardJail {
     }
 
     /// The profile text. `(allow default)` keeps everything that Standard does today; the denies cover each folder and
-    /// everything in it, for the session and every process that it starts.
+    /// everything in it, for the session and every process that it starts. Each of these folders and every folder that
+    /// holds one (up to the top folders such as `/Users` and `/private`) can not be renamed or deleted.
     static func profileText(denied: [String], protected: [String]) throws -> String {
         var lines = [
             "(version 1)",
@@ -62,6 +65,19 @@ enum StandardJail {
         if !protected.isEmpty {
             lines.append("(deny file-write*")
             for folder in protected { lines.append("  (subpath \(try quoted(folder)))") }
+            lines.append(")")
+        }
+        var fixedPaths: [String] = []
+        for folder in denied + protected {
+            var path = folder
+            while path != "/", !path.isEmpty {
+                if !fixedPaths.contains(path) { fixedPaths.append(path) }
+                path = (path as NSString).deletingLastPathComponent
+            }
+        }
+        if !fixedPaths.isEmpty {
+            lines.append("(deny file-write-unlink")
+            for path in fixedPaths { lines.append("  (literal \(try quoted(path)))") }
             lines.append(")")
         }
         return lines.joined(separator: "\n") + "\n"

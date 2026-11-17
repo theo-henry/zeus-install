@@ -114,6 +114,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
 - **Standard read block.** On a Mac with an EU vault (its disk image, or a mounted vault with its marker), open or locked, the app starts every Standard `zeus` through `/usr/bin/sandbox-exec` with a macOS sandbox profile that denies reading and writing the EU folders (`Sources/Zeus/StandardJail.swift`).
   The Standard Claude Code, its hooks, its Bash commands, and the programs that they start as child processes inherit it: `cat`, Python, or a child shell get "Operation not permitted" in those folders.
   Known limit of phase 1: a program that a Standard session starts through launchd (`launchctl` or a LaunchAgent), `open`, or `osascript` is not its child process and runs outside the read block.
+  No Standard process can rename or delete a denied folder or a folder that holds one (a `(deny file-write-unlink ...)` rule for each of them up to `/Users` and `/private`), so `mv ~/Code ~/Code-x` can not give an EU folder a new path outside the denies.
   The profile is `(allow default)` with one `(deny file-read* file-write* ...)` rule, so the network, the keychain, and every other folder work as before; content-cli reads a large View as without it.
   The app always denies its own EU folders, whatever the Zeus Editor EU profile (`eu-profile.json`) says: the EU vault (`~/.zeus/eu` and its disk image), the default EU Claude Code folder and editor state (`~/.zeus/eu/claude`, `~/.zeus/eu/editor`), the default EU workspace `~/Code/zeus-eu`, the default EU temporary folder `/tmp/zeus-eu-<uid>` (`/private/tmp/zeus-eu-<uid>`), and the app's handover folder.
   The EU profile can only add denied folders (its Claude Code folder, editor state, EU workspace, and `tmp_dir`); an added folder that holds the home folder, `~/Code/zeus`, or the app folder is never denied.
@@ -350,9 +351,11 @@ a keychain file of the test (`ZEUS_APP_TEST_KEYCHAIN`) instead of the login keyc
 the read block profile and its folders; no vault over the EU folders from before the vault; a cancelled Touch ID makes no vault and no key;
 the vault is made encrypted, mounted without a Finder icon, owner only, with its marker, and its key is only in the keychain item that only the app may read, and not in the trace;
 a new Standard session in the read block can not read the vault, its disk image, the EU workspace, or the handover folder with `cat`, Python, a child shell, or Node, and can not write the vault, the EU workspace, or its own profile,
-while it reads its own workspace and gets a 20 MB response complete (as content-cli gets a large View);
+and can not rename `~/Code`, `~/.zeus`, the app folder, or the EU workspace to read an EU file at a new path,
+while it reads and renames in its own workspace and gets a 20 MB response complete (as content-cli gets a large View);
 a lock fails while a program has a vault file open, and the quit locks the vault after the sessions stopped; a cancelled Touch ID keeps it locked, and Touch ID opens it;
-after a crash the next start locks it before anything else; a wrong key does not open it; and with a Zeus Editor that still runs Standard commands in the Claude Code sandbox, Standard starts without the read block.
+after a crash the next start locks it before anything else; a wrong key does not open it; with an EU profile that names other EU folders, the profile still denies the fixed EU folders and adds the profile's;
+and with a Zeus Editor that still runs Standard commands in the Claude Code sandbox, Standard does not start on a Mac with a vault and the app tells the user to update Zeus Editor.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
 permission for the terminal only for the screenshots.

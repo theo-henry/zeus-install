@@ -113,6 +113,11 @@ json.dump({
     "url": "http://127.0.0.1:$port/view.json",
     "sha256": "$(shasum -a 256 "$WORK/large/view.json" | awk '{print $1}')",
     "out": "$SANDBOX/Code/zeus/clients/acme/view.json",
+    "rename": [["$SANDBOX/Code", "$SANDBOX/Code-moved", "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv"],
+               ["$SANDBOX/.zeus", "$SANDBOX/.zeus-moved", "$VAULT/rows.csv"],
+               ["$SANDBOX/Library/Application Support/Zeus", "$SANDBOX/Library/Application Support/Zeus-moved", "$HANDOVER/probe.txt"],
+               ["$SANDBOX/Code/zeus-eu", "$SANDBOX/Code/zeus-eu-moved", "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv"]],
+    "renameControl": ["$SANDBOX/Code/zeus/clients/acme", "$SANDBOX/Code/zeus/clients/acme-moved"],
 }, open(sys.argv[1], "w"))
 PY
   act new-chat
@@ -138,6 +143,12 @@ PY
   done
   check "Standard can not write the vault, the EU workspace, or the profile" \
     'probe_has "write denied $VAULT/standard-wrote.txt" && probe_has "write denied $JAIL" && probe_has "write denied $SANDBOX/Code/zeus-eu/clients/acme/standard-wrote.txt" && [ ! -e "$VAULT/standard-wrote.txt" ]'
+  for folder in "$SANDBOX/Code:$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv" "$SANDBOX/.zeus:$VAULT/rows.csv" \
+    "$SANDBOX/Library/Application Support/Zeus:$HANDOVER/probe.txt" "$SANDBOX/Code/zeus-eu:$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv"; do
+    check "Standard can not rename ${folder%%:*} to read ${folder#*:} at a new path" \
+      'probe_has "rename denied ${folder%%:*}" && probe_has "after rename denied ${folder#*:}" && [ -d "${folder%%:*}" ]'
+  done
+  check "Standard still renames a folder in its own workspace" 'probe_has "rename control ok $SANDBOX/Code/zeus/clients/acme"'
   check "Standard still reads its own workspace" 'probe_has "control read $SANDBOX/Code/zeus/clients/acme/project.json"'
   check "Standard still gets a large response complete (20 MB, as a large View) and writes it" \
     'probe_has "large complete 20000000 bytes" && cmp -s "$WORK/large/view.json" "$SANDBOX/Code/zeus/clients/acme/view.json"'

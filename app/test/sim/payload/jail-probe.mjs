@@ -3,7 +3,8 @@
 // Usage: node jail-probe.mjs <probe.json> <result file>
 // probe.json: {"read": [files the jail must hide], "write": [files the jail must not let it write],
 //              "control": a Standard file it must read, "url": a large response (a Celonis View), "sha256": its hash,
-//              "out": where it writes that response}
+//              "out": where it writes that response, "rename": [[a folder that holds an EU folder, its new name, an EU
+//              file in it]], "renameControl": [a folder of the Standard workspace, its new name]}
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -28,6 +29,18 @@ for (const file of probe.write) {
   try { fs.writeFileSync(file, 'written by a Standard session\n'); } catch (error) { write = error.code === 'EPERM' ? 'denied' : `error-${error.code}`; }
   note(`write ${write} ${file}`);
 }
+for (const [from, to, file] of probe.rename) {
+  let rename = 'ALLOWED';
+  try { fs.renameSync(from, to); } catch (error) { rename = error.code === 'EPERM' ? 'denied' : `error-${error.code}`; }
+  note(`rename ${rename} ${from}`);
+  const moved = rename === 'ALLOWED' ? to + file.slice(from.length) : file;
+  note(`after rename ${denied(spawnSync('/bin/cat', [moved])) ? 'denied' : 'ALLOWED'} ${file}`);
+  if (rename === 'ALLOWED') fs.renameSync(to, from);
+}
+const [controlFrom, controlTo] = probe.renameControl;
+let controlRename = 'ok';
+try { fs.renameSync(controlFrom, controlTo); fs.renameSync(controlTo, controlFrom); } catch (error) { controlRename = `error-${error.code}`; }
+note(`rename control ${controlRename} ${controlFrom}`);
 const control = spawnSync('/bin/cat', [probe.control]);
 note(`control ${control.status === 0 ? 'read' : 'FAILED'} ${probe.control}`);
 
