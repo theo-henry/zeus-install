@@ -264,7 +264,7 @@ final class WhisperTranscriber: Transcriber {
     /// whisper.cpp and ggml write much to stderr; Zeus does not show it. Debug builds show it with `ZEUS_APP_WHISPER_LOG=1`.
     private static let silenceLogs: () -> Void = {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["ZEUS_APP_WHISPER_LOG"] == "1" { return {} }
+        if DebugEnvironment.value("ZEUS_APP_WHISPER_LOG") == "1" { return {} }
         #endif
         whisper_log_set({ _, _, _ in }, nil)
         return {}

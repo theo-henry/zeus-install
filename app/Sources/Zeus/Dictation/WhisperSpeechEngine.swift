@@ -17,7 +17,7 @@ final class WhisperSpeechEngine: SpeechEngine {
     /// 10 minutes. Debug builds take `ZEUS_APP_TEST_RECORDING_LIMIT` (seconds) instead, for the tests.
     static let recordingLimit: TimeInterval = {
         #if DEBUG
-        if let value = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_RECORDING_LIMIT"].flatMap(TimeInterval.init) { return value }
+        if let value = DebugEnvironment.value("ZEUS_APP_TEST_RECORDING_LIMIT").flatMap(TimeInterval.init) { return value }
         #endif
         return 600
     }()
@@ -289,7 +289,7 @@ final class TestAudioSource: DictationAudioSource {
     private var onAudio: (([Float], Float) -> Void)?
 
     init() {
-        if let path = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_AUDIO_FILE"], !path.isEmpty {
+        if let path = DebugEnvironment.value("ZEUS_APP_TEST_AUDIO_FILE"), !path.isEmpty {
             file = try? AVAudioFile(forReading: URL(fileURLWithPath: path))
             converter = file.flatMap { DictationConverter(from: $0.processingFormat) }
             Trace.log("speech: test audio \(path) format=\(file.map { "\($0.processingFormat)" } ?? "unreadable")")

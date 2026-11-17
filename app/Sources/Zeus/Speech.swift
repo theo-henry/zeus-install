@@ -52,7 +52,7 @@ final class SpeechService {
 
     private init() {
         #if DEBUG
-        let mode = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_SPEECH"] ?? ""
+        let mode = DebugEnvironment.value("ZEUS_APP_TEST_SPEECH") ?? ""
         if mode == "whisper" {
             // The whisper path with simulated audio and a simulated model (see `SimulatedTranscriber`).
             apple = SimulatedSpeechEngine(mode: "1")
@@ -63,7 +63,7 @@ final class SpeechService {
             apple = SimulatedSpeechEngine(mode: mode)
             whisper = WhisperSpeechEngine { TestAudioSource() }
             hybrid = HybridSpeechEngine(apple: apple) { TestAudioSource() }
-        } else if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_AUDIO_FILE"] != nil {
+        } else if DebugEnvironment.value("ZEUS_APP_TEST_AUDIO_FILE") != nil {
             // The real model, with a sound file instead of the microphone.
             apple = AppleSpeechEngine()
             whisper = WhisperSpeechEngine { TestAudioSource() }

@@ -19,7 +19,7 @@ enum Updater {
     /// the Zeus repo.
     static var repo: String {
         #if DEBUG
-        if let repo = ProcessInfo.processInfo.environment["ZEUS_APP_REPO"], !repo.isEmpty { return repo }
+        if let repo = DebugEnvironment.value("ZEUS_APP_REPO"), !repo.isEmpty { return repo }
         #endif
         return "theo-henry/zeus"
     }
@@ -103,7 +103,7 @@ enum Updater {
             pending.newPID = getpid()
             try? writePending(pending)
             #if DEBUG
-            if ProcessInfo.processInfo.environment["ZEUS_APP_TEST_NO_CONFIRM"] == "1" {
+            if DebugEnvironment.value("ZEUS_APP_TEST_NO_CONFIRM") == "1" {
                 Trace.log("update: not confirmed (test)")
                 return .unconfirmed
             }
@@ -164,8 +164,7 @@ enum Updater {
 
     /// Why this copy does not update itself, or nil when it does.
     static func skipReason() -> String? {
-        let env = ProcessInfo.processInfo.environment
-        if env["ZEUS_APP_NO_UPDATE"] == "1" { return "ZEUS_APP_NO_UPDATE" }
+        if DebugEnvironment.value("ZEUS_APP_NO_UPDATE") == "1" { return "ZEUS_APP_NO_UPDATE" }
         guard Version(currentVersion) != nil else { return "development version \(currentVersion)" }
         let bundle = Bundle.main.bundleURL.standardizedFileURL
         guard bundle.pathExtension == "app" else { return "not an app bundle" }

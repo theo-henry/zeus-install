@@ -172,7 +172,8 @@ claude plugin install celonis-pql@celonis-pql --scope user
 ## EU mode
 
 EU mode runs Zeus with Claude on Google Vertex AI in the EU (location `eu`), for clients whose data must stay in the EU.
-The model is Claude Sonnet 5.5.
+The default model is Claude Sonnet 5.5; Opus 5.5 and Haiku 5.5 are also available, and small background calls use Haiku 5.5.
+Fable is not available in EU mode.
 Web search is available; web fetch and MCP servers are off.
 EU mode has its own workspace (`~/Code/zeus-eu`), its own Claude Code folder (`~/.zeus/eu/claude`), and its own Zeus Editor state (`~/.zeus/eu/editor`).
 Nothing of EU mode goes into `~/Code/zeus` or `~/.claude`.
@@ -182,7 +183,10 @@ Nothing of EU mode goes into `~/Code/zeus` or `~/.claude`.
 1. Run the install line or Zeus > Zeus Setup… in the app.
    The EU steps are the same on every Mac (steps 12 to 14, or 14 to 16 in the app).
 2. Ask the Zeus maintainer to give your Google account access to the EU project.
-   The maintainer gives the account the Vertex AI User role on the project `project-4bf0bacd-fec4-406b-a99`.
+   The maintainer gives the account two roles on the project `project-4bf0bacd-fec4-406b-a99`:
+   Vertex AI User (`roles/aiplatform.user`) and Service Usage Consumer (`roles/serviceusage.serviceUsageConsumer`).
+   The second role is necessary for the quota project of the sign-in and for the EU start check.
+   Without it, the sign-in or the EU start check fails with "no access".
 3. Sign in to Google one time.
    In the app, the EU start page shows **Sign in to Google Cloud** when it is necessary.
    In Terminal, use these two commands:
@@ -201,7 +205,16 @@ gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99
   The tabs of each mode come back when you switch back to that mode.
   An EU tab never opens in Standard mode, and a Standard tab never opens in EU mode.
 - Each mode has its own web data (cookies and storage) and its own terminal environment.
-- In EU mode, the tab bar shows an estimate of the session cost in USD.
+- In EU mode, the tab bar shows **EU data access** for the project of the tab.
+  It is off for each project until you turn it on.
+  When it is on, Zeus can read client data rows of that project in EU mode (SQL results, data profiles, research results) and write row files into the project's `out` folder.
+  Only you can turn it on or off, with this switch; Zeus can not.
+  Tell Zeus in the chat when you turned it on.
+- In EU mode, the tab bar shows an estimate of the session cost in euros, at the daily reference rate of the European Central Bank.
+  The estimate itself is in USD, from the token counts of the chat and the Vertex AI EU prices of the model; the tooltip shows the USD value.
+  The euro value is only a conversion of that USD estimate at the ECB daily reference rate.
+  It is not the amount that Google bills.
+  When the app can not load the euro rate of today, the cost shows in USD with the note "no euro rate".
 - When the EU start fails, the app shows why and what to do: sign in to Google Cloud, run the Zeus setup, try again, or switch to Standard.
 
 ### Hand over EU work to Standard
@@ -213,12 +226,18 @@ A person releases it in the app:
 2. Click **Ask Zeus in this chat**.
    The EU chat writes the handover summary of its project.
    Then click **Review…** next to the project.
+   When no project has work to hand over, the window says why.
 3. Review the summary and the files.
-   The app scans them for client data with the Zeus scripts of the Standard workspace, which EU Claude can not change.
-   You can edit the summary, remove files, and accept a finding.
-   An e-mail address or an IBAN can not be accepted: remove the file, or change the text in EU mode.
-4. Click **Release to Standard**.
-   The app copies the released files into `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/` and writes `released.json` there.
+   The app copies them into its own folder (`~/Library/Application Support/Zeus/handover`), which EU Claude can not write, and scans them for client data with the Zeus scripts of the Standard workspace, which EU Claude can not change.
+   Each finding group is one value (with its places in all files), and the window shows the value.
+   For each group, choose **Keep** (it is not client data, and it crosses as it is) or **Mask** (Zeus replaces it with `masked-<kind>-<n>` in every file).
+   **Mask All** masks every group that you did not decide yet.
+   An e-mail address or an IBAN can only be masked.
+   You can also edit the summary (Zeus scans it again) and remove files.
+4. Click **Release to Standard** (**Mask and Release** when you chose Mask). It is available when every group has a choice.
+   The app masks the values, scans again, and stops when a new finding shows.
+   If a step fails, the masks that are made stay, and **Back to the Review** keeps your choices.
+   Then the app copies the released files into `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/` and writes `released.json` there, with the kinds and the number of kept and masked values and the number of removed files, never a value or the path of a removed file.
    The Standard project must already exist.
 
 The "Zeus feedback" section of the handover summary goes to Standard with the release.

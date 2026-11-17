@@ -24,7 +24,8 @@
 # EU mode (Claude on Google Vertex AI in the EU) gets the same three steps on every Mac: the Google Cloud CLI in
 # ~/google-cloud-sdk, the EU workspace ~/Code/zeus-eu, and the Zeus plugins in the EU Claude Code folder ~/.zeus/eu/claude.
 # No shell profile changes for EU mode. Each user then signs in to Google once (the Zeus app shows the button), and the
-# Zeus maintainer gives the user's Google account the Vertex AI User role on the EU project.
+# Zeus maintainer gives the user's Google account two roles on the EU project: Vertex AI User (roles/aiplatform.user) and
+# Service Usage Consumer (roles/serviceusage.serviceUsageConsumer), which the quota project of the sign-in needs.
 #
 # Options:
 #   --check      app mode only: report which steps are already done, then stop. Installs nothing.

@@ -202,7 +202,7 @@ private final class PTYCapture {
     private let start = Date()
 
     init?(pid: pid_t) {
-        guard let dir = ProcessInfo.processInfo.environment["ZEUS_APP_PTY_CAPTURE"], !dir.isEmpty else { return nil }
+        guard let dir = DebugEnvironment.value("ZEUS_APP_PTY_CAPTURE"), !dir.isEmpty else { return nil }
         let path = dir + "/pty-\(pid).log"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: path, contents: nil)

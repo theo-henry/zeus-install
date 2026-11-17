@@ -441,7 +441,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The `Standard | EU` switch of the title bar. A switch asks first; from EU it
     /// offers the handover first. Then it ends every session of the old mode, keeps its tabs for a switch back, and
     /// starts the new mode with the tabs that it had (or one new tab). EU needs its setup on this Mac first.
-    func requestMode(_ target: ZeusMode) {
+    /// `afterRelease`: the user clicked Switch to Standard after a release in the handover window; the switch does not
+    /// offer the handover again.
+    func requestMode(_ target: ZeusMode, afterRelease: Bool = false) {
         guard target != ZeusMode.current, !isSwitchingMode, !updating else { refreshModeViews(); return }
         if target == .eu {
             let missing = EUSetup.missing()
@@ -449,6 +451,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         isSwitchingMode = true
         refreshModeViews()
+        if afterRelease, target == .standard {
+            Trace.log("mode: switch to standard after a release")
+            checkTabsBeforeSwitch(to: target)
+            return
+        }
         Trace.log("mode: switch to \(target.rawValue) asked")
         let alert = NSAlert()
         if target == .eu {
@@ -620,6 +627,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
+    /// The EU data access switch of the title bar: only the user turns it on, after this question, and the app (not Claude)
+    /// runs Zeus. Off needs no question.
+    func setEUDataAccess(project: String, on: Bool) {
+        guard ZeusMode.current == .eu, !isSwitchingMode else { refreshModeViews(); return }
+        let apply = { [weak self] in
+            Trace.log("eu access: \(project) \(on ? "on" : "off") asked")
+            EUDataAccess.shared.set(project, on: on) { error in
+                Trace.log("eu access: \(project) \(error == nil ? (on ? "on" : "off") : "failed")")
+                guard let self, let error else { return }
+                let alert = NSAlert()
+                alert.messageText = "EU data access did not change"
+                alert.informativeText = error
+                alert.addButton(withTitle: "OK")
+                self.ask(alert) { _ in }
+            }
+        }
+        guard on else { apply(); return }
+        let alert = NSAlert()
+        alert.messageText = "Turn on EU data access for \(project)?"
+        alert.informativeText = "Zeus can then read client data rows of \(project) in EU mode: SQL results, data profiles, and research "
+            + "results, and it can write row files into the project's out folder. The data stays in EU mode, on Google Vertex AI in the EU. "
+            + "Only you can turn it on or off, here; Zeus can not. Tell Zeus in the chat when you turned it on."
+        alert.addButton(withTitle: "Turn On")
+        alert.addButton(withTitle: "Cancel")
+        ask(alert) { response in
+            if response == .alertFirstButtonReturn { apply() } else { Trace.log("eu access: \(project) on cancelled") }
+        }
+    }
+
     /// The handover window (EU mode only), from the "Hand Over First…" choice of the switch to Standard.
     func showHandover() {
         guard ZeusMode.current == .eu else { return }
@@ -639,7 +675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         model.onSwitchToStandard = { [weak self] in
             self?.handoverWindow?.window?.close()
-            self?.requestMode(.standard)
+            self?.requestMode(.standard, afterRelease: true)
         }
         let controller = HandoverWindowController(model: model)
         controller.onClosed = { [weak self] in self?.handoverWindow = nil }
@@ -656,8 +692,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// With ZEUS_APP_TEST_ID set, the name ends in ".<id>", so that a test drives only its own app copy.
     private func listenForTestActions() {
         #if DEBUG
-        guard ProcessInfo.processInfo.environment["ZEUS_APP_TRACE"] != nil else { return }
-        let testID = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_ID"].map { "." + $0 } ?? ""
+        guard DebugEnvironment.value("ZEUS_APP_TRACE") != nil else { return }
+        let testID = DebugEnvironment.value("ZEUS_APP_TEST_ID").map { "." + $0 } ?? ""
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("io.github.theo-henry.zeus.test" + testID),
                                                             object: nil, queue: .main) { [weak self] note in
             guard let self, var object = note.object as? String else { return }
@@ -818,16 +854,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 let store = tab.webView.configuration.websiteDataStore
                 Trace.log("web data: \(tab.mode.rawValue) persistent=\(store.isPersistent) default=\(store === WKWebsiteDataStore.default())")
             case "test-handover": self.showHandover()
+            // "test-eu-access:<project>=on|off" moves the EU data access switch, as a click does.
+            case "test-eu-access":
+                let parts = argument.split(separator: "=", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else { break }
+                self.setEUDataAccess(project: parts[0], on: parts[1] == "on")
+            case "test-euro-rate-reset": EuroRate.shared.reset()
             // Asks the last EU tab, the tab that the other test actions (test-pick-project) use.
             case "test-handover-ask":
                 guard let model = self.handoverWindow?.model, let chat = model.chats.last else { Trace.log("handover: no chat"); break }
                 model.ask(chat)
             case "test-handover-refresh": self.handoverWindow?.model.refresh()
             case "test-handover-open": self.handoverWindow?.model.open(argument)
-            case "test-handover-accept-all":
+            case "test-handover-keep-all":
                 guard let model = self.handoverWindow?.model else { break }
-                for finding in model.review?.findings ?? [] where !finding.blocking { model.setAccepted(finding.id, true) }
+                for group in model.groups where group.canKeep && model.decision(group) == .open { model.decide(group.id, .keep) }
+            case "test-handover-mask-all": self.handoverWindow?.model.maskAll()
+            // "test-handover-decide:<kind>=keep|mask|open" decides every group of that kind.
+            case "test-handover-decide":
+                guard let model = self.handoverWindow?.model else { break }
+                let parts = argument.split(separator: "=", maxSplits: 1).map(String.init)
+                let choice: HandoverModel.Decision? = parts.count == 2 ? ["keep": .keep, "mask": .mask, "open": .open][parts[1]] : nil
+                guard let choice else { break }
+                for group in model.groups where group.kind == parts[0] { model.decide(group.id, choice) }
+            // Whether the sheet shows this text as the value of a group. Only true or false goes into the trace, never a value.
+            case "test-handover-value":
+                let shown = self.handoverWindow?.model.groups.contains { $0.values.contains(argument) } ?? false
+                Trace.log("handover value shown: \(shown)")
+            case "test-handover-retry": self.handoverWindow?.model.retry()
+            case "test-handover-rebuild": self.handoverWindow?.model.rebuild()
             case "test-handover-remove": self.handoverWindow?.model.setInclude(argument, false)
+            case "test-handover-include": self.handoverWindow?.model.setInclude(argument, true)
+            case "test-handover-switch": self.handoverWindow?.model.onSwitchToStandard?()
             case "test-handover-summary":
                 guard let model = self.handoverWindow?.model else { break }
                 model.review?.summary = argument.replacingOccurrences(of: "\\n", with: "\n")
@@ -835,10 +893,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             case "test-handover-release": self.handoverWindow?.model.release()
             case "test-handover-state":
                 guard let model = self.handoverWindow?.model else { Trace.log("handover state: no window"); break }
-                let findings = model.review?.findings.map { "\($0.kind)\($0.blocking ? "!" : "")\($0.accepted ? "+" : "")" } ?? []
+                let groups = model.groups.map { "\($0.kind):\(model.decision($0))" }
                 var phase = "\(model.phase)"
-                if case .failed = model.phase { phase = "failed" }
-                Trace.log("handover state: phase=\(phase) projects=\(model.projects.map { "\($0.project):\($0.open)" }) chats=\(model.chats.count) files=\(model.review?.files.map { "\($0.path)\($0.include ? "" : "-")" } ?? []) findings=\(findings) open=\(model.openFindings.count) release=\(model.canRelease) message=\(model.message ?? "-")")
+                if case let .failed(text) = model.phase { phase = "failed"; Trace.log("handover failure: \(text)") }
+                Trace.log("handover state: phase=\(phase) projects=\(model.projects.map { "\($0.project):\($0.open)" }) chats=\(model.chats.count) files=\(model.review?.files.map { "\($0.path)\($0.include ? "" : "-")" } ?? []) groups=\(groups) open=\(model.openGroups.count) masked=\(model.review?.maskedKinds.count ?? 0) release=\(model.canRelease) nothing=\(model.nothingReason ?? "-") message=\(model.message ?? "-")")
             case "test-rename-open": self.chatTabs.last.map { $0.host?.startRename($0) }
             case "test-rename-save": self.chatTabs.last.map { $0.host?.endRename($0, name: argument) }
             case "toggle-menubar": self.toggleMenuBar(nil)

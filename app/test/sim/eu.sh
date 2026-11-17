@@ -62,6 +62,10 @@ Build the order KPI View for acme.
 
 - Count orders per month. Contact: ana@example.com
 
+## Findings
+
+None
+
 ## Open items
 
 - None
@@ -128,9 +132,9 @@ eu_scenario() {
   echo "Scenario EU: the Standard | EU switch, the EU start check and sign-in, the cost, the handover, and the way back"
   eu_sandbox
   # The EU Claude Code folder has no Zeus plugins yet: EU mode needs the setup first.
-  launch_app eu
+  launch_app eu ZEUS_APP_EURO_RATE_URL="file://$STATE/euro-rate.xml"
   need "the app opens a Standard chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOAD_LIMIT && sleep 1'
-  check "the app starts in Standard mode" 'grep -q "launched: .* mode=standard" "$TRACE" && mode_bar_has "mode=standard enabled=true pill=false cost=-"'
+  check "the app starts in Standard mode" 'grep -q "launched: .* mode=standard" "$TRACE" && mode_bar_has "mode=standard enabled=true pill=false access=- cost=-"'
   check "zeus runs without --eu in ~/Code/zeus" 'grep -q "\"args\":\[\"--no-open\"\],\"cwd\":\"[^\"]*/Code/zeus\"" "$STATE/zeus-starts"'
   act test-store
   check "Standard pages use the default web data" 'wait_for "web data: standard persistent=true default=true" 10'
@@ -163,7 +167,7 @@ eu_scenario() {
   check "zeus runs with --eu --no-open in the EU workspace" 'grep -q "\"pid\":$eu_pid,\"args\":\[\"--eu\",\"--no-open\"\],\"cwd\":\"[^\"]*/Code/zeus-eu\"" "$STATE/zeus-starts"'
   check "the EU chat page loads" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/$eu_pid" $PAGE_LOAD_LIMIT && sleep 1'
   check "the Standard tab is kept for the way back" 'grep -q "$standard_session" "$SANDBOX/Library/Application Support/Zeus/tabs-standard.json"'
-  check "the title bar shows EU with the green pill" 'mode_bar_has "mode=eu enabled=true pill=true cost=-"'
+  check "the title bar shows EU with the green pill" 'mode_bar_has "mode=eu enabled=true pill=true access=- cost=-"'
   act test-store
   check "EU pages have their own web data" 'wait_for "web data: eu persistent=.* default=false" 10'
   shot eu-4-eu-chat
@@ -173,7 +177,20 @@ eu_scenario() {
   sleep 0.3
   act test-send
   check "the EU page sends the session cost after the reply" 'wait_for "eu cost: $eu_pid session=0.045255 chat=0.045220 calls=2 unpriced=0" 20'
-  check "the title bar shows the EU session cost" 'mode_bar_has "pill=true cost=EU session cost (estimate): 0.05 USD"'
+  check "without the ECB rate of today, the cost shows in USD with a note" 'mode_bar_has "cost=EU session cost (estimate): 0.05 USD (no euro rate)" && wait_for "euro rate: not loaded" 10'
+  check "Standard mode never loaded the euro rate" '[ "$(grep -c "euro rate: " "$TRACE")" = 1 ]'
+  cat >"$STATE/euro-rate.xml" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">
+<Cube><Cube time='2026-11-16'><Cube currency='JPY' rate='163.20'/><Cube currency='USD' rate='1.0850'/></Cube></Cube>
+</gesmes:Envelope>
+XML
+  act test-euro-rate-reset
+  act test-draft
+  sleep 0.3
+  act test-send
+  check "with the ECB rate of today, the title bar shows the EU session cost in euros" 'wait_for "euro rate: 1.085 of 2026-11-16" 20 && mode_bar_has "pill=true access=- cost=EU session cost (estimate): 0.08 EUR"'
+  check "the rate is kept for the day" 'grep -q "\"loadedOn\":\"$(date +%Y-%m-%d)\"" "$SANDBOX/Library/Application Support/Zeus/euro-rate.json"'
   shot eu-5-cost
   # A Vertex error of the chat (the bridge message eu-error:<JSON>) shows the words of the EU start check.
   act 'test-post:"eu-error:{\"status\":429,\"model\":\"claude-sonnet-5-5\"}"'
@@ -201,61 +218,116 @@ eu_scenario() {
   check "Try again starts EU mode again" 'wait_count "session [0-9]* started (eu)" 5 20 && wait_count "state: running(" 4 20'
   check "no Standard session started in EU mode" '[ "$(grep -c " start standard" "$STATE/sessions")" = 1 ]'
 
-  # The handover: EU Zeus writes the summary on request, the app builds and scans it outside Claude, and the user
-  # releases it. Findings block the release until the user resolves each; an e-mail address can not be accepted.
+  # The handover: EU Zeus writes the summary on request; the app builds, scans, and masks it in its own folder, outside
+  # Claude; the user decides each finding group (Keep or Mask) and releases it.
   # The user picks the project acme in the chat page. It is not yet the Claude session's project, so the request names it.
   # The pick needs the project menu of the new EU chat page, so the test waits until that page has loaded.
   need "the EU chat page of Try again loads" 'newest_page_loaded $PAGE_LOAD_LIMIT && sleep 1'
   act test-pick-project:acme
   need "a project picked in the EU chat names the tab" 'wait_for "tab name: acme project=acme" 10'
-  act test-handover
-  need "the handover window opens" 'wait_for "handover: window opened" 10 && wait_handover "phase=list projects=[\"acme:false\"]" 20'
-  shot eu-9-handover-list
+
+  # EU data access: off until the user turns it on with the switch in the title bar; the app runs Zeus outside Claude.
+  check "the title bar shows EU data access of the tab's project, off" 'wait_for "eu access: acme read off" 20 && mode_bar_has "access=off "'
+  act test-eu-access:acme=on
+  sleep 0.5
+  act test-alert:1
+  check "turning EU data access on asks first" 'wait_for "test alert: Turn on EU data access for acme? -> 1" 10 && wait_for "eu access: acme on cancelled" 10'
+  check "Cancel keeps it off" '[ ! -e "$SANDBOX/.zeus/eu/data-access/acme.json" ] && mode_bar_has "access=off "'
+  act test-eu-access:acme=on
+  sleep 0.5
+  act test-alert:0
+  check "Turn On runs eu-access on outside Claude, and the title bar shows on" \
+    'wait_for "eu access: acme on$" 10 && python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r[\"enabled\"] is True else 1)" "$SANDBOX/.zeus/eu/data-access/acme.json" && mode_bar_has "access=on "'
+  check "eu-access ran the Standard copy of zeus.py with no Claude session" \
+    'grep "\"eu-access\", \"acme\", \"on\"" "$STATE/handoff.log" | grep -q "\"CLAUDECODE\": null" && grep "\"eu-access\", \"acme\", \"on\"" "$STATE/handoff.log" | grep -q "/Code/zeus/scripts/zeus.py"'
+  act test-eu-access:acme=off
+  check "turning it off needs no question" 'wait_for "eu access: acme off$" 10 && mode_bar_has "access=off "'
+  shot eu-9-data-access
+
+  # Nothing to hand over: the window says why.
+  mv "$SANDBOX/Code/zeus-eu/clients/acme/work" "$SANDBOX/Code/zeus-eu/clients/acme/work.off"
+  # Switch to Standard from EU offers the handover first; Hand Over First opens the handover window.
+  act test-mode:standard
+  check "the switch to Standard offers the handover first" 'wait_for "mode: switch to standard asked" 10'
+  shot eu-10-switch-back
+  act test-alert:0
+  need "Hand Over First opens the handover window" 'wait_for "handover: window opened" 10 && wait_handover "phase=list" 20'
+  check "with no EU work, the window says that there is nothing to hand over, and why" 'handover_has "projects=[] " && handover_has "nothing=No EU project has work to hand over: acme has no changed files"'
+  mv "$SANDBOX/Code/zeus-eu/clients/acme/work.off" "$SANDBOX/Code/zeus-eu/clients/acme/work"
+  act test-handover-refresh
+  need "the project with EU work shows" 'wait_handover "phase=list projects=[\"acme:false\"]" 20'
+  shot eu-11-handover-list
   act test-handover-ask
   check "the app asks EU Zeus in a chat to write the summary of the tab's project" 'wait_for "handover: summary asked in [0-9]* sent=true" 10 && grep -q " send The_user_hands_over_the_EU_work_of_the_project_acme_to" "$STATE/sessions"'
   check "the saved summary shows up by itself" 'wait_handover "projects=[\"acme:true\"]" 20 && grep -q "A handover summary is ready to review." "$TRACE"'
   act test-handover-open:acme
   check "the app builds and scans the handover" 'wait_handover "phase=review" 20'
+  app_root="$SANDBOX/Library/Application Support/Zeus/handover"
+  id="$(ls "$SANDBOX/Code/zeus-eu/clients/acme/handoff" | head -1)"
+  check "the app builds the handover in its own folder, owner only, and nothing in the EU workspace" \
+    '[ -f "$app_root/acme/$id/manifest.json" ] && [ -f "$app_root/acme/$id/files/work/view/spec.json" ] && [ "$(stat -f %Lp "$app_root")" = 700 ] && [ "$(ls "$SANDBOX/Code/zeus-eu/clients/acme/handoff/$id")" = summary.md ]'
+  check "build, scan, and pending run with the app folder, never a folder in the EU workspace" \
+    'grep -q "\"handoff\", \"build\", \"acme\", \"--dir\", \"[^\"]*/Library/Application Support/Zeus/handover/acme/$id\", \"--json\"" "$STATE/handoff.log" && grep -q "\"handoff\", \"scan\", \"acme\", \"$id\", \"--dir\", \"[^\"]*/Library/Application Support/Zeus/handover/acme/$id\"" "$STATE/handoff.log"'
   check "only the listed files that may cross are in it" 'handover_has "files=[\"summary.md\", \"files/work/view/spec.json\"]"'
-  check "the scan findings show, and the e-mail address blocks" 'handover_has "findings=[\"email!\", \"known-value\"]" && handover_has "release=false"'
+  check "the findings show as groups, undecided, and Release is off" 'handover_has "groups=[\"email:open\", \"known-value:open\"]" && handover_has "open=2 masked=0 release=false"'
+  act test-handover-value:ana@example.com
+  check "the sheet shows the real value of a finding, read from the app's copy" 'wait_for "handover value shown: true" 10'
+  check "no value goes into a log (only the test's own action names one)" '! grep -v "test action: " "$TRACE" | grep -q "ana@example.com\|ACME"'
   check "the handoff commands run the Standard copy of zeus.py, pointed at the EU workspace, and no code of the EU workspace" \
     'python3 -c "import json,os,sys; home=os.path.realpath(sys.argv[2]); calls=[json.loads(x) for x in open(sys.argv[1])]; sys.exit(0 if calls and all(c[\"script\"]==home+\"/Code/zeus/scripts/zeus.py\" and not any(p==home+\"/Code/zeus-eu\" or p.startswith(home+\"/Code/zeus-eu/\") for p in c[\"path\"]) for c in calls) else 1)" "$STATE/handoff.log" "$SANDBOX" && [ ! -e "$STATE/eu-code-ran" ]'
   check "the handoff commands run outside Claude, with the EU profile" \
-    'grep -q "\"args\": \[\"--workspace\", \"[^\"]*/Code/zeus-eu\", \"handoff\", \"build\", \"acme\", \"--json\"\]" "$STATE/handoff.log" && ! grep -q "\"ZEUS_MODE\": \"eu\"\|\"CLAUDE_CODE_USE_VERTEX\": \"1\"\|\"CLAUDE_CONFIG_DIR\": \"/" "$STATE/handoff.log" && grep -q "\"ZEUS_EU_PROFILE\": \"[^\"]*/zeus-editor/sim/eu-profile.json\"" "$STATE/handoff.log"'
-  shot eu-10-handover-review
-  act test-handover-accept-all
-  check "an e-mail finding can not be accepted, so the release stays blocked" 'sleep 0.5 && handover_has "findings=[\"email!\", \"known-value+\"]" && handover_has "release=false"'
-  act 'test-handover-summary:# Handover summary\n\n## Goal\n\nBuild the order KPI View for acme.\n\n## Decisions\n\n- Count orders per month.\n\n## Open items\n\n- None\n\n## Artifacts\n\n- work/view/spec.json\n\n## Zeus feedback\n\nThe KPI check of 2025 needs a hint.\n'
-  check "an edited summary is scanned again, and the user's choices stay" 'wait_handover "findings=[\"number\", \"known-value+\"]" 20'
-  act test-handover-remove:files/work/view/spec.json
-  check "a removed file needs no review" 'sleep 0.5 && handover_has "files=[\"summary.md\", \"files/work/view/spec.json-\"]" && handover_has "open=1 release=false"'
-  act test-handover-accept-all
-  check "with every finding resolved, Release is possible" 'sleep 0.5 && handover_has "open=0 release=true"'
-  act test-handover-release
-  check "the app releases the handover" 'wait_for "handover: released [0-9TZa-f-]* of acme files=1 accepted=1" 20'
-  shot eu-11-released
-  local id
-  id="$(grep -o "handover: released [0-9TZa-f-]*" "$TRACE" | tail -1 | awk '{print $3}')"
-  released="$SANDBOX/Code/zeus/clients/acme/handoff/from-eu/$id"
-  check "the summary is in the Standard workspace with the hash of the manifest" \
-    '[ "$(shasum -a 256 <"$released/summary.md" | cut -d" " -f1)" = "$(python3 -c "import json,sys; print([f[\"sha256\"] for f in json.load(open(sys.argv[1]))[\"files\"] if f[\"path\"]==\"summary.md\"][0])" "$SANDBOX/Code/zeus-eu/clients/acme/handoff/$id/manifest.json")" ]'
-  check "a removed file does not cross" '[ ! -e "$released/files" ]'
-  check "released.json records the files, the removed file, and the accepted findings" \
-    'python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if [f[\"path\"] for f in r[\"files\"]]==[\"summary.md\"] and r[\"removed\"]==[\"files/work/view/spec.json\"] and sorted(f[\"kind\"] for f in r[\"accepted_findings\"])==[\"number\"] and r[\"summary_edited_in_app\"] and r[\"project\"]==\"acme\" else 1)" "$released/released.json"'
-  check "the EU handover is closed" '[ -f "$SANDBOX/Code/zeus-eu/clients/acme/handoff/$id/released.json" ] && act test-handover-refresh && wait_handover "projects=[\"acme:false\"]" 10'
-  check "no EU chat or other EU file is in the Standard workspace" '[ "$(find "$SANDBOX/Code/zeus" -type f -not -path "*/.git/*" | sed "s|^$SANDBOX/Code/zeus/||" | sort | tr "\n" " ")" = "clients/acme/handoff/from-eu/$id/released.json clients/acme/handoff/from-eu/$id/summary.md clients/acme/project.json scripts/zeus.py " ]'
+    'grep -q "\"args\": \[\"--workspace\", \"[^\"]*/Code/zeus-eu\", \"handoff\", \"build\", \"acme\"" "$STATE/handoff.log" && ! grep -q "\"ZEUS_MODE\": \"eu\"\|\"CLAUDE_CODE_USE_VERTEX\": \"1\"\|\"CLAUDE_CONFIG_DIR\": \"/" "$STATE/handoff.log" && grep -q "\"ZEUS_EU_PROFILE\": \"[^\"]*/zeus-editor/sim/eu-profile.json\"" "$STATE/handoff.log"'
+  shot eu-12-handover-review
 
-  # EU to Standard without a handover: the EU tabs stop, are kept for the way back, and never resume in Standard.
+  # A forged scan answer for another project (a decoy folder) is refused, and nothing is released.
+  printf '0decoy\n' >"$STATE/scan-project"
+  act test-handover-rebuild
+  check "a scan answer for another project is refused" 'wait_handover "phase=failed" 20 && grep -q "zeus handoff scan: exit 3" "$TRACE" && [ ! -e "$SANDBOX/Code/zeus/clients/acme/handoff" ]'
+  rm -f "$STATE/scan-project"
+  act test-handover-retry
+  check "Back to the Review scans again with the user's choices" 'wait_handover "phase=review" 20 && handover_has "groups=[\"email:open\", \"known-value:open\"]"'
+
+  act test-handover-keep-all
+  check "an e-mail address can not be kept, so the release stays off" 'sleep 0.5 && handover_has "groups=[\"email:open\", \"known-value:keep\"]" && handover_has "release=false"'
+  act 'test-handover-summary:# Handover summary\n\n## Goal\n\nBuild the order KPI View for acme.\n\n## Decisions\n\n- Count orders per month.\n\n## Findings\n\n- Orders 4711 and 9876 are test records.\n\n## Open items\n\n- None\n\n## Artifacts\n\n- work/view/spec.json\n\n## Zeus feedback\n\nNone\n'
+  check "an edited summary is scanned again, and a Keep stays for the same value" 'wait_handover "groups=[\"number:open\", \"number:open\", \"known-value:keep\"]" 20'
+  act test-handover-remove:files/work/view/spec.json
+  check "a removed file needs no choice" 'sleep 0.5 && handover_has "files=[\"summary.md\", \"files/work/view/spec.json-\"]" && handover_has "groups=[\"number:open\", \"number:open\"]"'
+  act test-handover-include:files/work/view/spec.json
+  act test-handover-mask-all
+  check "Mask All masks every open group, and Release is possible" 'sleep 0.5 && handover_has "groups=[\"number:mask\", \"number:mask\", \"known-value:keep\"]" && handover_has "open=0 masked=0 release=true"'
+  shot eu-13-handover-decided
+
+  # A release that fails after the first mask keeps that mask; the retry masks the rest and releases.
+  touch "$STATE/mask-fails"
+  act test-handover-release
+  check "a failed mask stops the release, and nothing crosses" 'wait_handover "phase=failed" 20 && [ ! -e "$SANDBOX/Code/zeus/clients/acme/handoff" ]'
+  act test-handover-retry
+  check "the retry keeps the mask that was made, and the choices" 'wait_handover "phase=review" 20 && handover_has "groups=[\"number:mask\", \"known-value:keep\"]" && handover_has "masked=1 release=true"'
+  act test-handover-release
+  check "the app masks and releases the handover" 'wait_for "handover: released [0-9TZa-f-]* of acme files=2 masked=1" 20'
+  shot eu-14-released
+  released="$SANDBOX/Code/zeus/clients/acme/handoff/from-eu/$id"
+  check "the released files are the masked copies with the hashes of the app's manifest" \
+    'python3 -c "import hashlib,json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if all(hashlib.sha256(open(sys.argv[2]+\"/\"+f[\"path\"],\"rb\").read()).hexdigest()==f[\"sha256\"] for f in m[\"files\"]) else 1)" "$app_root/acme/$id/manifest.json" "$released" && grep -q "masked-number-1" "$released/summary.md" && grep -q "masked-number-2" "$released/summary.md" && ! grep -q "4711\|9876" "$released/summary.md"'
+  check "released.json records kinds and counts, never a group ID" \
+    'python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if [f[\"path\"] for f in r[\"files\"]]==[\"summary.md\",\"files/work/view/spec.json\"] and r[\"kept\"]==[{\"kind\":\"known-value\",\"count\":1}] and r[\"masked\"]==[{\"kind\":\"number\",\"count\":2}] and r[\"summary_edited_in_app\"] and r[\"project\"]==\"acme\" and \"accepted_findings\" not in r and \"removed\" not in r and r[\"removed_count\"]==0 else 1)" "$released/released.json" && ! grep -Eq "g[0-9a-f]{15}" "$released/released.json"'
+  check "the EU copy of released.json keeps the removed paths" \
+    'python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r[\"removed\"]==[] and r[\"removed_count\"]==0 and r[\"id\"]==sys.argv[2] else 1)" "$SANDBOX/Code/zeus-eu/clients/acme/handoff/$id/released.json" "$id"'
+  check "the EU handover is closed" '[ -f "$SANDBOX/Code/zeus-eu/clients/acme/handoff/$id/released.json" ] && act test-handover-refresh && wait_handover "projects=[\"acme:false\"]" 10'
+  check "no EU chat or other EU file is in the Standard workspace" '[ "$(find "$SANDBOX/Code/zeus" -type f -not -path "*/.git/*" | sed "s|^$SANDBOX/Code/zeus/||" | sort | tr "\n" " ")" = "clients/acme/handoff/from-eu/$id/files/work/view/spec.json clients/acme/handoff/from-eu/$id/released.json clients/acme/handoff/from-eu/$id/summary.md clients/acme/project.json scripts/zeus.py " ]'
+
+  # Back to Standard from the handover window: the EU tabs stop, are kept for the way back, and never resume in Standard.
   eu_sessions="$(awk '$2=="session" {print $3}' "$STATE/sessions" | sort -u)"
-  act test-mode:standard
-  check "the switch to Standard offers the handover first" 'wait_for "mode: switch to standard asked" 10'
-  shot eu-12-switch-back
-  act test-alert:1
+  act test-handover-switch
+  check "Switch to Standard after a release does not offer the handover again" 'wait_for "mode: switch to standard after a release" 10 && [ "$(grep -c "mode: switch to standard asked" "$TRACE")" = 1 ]'
   need "Standard mode starts again" 'wait_for "mode: now standard" 30'
   check "the Standard tab opens again with its own chat" 'wait_file_has " resume $standard_session" "$STATE/sessions" 20'
   check "no EU chat resumes in Standard" 'for s in $eu_sessions; do [ "$s" = "$standard_session" ] && continue; ! grep -q " resume $s" "$STATE/sessions" || exit 1; done'
-  check "the EU tabs are kept for EU mode only" '[ -f "$SANDBOX/Library/Application Support/Zeus/tabs-eu.json" ] && grep -q "\"mode\":\"eu\"" "$SANDBOX/Library/Application Support/Zeus/tabs-eu.json" && ! grep -q "\"mode\":\"standard\"" "$SANDBOX/Library/Application Support/Zeus/tabs-eu.json"'
-  check "the title bar shows Standard without a cost" 'sleep 1 && mode_bar_has "mode=standard enabled=true pill=false cost=-"'
+  eu_tabs="$SANDBOX/.zeus/eu/editor/app/tabs-eu.json"
+  check "the EU tabs are kept for EU mode only, in the EU editor state" '[ -f "$eu_tabs" ] && grep -q "\"mode\":\"eu\"" "$eu_tabs" && ! grep -q "\"mode\":\"standard\"" "$eu_tabs" && [ "$(stat -f %Lp "$(dirname "$eu_tabs")")" = 700 ]'
+  check "no EU tab (with its unsent text) is in the app folder" '[ -z "$(grep -l "\"mode\":\"eu\"" "$SANDBOX/Library/Application Support/Zeus/"*.json 2>/dev/null)" ]'
+  check "the title bar shows Standard without a cost" 'sleep 1 && mode_bar_has "mode=standard enabled=true pill=false access=- cost=-"'
   act test-store
   check "the Standard pages have the default web data again" 'wait_count "web data: standard persistent=true default=true" 2 10'
   check "the Standard tab got its unsent text back" 'wait_for "restore: [0-9]* message box text back=true" 10'

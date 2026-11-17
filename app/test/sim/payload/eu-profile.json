@@ -4,9 +4,10 @@
   "location": "eu",
   "models": [
     { "id": "claude-sonnet-5-5", "label": "Sonnet 5.5", "default": true },
-    { "id": "claude-opus-5-5", "label": "Opus 5.5" }
+    { "id": "claude-opus-5-5", "label": "Opus 5.5" },
+    { "id": "claude-haiku-5-5", "label": "Haiku 5.5" }
   ],
-  "side_model": "claude-sonnet-5-5",
+  "side_model": "claude-haiku-5-5",
   "config_dir": "~/.zeus/eu/claude",
   "editor_state_dir": "~/.zeus/eu/editor",
   "tmp_dir": "/tmp/zeus-eu-{uid}",

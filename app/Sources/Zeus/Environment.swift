@@ -1,5 +1,19 @@
 import Foundation
 
+/// The test and development settings of the app: `ZEUS_APP_*` and `ZEUS_EDITOR_STATE_DIR`. Only a debug build reads them.
+/// A release build ignores them, so that no value from outside the app can turn on a trace file (paths, handover IDs),
+/// move the editor state, stop updates, or change any other behavior of the app that users get.
+/// Read these settings only through this function (app/test/release-env/run.sh checks a release build).
+enum DebugEnvironment {
+    static func value(_ name: String) -> String? {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment[name]
+        #else
+        return nil
+        #endif
+    }
+}
+
 enum Paths {
     /// HOME first, so that a test can run the app against a separate home folder.
     static let home = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
@@ -9,7 +23,7 @@ enum Paths {
     /// that no setting outside the app can send a Zeus session, also an EU session, to another program.
     static let zeusCommand: String = {
         #if DEBUG
-        if let command = ProcessInfo.processInfo.environment["ZEUS_APP_ZEUS_COMMAND"], !command.isEmpty { return command }
+        if let command = DebugEnvironment.value("ZEUS_APP_ZEUS_COMMAND"), !command.isEmpty { return command }
         #endif
         return home + "/.local/bin/zeus"
     }()
@@ -24,7 +38,7 @@ enum Paths {
     /// state of the EU profile, which `zeus --eu` uses (it ignores ZEUS_EDITOR_STATE_DIR from outside).
     static func editorStateDir(for mode: ZeusMode) -> String {
         if mode == .eu { return EUProfile.load().editorStateDir }
-        return ProcessInfo.processInfo.environment["ZEUS_EDITOR_STATE_DIR"] ?? home + "/.zeus-editor"
+        return DebugEnvironment.value("ZEUS_EDITOR_STATE_DIR") ?? home + "/.zeus-editor"
     }
 
     static func launchesDir(for mode: ZeusMode) -> String { editorStateDir(for: mode) + "/chat/launches" }
@@ -38,7 +52,7 @@ enum Paths {
     /// The installer inside the app. Debug builds: ZEUS_APP_INSTALLER replaces it (for tests).
     static var installer: String? {
         #if DEBUG
-        if let path = ProcessInfo.processInfo.environment["ZEUS_APP_INSTALLER"] { return path }
+        if let path = DebugEnvironment.value("ZEUS_APP_INSTALLER") { return path }
         #endif
         return Bundle.main.path(forResource: "install", ofType: "sh")
     }
@@ -96,6 +110,8 @@ enum ShellEnvironment {
         var env = ProcessInfo.processInfo.environment
         // Variables of a Claude Code session, if the app was started from one.
         for key in env.keys where key.hasPrefix("CLAUDE_CODE_") || key == "CLAUDECODE" { env.removeValue(forKey: key) }
+        // A release build uses the default editor state (`Paths.editorStateDir`); the commands that it starts use the same.
+        if DebugEnvironment.value("ZEUS_EDITOR_STATE_DIR") == nil { env.removeValue(forKey: "ZEUS_EDITOR_STATE_DIR") }
         env["PATH"] = loginPath()
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"

@@ -13,7 +13,7 @@ final class HybridSpeechEngine: SpeechEngine {
     /// The time from Stop that Whisper has for its text. Debug builds take `ZEUS_APP_TEST_V1_DEADLINE` (seconds).
     static let whisperDeadline: TimeInterval = {
         #if DEBUG
-        if let value = ProcessInfo.processInfo.environment["ZEUS_APP_TEST_V1_DEADLINE"].flatMap(TimeInterval.init) { return value }
+        if let value = DebugEnvironment.value("ZEUS_APP_TEST_V1_DEADLINE").flatMap(TimeInterval.init) { return value }
         #endif
         return 2.8
     }()
