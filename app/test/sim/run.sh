@@ -6,9 +6,10 @@
 # home folder, Claude Code, and GitHub login are not used. The test presses the app's buttons through
 # its debug test actions (active only with ZEUS_APP_TRACE) and checks the trace.
 #
-# Usage: app/test/sim/run.sh [--eu] [screenshot-folder]
+# Usage: app/test/sim/run.sh [--eu | --vault] [screenshot-folder]
 # With a folder, it saves a screenshot of each app window state there (the app's windows only).
-# --eu runs only the EU mode scenario (app/test/run-all.sh runs both parts, each with its own time limit).
+# --eu runs only the EU mode scenario, and --vault only the EU vault and Standard read block scenario
+# (app/test/run-all.sh runs each part with its own time limit).
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
 # shellcheck disable=SC2016,SC2034
@@ -19,6 +20,7 @@ APP_DIR="$(cd "$SIM_DIR/../.." && pwd)"
 REPO_DIR="$(dirname "$APP_DIR")"
 PART=main
 if [ "${1:-}" = "--eu" ]; then PART=eu; shift; fi
+if [ "${1:-}" = "--vault" ]; then PART=vault; shift; fi
 SHOTS="${1:-}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
@@ -88,6 +90,8 @@ APP_PID=""
 
 cleanup() {
   [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+  # The vault scenario: its mounted vault and its keychain go before the work folder.
+  if declare -F vault_cleanup >/dev/null; then vault_cleanup; fi
   [ -n "${MODEL_SERVER_PID:-}" ] && kill "$MODEL_SERVER_PID" 2>/dev/null || true
   defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
   # defaults delete can leave the empty settings file of the domain.
@@ -218,8 +222,10 @@ stop_app() {
 
 # shellcheck source=app/test/sim/eu.sh
 source "$SIM_DIR/eu.sh"
-if [ "$PART" = eu ]; then
-  eu_scenario
+# shellcheck source=app/test/sim/vault.sh
+source "$SIM_DIR/vault.sh"
+if [ "$PART" = eu ] || [ "$PART" = vault ]; then
+  if [ "$PART" = eu ]; then eu_scenario; else vault_scenario; fi
   echo
   if [ "$FAILURES" -eq 0 ]; then
     printf '\033[32mAll checks passed.\033[0m\n'

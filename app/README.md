@@ -111,6 +111,30 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   When the chat cannot answer (for example an older Zeus Editor plugin), the app waits 3 s, then asks: **Close anyway** or **Cancel**.
   Then the app sends SIGTERM to its `zeus`; the chat stays in the history.
   In the app, the app owns closing: `zeus` runs with `ZEUS_APP=1`, so the editor does not close terminals when the page closes.
+- **Standard read block.** On a Mac with an EU vault (its disk image, or a mounted vault with its marker), open or locked, the app starts every Standard `zeus` through `/usr/bin/sandbox-exec` with a macOS sandbox profile that denies reading and writing the EU folders (`Sources/Zeus/StandardJail.swift`).
+  The Standard Claude Code, its hooks, its Bash commands, and the programs that they start as child processes inherit it: `cat`, Python, or a child shell get "Operation not permitted" in those folders.
+  Known limit of phase 1: a program that a Standard session starts through launchd (`launchctl` or a LaunchAgent), `open`, or `osascript` is not its child process and runs outside the read block.
+  No Standard process can rename or delete a denied folder or a folder that holds one (a `(deny file-write-unlink ...)` rule for each of them up to `/Users` and `/private`), so `mv ~/Code ~/Code-x` can not give an EU folder a new path outside the denies.
+  The profile is `(allow default)` with three deny rules: `(deny file-read* file-write* ...)` for the EU folders, `(deny file-write* ...)` for its own jail folder, and `(deny file-write-unlink ...)` for each EU folder and every folder above it, such as `~/Code`, `~/.zeus`, `~/Library/Application Support/Zeus`, the home folder, `/Users`, `/private`, and `/tmp`.
+  These folders can not be renamed or deleted; the network, the keychain, and every other folder work as before, and content-cli reads a large View as without it.
+  The app always denies its own EU folders, whatever the Zeus Editor EU profile (`eu-profile.json`) says: the EU vault (`~/.zeus/eu` and its disk image), the default EU Claude Code folder and editor state (`~/.zeus/eu/claude`, `~/.zeus/eu/editor`), the default EU workspace `~/Code/zeus-eu`, the default EU temporary folder `/tmp/zeus-eu-<uid>` (`/private/tmp/zeus-eu-<uid>`), and the app's handover folder.
+  The EU profile can only add denied folders (its Claude Code folder, editor state, EU workspace, and `tmp_dir`); an added folder that holds the home folder, `~/Code/zeus`, or the app folder is never denied.
+  Without an EU vault, Standard starts exactly as before, without `sandbox-exec`.
+  The app writes the profile to `~/Library/Application Support/Zeus/jail/standard.sb` (owner only) at start and again before each Standard start, and the profile also denies writes to its own folder.
+  EU sessions do not run in it. A macOS sandbox can not start inside another one, so Standard Claude Code must run its commands without the Claude Code sandbox (zeus-editor PR 139).
+  A Zeus Editor from before that change still runs them in it, and Claude Code could not start in the read block.
+  On a Mac with an EU vault, Standard never starts without the read block: with that Zeus Editor, the Standard session does not start and the app tells the user to run the Zeus setup to update Zeus Editor; without `sandbox-exec`, it does not start and the app says that Standard can not start while an EU vault exists.
+- **EU vault.** `Sources/Zeus/EUVault.swift` makes and opens the EU vault: one encrypted APFS sparse bundle (AES-256) per user in `~/Library/Application Support/Zeus/eu-vault.sparsebundle`, mounted at `~/.zeus/eu` with `-nobrowse` and `-owners on`.
+  It has a `.zeus-vault` marker file with the ID of its volume (`{"schema": 1, "kind": "zeus-eu-vault", "volume_uuid": "..."}`) and a `.metadata_never_index` file; `mdutil -i off` needs administrator rights, so the app only tries it.
+  The key is a random 64-character password in the login keychain, in an item that the app makes, so its access list trusts only the Zeus app.
+  The app reads the key only after Touch ID, or the login password on a Mac without Touch ID (`LAContext`, `deviceOwnerAuthentication`), and gives it to `hdiutil -stdinpass` on standard input.
+  The key is never in an environment, an argument, a log, a file, or a Claude session.
+  The app does not make the vault over a `~/.zeus/eu` folder that holds files, because the mount would hide them.
+  The vault locks only when the app quits, after every session stopped (`hdiutil detach`, forced when a program still has a file of it open).
+  After a crash, the next app start locks it before anything else.
+  This version does not make or open the vault in the normal use of the app yet; EU mode still uses `~/.zeus/eu` and `~/Code/zeus-eu` as before. The tests make and open it with debug test actions.
+  The app has an ad-hoc signature, so the keychain knows it by the hash of its code, which changes with each version: after an app update, the first unlock of the vault makes macOS ask once for the login password, so that the new Zeus can read the key. Click **Always Allow**.
+  Another program that asks for the key gets the same question from macOS.
 - **No hidden sessions.** Quitting the app stops every session.
   When tabs are not safe to close, one question lists them all: **Quit Anyway** or **Cancel**.
   When macOS logs out, restarts, or shuts down, the app asks nothing and closes an open quit question; without a question, the quit ends within 12 s.
@@ -186,6 +210,9 @@ It also starts a release build of the app with `ZEUS_APP_TRACE` and checks that 
 `ZEUS_APP_NO_MODEL_DOWNLOAD=1` turns off the download of the dictation models; dictation then uses a model that is already on the Mac, or Apple's recognizer.
 The tests set it.
 `ZEUS_APP_TEST_ID=<id>` makes the test actions reach only this app copy.
+`ZEUS_APP_TEST_VAULT_AUTH=allow|cancel|fail` replaces Touch ID for the EU vault with that answer (the test action `test-vault-auth:<answer>` changes it).
+`ZEUS_APP_TEST_JAIL=1` starts Standard sessions in the read block also on a Mac without an EU vault.
+`ZEUS_APP_TEST_KEYCHAIN=/path/to/file.keychain-db` keeps the EU vault key in that keychain file instead of the login keychain.
 `ZEUS_APP_DEFAULTS_SUITE=<domain>` makes the app read and write its settings (`setupDone`, `showMenuBar`, and the dictation settings) in that defaults domain instead of `io.github.theo-henry.zeus`.
 `ZEUS_APP_TEST_BACKGROUND=1` makes the app never come to the front: it does not activate and puts its windows behind the windows of other apps.
 Its pages keep running and drawing while other windows cover them.
@@ -264,6 +291,7 @@ It also checks the `@@zeus` lines of step 7 in app mode.
 ```bash
 app/test/sim/run.sh [screenshot-folder]
 app/test/sim/run.sh --eu [screenshot-folder]   # EU mode only
+app/test/sim/run.sh --vault [screenshot-folder]   # EU vault and Standard read block only
 ```
 
 The test runs the app (behind the other apps) and the bundled installer with `HOME` set to an empty temporary folder, and with
@@ -318,6 +346,17 @@ the setup question when EU mode is not set up; a switch stops every Standard ses
 the EU pill, the EU web data store, and the cost label; a 429 error question; a failed start that needs the Google sign-in,
 the sign-in in the terminal, and the retry; a 403 failure; the handover request that names the project of the tab, the handover with findings, an accepted finding, an edited summary, a removed file,
 the release, and `released.json`; the handoff commands run the Standard `scripts/zeus.py` and never a script or module of the EU workspace; the switch back resumes the Standard tabs and never an EU tab; and a restart in EU mode.
+
+`--vault` runs the EU vault and Standard read block scenario (`app/test/sim/vault.sh`) with a real encrypted disk image in the temporary home folder,
+a keychain file of the test (`ZEUS_APP_TEST_KEYCHAIN`) instead of the login keychain, and test answers instead of Touch ID (`ZEUS_APP_TEST_VAULT_AUTH`), so no macOS window opens:
+the read block profile and its folders; no vault over the EU folders from before the vault; a cancelled Touch ID makes no vault and no key;
+the vault is made encrypted, mounted without a Finder icon, owner only, with its marker, and its key is only in the keychain item that only the app may read, and not in the trace;
+a new Standard session in the read block can not read the vault, its disk image, the EU workspace, or the handover folder with `cat`, Python, a child shell, or Node, and can not write the vault, the EU workspace, or its own profile,
+and can not rename `~/Code`, `~/.zeus`, the app folder, or the EU workspace to read an EU file at a new path,
+while it reads and renames in its own workspace and gets a 20 MB response complete (as content-cli gets a large View);
+a lock fails while a program has a vault file open, and the quit locks the vault after the sessions stopped; a cancelled Touch ID keeps it locked, and Touch ID opens it;
+after a crash the next start locks it before anything else; a wrong key does not open it; with an EU profile that names other EU folders, the profile still denies the fixed EU folders and adds the profile's;
+and with a Zeus Editor that still runs Standard commands in the Claude Code sandbox, Standard does not start on a Mac with a vault and the app tells the user to update Zeus Editor.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording
 permission for the terminal only for the screenshots.

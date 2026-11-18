@@ -70,7 +70,8 @@ final class ZeusSession: TerminalSource {
     var terminalPID: pid_t { pid }
 
     /// Starts `zeus` in ~/Code/zeus, or `zeus --eu` in the EU workspace. `--no-open` stops it from opening the browser;
-    /// the app shows the page. `zeus --eu` builds the environment of EU Claude Code from the EU profile only and checks
+    /// the app shows the page. A Standard `zeus` runs in the read block of `StandardJail` (`sandbox-exec` execs it, so
+    /// the process ID is the one of `zeus`). `zeus --eu` builds the environment of EU Claude Code from the EU profile only and checks
     /// the Google Cloud access first (zeus-editor src/eu/preflight.js); a failed check stops it with exit code 3.
     init(mode: ZeusMode = .standard) throws {
         self.mode = mode
@@ -87,8 +88,18 @@ final class ZeusSession: TerminalSource {
                 ? "The EU workspace is not in \(EUSetup.display(workspace)). Run the Zeus setup."
                 : "The Zeus workspace is not in ~/Code/zeus. Run the Zeus setup."])
         }
-        let process = try PTYProcess(executable: Paths.zeusCommand, arguments: (mode == .eu ? ["--eu"] : []) + ["--no-open"],
-                                     environment: env, directory: workspace)
+        let arguments = (mode == .eu ? ["--eu"] : []) + ["--no-open"]
+        var executable = Paths.zeusCommand
+        var launchArguments = arguments
+        if mode == .standard {
+            // A Standard session may not read the EU folders (StandardJail).
+            let launch = try StandardJail.launch(command: Paths.zeusCommand, arguments: arguments)
+            executable = launch.executable
+            launchArguments = launch.arguments
+            Trace.log(launch.jailed ? "jail: on" : "jail: off: no EU vault on this Mac")
+        }
+        Trace.log("session command: \(([executable] + launchArguments).joined(separator: " "))")
+        let process = try PTYProcess(executable: executable, arguments: launchArguments, environment: env, directory: workspace)
         self.process = process
         pid = process.pid
         #if DEBUG

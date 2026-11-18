@@ -26,15 +26,19 @@ struct EUProfile: Equatable {
     var configDir: String
     var editorStateDir: String
     var workspace: String
+    /// The EU temporary folder (`tmp_dir`, with `{uid}` replaced by the user ID), as the profile writes it.
+    var tmpDir: String
     /// The path of the profile, or nil when the app uses the defaults.
     var file: String?
 
     var found: Bool { file != nil }
 
+    static let defaultTmpDir = "/tmp/zeus-eu-\(getuid())"
+
     static let defaults = EUProfile(vertexProject: "project-4bf0bacd-fec4-406b-a99",
                                     configDir: Paths.home + "/.zeus/eu/claude",
                                     editorStateDir: Paths.home + "/.zeus/eu/editor",
-                                    workspace: Paths.home + "/Code/zeus-eu", file: nil)
+                                    workspace: Paths.home + "/Code/zeus-eu", tmpDir: defaultTmpDir, file: nil)
 
     /// The profile of the newest installed Zeus Editor, read again on each call (an update can change it).
     static func load() -> EUProfile {
@@ -46,7 +50,12 @@ struct EUProfile: Equatable {
               let config = expand(object["config_dir"]), let state = expand(object["editor_state_dir"]),
               let workspace = expand(object["workspace"])
         else { return defaults }
-        return EUProfile(vertexProject: project, configDir: config, editorStateDir: state, workspace: workspace, file: file)
+        var tmp = defaults.tmpDir
+        if let raw = object["tmp_dir"] {
+            guard let text = raw as? String, let value = expand(text.replacingOccurrences(of: "{uid}", with: String(getuid()))) else { return defaults }
+            tmp = value
+        }
+        return EUProfile(vertexProject: project, configDir: config, editorStateDir: state, workspace: workspace, tmpDir: tmp, file: file)
     }
 
     /// `~/` is the home folder; any other value must be an absolute path.
@@ -56,23 +65,29 @@ struct EUProfile: Equatable {
         return text.hasPrefix("/") ? (text as NSString).standardizingPath : nil
     }
 
-    /// The same choice as the zeus command of the installer (`write_zeus_shim` in install.sh): the newest
-    /// `~/.claude/plugins/cache/*/zeus-editor/*/dist/zeus.mjs`; the profile is in the folder of its plugin.
+    /// The profile of the newest installed Zeus Editor plugin, or nil.
     private static func newestProfileFile() -> String? {
+        guard let root = newestEditorRoot() else { return nil }
+        let profile = root + "/eu-profile.json"
+        return FileManager.default.fileExists(atPath: profile) ? profile : nil
+    }
+
+    /// The folder of the newest installed Zeus Editor plugin, the same choice as the zeus command of the installer
+    /// (`write_zeus_shim` in install.sh): the newest `~/.claude/plugins/cache/*/zeus-editor/*/dist/zeus.mjs`.
+    static func newestEditorRoot() -> String? {
         let cache = Paths.home + "/.claude/plugins/cache"
         let manager = FileManager.default
-        var newest: (date: Date, profile: String)?
+        var newest: (date: Date, root: String)?
         for marketplace in (try? manager.contentsOfDirectory(atPath: cache)) ?? [] {
             let plugin = "\(cache)/\(marketplace)/zeus-editor"
             for version in (try? manager.contentsOfDirectory(atPath: plugin)) ?? [] {
                 let root = "\(plugin)/\(version)"
                 guard let date = (try? manager.attributesOfItem(atPath: root + "/dist/zeus.mjs"))?[.modificationDate] as? Date
                 else { continue }
-                if newest == nil || date > newest!.date { newest = (date, root + "/eu-profile.json") }
+                if newest == nil || date > newest!.date { newest = (date, root) }
             }
         }
-        guard let profile = newest?.profile, manager.fileExists(atPath: profile) else { return nil }
-        return profile
+        return newest?.root
     }
 }
 

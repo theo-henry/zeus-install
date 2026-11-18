@@ -92,6 +92,23 @@ mode_bar_has() {
   wait_count "mode bar: " $((before + 1)) 10 >/dev/null && grep "mode bar: " "$TRACE" | tail -1 | grep -qF -- "$1"
 }
 
+# pages_answer: selects each tab of the chat window in turn and waits until its chat page answers a page check
+# (test-keyboard runs a script in the page and writes the answer into the trace). The selection ends on the tab that
+# was selected. A mode switch then asks only pages that have answered, also the pages of hidden tabs on a busy Mac.
+pages_answer() {
+  local before tabs i
+  before="$(grep -c "mode bar: " "$TRACE" || true)"
+  act test-mode-bar
+  wait_count "mode bar: " $((before + 1)) 10 >/dev/null || return 1
+  tabs="$(grep "mode bar: " "$TRACE" | tail -1 | sed "s/.* tabs=//" | tr , "\n" | grep -c .)"
+  for ((i = 0; i < tabs; i++)); do
+    before="$(grep -c "test keyboard: " "$TRACE" || true)"
+    act test-next-tab
+    act test-keyboard
+    wait_count "test keyboard: " $((before + 1)) 30 >/dev/null || return 1
+  done
+}
+
 # handover_has <text>: the handover window writes its state into the trace, and it has this text.
 handover_has() {
   local before
@@ -319,6 +336,7 @@ XML
 
   # Back to Standard from the handover window: the EU tabs stop, are kept for the way back, and never resume in Standard.
   eu_sessions="$(awk '$2=="session" {print $3}' "$STATE/sessions" | sort -u)"
+  need "the chat page of each tab answers before the switch" 'pages_answer'
   act test-handover-switch
   check "Switch to Standard after a release does not offer the handover again" 'wait_for "mode: switch to standard after a release" 10 && [ "$(grep -c "mode: switch to standard asked" "$TRACE")" = 1 ]'
   need "Standard mode starts again" 'wait_for "mode: now standard" 30'

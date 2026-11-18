@@ -171,6 +171,11 @@ setTimeout(()=>control.listen(socketPath,()=>server.listen(0,'127.0.0.1',()=>{
 })), Number(process.env.ZEUS_SIM_START_DELAY || 0));
 fs.writeFileSync(`${state}/zeus-started`,JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),app:process.env.ZEUS_APP}));
 fs.appendFileSync(`${state}/zeus-starts`,JSON.stringify({pid:process.pid,args:process.argv.slice(2),cwd:process.cwd()})+'\n');
+// The read block test (app/test/sim/vault.sh): a Standard session tries the EU folders, as a Claude Bash command would.
+if (!eu && fs.existsSync(`${state}/jail-probe.json`)) {
+ import('node:child_process').then(({spawn}) => spawn(process.execPath, [path.join(process.env.ZEUS_SIM_PAYLOAD, 'jail-probe.mjs'),
+  `${state}/jail-probe.json`, `${state}/jail-probe-${process.pid}.out`], {stdio: 'ignore'}));
+}
 process.stdin.on('data',data=>{
  record('input',data.toString('hex'));
  // Enter sends the terminal text; other keys add to it. A paste comes in its bracketed paste marks.
