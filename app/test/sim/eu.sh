@@ -148,8 +148,12 @@ eu_scenario() {
   echo
   echo "Scenario EU: the Standard | EU switch, the EU start check and sign-in, the cost, the handover, and the way back"
   eu_sandbox
+  # Standard Claude Code of this Mac has a status line. EU must show the same one: the app runs the installer
+  # (install.sh --eu-status-line) before each EU session.
+  mkdir -p "$SANDBOX/.claude"
+  printf '{"statusLine": {"type": "command", "command": "node /sim/hud/1.0.0/line.cjs", "padding": 0}, "model": "opus"}\n' >"$SANDBOX/.claude/settings.json"
   # The EU Claude Code folder has no Zeus plugins yet: EU mode needs the setup first.
-  launch_app eu ZEUS_APP_EURO_RATE_URL="file://$STATE/euro-rate.xml"
+  launch_app eu ZEUS_APP_EURO_RATE_URL="file://$STATE/euro-rate.xml" ZEUS_APP_INSTALLER="$REPO_DIR/install.sh"
   need "the app opens a Standard chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOAD_LIMIT && sleep 1'
   check "the app starts in Standard mode" 'grep -q "launched: .* mode=standard" "$TRACE" && mode_bar_has "mode=standard enabled=true pill=false access=- cost=-"'
   check "zeus runs without --eu in ~/Code/zeus" 'grep -q "\"args\":\[\"--no-open\"\],\"cwd\":\"[^\"]*/Code/zeus\"" "$STATE/zeus-starts"'
@@ -183,6 +187,8 @@ eu_scenario() {
     'awk -v s="$standard_pid" -v e="$eu_pid" "\$1==s && \$2==\"stop\" {stopped=NR} \$1==e && \$2==\"start\" {started=NR} END {exit !(stopped && started && stopped < started)}" "$STATE/sessions"'
   check "zeus runs with --eu --no-open in the EU workspace" 'grep -q "\"pid\":$eu_pid,\"args\":\[\"--eu\",\"--no-open\"\],\"cwd\":\"[^\"]*/Code/zeus-eu\"" "$STATE/zeus-starts"'
   check "the EU chat page loads" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/$eu_pid" $PAGE_LOAD_LIMIT && sleep 1'
+  check "before the EU session, the app gave EU Claude Code the status line of Standard" \
+    'grep -q "eu status line: exit 0" "$TRACE" && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get(\"statusLine\", {}).get(\"command\") == \"node /sim/hud/1.0.0/line.cjs\" and \"model\" not in d else 1)" "$SANDBOX/.zeus/eu/claude/settings.json"'
   check "the Standard tab is kept for the way back" 'grep -q "$standard_session" "$SANDBOX/Library/Application Support/Zeus/tabs-standard.json"'
   check "the title bar shows EU with the green pill" 'mode_bar_has "mode=eu enabled=true pill=true access=- cost=-"'
   act test-store
@@ -370,10 +376,14 @@ XML
 
   # The mode stays across app starts.
   defaults write "$PREFS_DOMAIN" zeusMode -string eu
-  launch_app eu-again
+  # Standard got a new status line path (a plugin update) since the last EU session.
+  printf '{"statusLine": {"type": "command", "command": "node /sim/hud/1.1.0/line.cjs", "padding": 0}}\n' >"$SANDBOX/.claude/settings.json"
+  launch_app eu-again ZEUS_APP_INSTALLER="$REPO_DIR/install.sh"
   check "the app starts again in EU mode, as it was left" 'wait_for "launched: .* mode=eu" 10 && wait_for "session [0-9]* started (eu)" 20'
   # The quit waits for the chat page: a quit while the page loads is deferred, because the page can not answer yet.
   check "the EU chat page loads after the start" 'newest_page_loaded $PAGE_LOAD_LIMIT && sleep 1'
   check "no Standard session starts in EU mode" '! grep -q "started (standard)" "$TRACE"'
+  check "the next EU session follows the new status line of Standard" \
+    'python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"statusLine\"][\"command\"] == \"node /sim/hud/1.1.0/line.cjs\" else 1)" "$SANDBOX/.zeus/eu/claude/settings.json"'
   stop_app
 }
