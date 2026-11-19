@@ -89,20 +89,47 @@ EU_PLUGINS="$(run_install 1 eu_plugin_entries 2>/dev/null)"
 check "EU installs the Zeus Editor plugin and each skill plugin of Standard" \
   '[ "$(grep -c . <<<"$EU_PLUGINS")" -eq 4 ] && grep -q "^zeus-editor@zeus-editor:" <<<"$EU_PLUGINS" && grep -q "^celonis-pql@celonis-pql:" <<<"$EU_PLUGINS"'
 EU_SETTINGS="$HOME/.zeus/eu/claude/settings.json"
+STANDARD_SETTINGS="$HOME/.claude/settings.json"
+# The EU status line command, or "none" when EU settings have no status line.
+eu_line() {
+  python3 -c 'import json,sys
+try: d=json.load(open(sys.argv[1]))
+except OSError: d={}
+print(d["statusLine"]["command"] if "statusLine" in d else "none")' "$EU_SETTINGS"
+}
+standard_line() {
+  printf '{"statusLine": {"type": "command", "command": "%s", "padding": 0}, "model": "opus"}\n' "$1" >"$STANDARD_SETTINGS"
+}
 run_install 1 eu_mirror_status_line >/dev/null 2>&1
 check "no status line in Standard: EU settings are not created" '[ ! -e "$EU_SETTINGS" ]'
-mkdir -p "$HOME/.claude"
-printf '{"statusLine": {"type": "command", "command": "node /x/line.cjs", "padding": 0}, "model": "opus"}\n' >"$HOME/.claude/settings.json"
-mkdir -p "$HOME/.zeus/eu/claude"
+mkdir -p "$HOME/.claude" "$HOME/.zeus/eu/claude"
+standard_line "node /x/1.0.0/line.cjs"
 printf '{"enabledPlugins": {"zeus-editor@zeus-editor": true}}\n' >"$EU_SETTINGS"
 run_install 1 eu_mirror_status_line >/dev/null 2>&1
-check "the status line of Standard is copied to EU" \
-  'python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"statusLine\"][\"command\"]==\"node /x/line.cjs\" else 1)" "$EU_SETTINGS"'
+check "the status line of Standard is copied to EU" '[ "$(eu_line)" = "node /x/1.0.0/line.cjs" ]'
 check "the EU plugin settings stay and no other Standard setting is copied" \
   'python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"enabledPlugins\"] and \"model\" not in d else 1)" "$EU_SETTINGS"'
-printf '{"statusLine": {"type": "command", "command": "own"}}\n' >"$EU_SETTINGS"
+standard_line "node /x/1.1.0/line.cjs"
 run_install 1 eu_mirror_status_line >/dev/null 2>&1
-check "an EU status line that is already set stays as it is" 'grep -q "\"own\"" "$EU_SETTINGS"'
+check "a new Standard status line path replaces the copied one in EU" '[ "$(eu_line)" = "node /x/1.1.0/line.cjs" ]'
+standard_line "node /x/1.2.0/line.cjs"
+bash "$REPO_DIR/install.sh" --eu-status-line >/dev/null 2>&1
+check "install.sh --eu-status-line (the app, before each EU session) also updates EU" '[ "$(eu_line)" = "node /x/1.2.0/line.cjs" ]'
+printf '{"model": "opus"}\n' >"$STANDARD_SETTINGS"
+run_install 1 eu_mirror_status_line >/dev/null 2>&1
+check "a Standard status line that was removed is removed from EU" '[ "$(eu_line)" = "none" ]'
+check "the EU plugin settings stay after the removal" \
+  'python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"enabledPlugins\"] else 1)" "$EU_SETTINGS"'
+standard_line "node /x/1.3.0/line.cjs"
+run_install 1 eu_mirror_status_line >/dev/null 2>&1
+check "a Standard status line that comes back is copied to EU again" '[ "$(eu_line)" = "node /x/1.3.0/line.cjs" ]'
+printf '{"statusLine": {"type": "command", "command": "own"}}\n' >"$EU_SETTINGS"
+standard_line "node /x/1.4.0/line.cjs"
+run_install 1 eu_mirror_status_line >/dev/null 2>&1
+check "an EU status line that the user set stays when Standard changes" '[ "$(eu_line)" = "own" ]'
+printf '{"model": "opus"}\n' >"$STANDARD_SETTINGS"
+run_install 1 eu_mirror_status_line >/dev/null 2>&1
+check "an EU status line that the user set stays when Standard removes its own" '[ "$(eu_line)" = "own" ]'
 check ".claude/settings.json of the Zeus folder still did not change" 'cmp -s "$SETTINGS" "$WORK/settings.orig"'
 
 printf '\nTerminal use: the next steps for the skill plugins\n'
