@@ -587,8 +587,11 @@ echo "Scenario 3b: Whisper dictation with a simulated model (download, fallback,
 MODELS_SRV="$WORK/model-server"
 mkdir -p "$MODELS_SRV"
 cat >"$WORK/model-server.py" <<'PY'
-import http.server, os, sys, time
+import http.server, os, socketserver, sys, time
 root = sys.argv[1]
+# The bind of TCPServer: the bind of HTTPServer also looks up the host name (getfqdn), which takes 30 s on a CI Mac.
+class Server(http.server.ThreadingHTTPServer):
+    server_bind = socketserver.TCPServer.server_bind
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path = os.path.join(root, os.path.basename(self.path.split("?")[0]))
@@ -608,7 +611,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 time.sleep(0.01)
     def log_message(self, *args):
         pass
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+server = Server(("127.0.0.1", 0), Handler)
 with open(os.path.join(root, "port"), "w") as f:
     f.write(str(server.server_address[1]))
 server.serve_forever()
