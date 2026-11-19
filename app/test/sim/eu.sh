@@ -353,9 +353,12 @@ XML
   act test-handover-open:acme
   check "the app builds and scans the handover" 'wait_handover "phase=review" 20'
   app_root="$SANDBOX/Library/Application Support/Zeus/handover"
-  id="$(ls "$SANDBOX/Code/zeus/clients/acme/handoff" | head -1)"
-  check "the app builds the handover in its own folder, owner only, and nothing in the workspace" \
-    '[ -f "$app_root/acme/$id/manifest.json" ] && [ -f "$app_root/acme/$id/files/work/view/spec.json" ] && [ "$(stat -f %Lp "$app_root")" = 700 ] && [ "$(ls "$SANDBOX/Code/zeus/clients/acme/handoff/$id")" = summary.md ]'
+  eu_handoff="$SANDBOX/.zeus/eu/vault/acme/handoff"
+  id="$(ls "$eu_handoff" | head -1)"
+  check "EU Zeus writes the unreleased summary into the EU vault, never into the shared workspace" \
+    '[ -f "$eu_handoff/$id/summary.md" ] && [ -z "$(find "$SANDBOX/Code/zeus/clients" -path "*/handoff/*" -name summary.md ! -path "*/handoff/from-eu/*" -print)" ]'
+  check "the app builds the handover in its own folder, owner only, and nothing in the vault" \
+    '[ -f "$app_root/acme/$id/manifest.json" ] && [ -f "$app_root/acme/$id/files/work/view/spec.json" ] && [ "$(stat -f %Lp "$app_root")" = 700 ] && [ "$(ls "$eu_handoff/$id")" = summary.md ]'
   check "build, scan, and pending run with the app folder, never a folder in the workspace" \
     'grep -q "\"handoff\", \"build\", \"acme\", \"--dir\", \"[^\"]*/Library/Application Support/Zeus/handover/acme/$id\", \"--json\"" "$STATE/handoff.log" && grep -q "\"handoff\", \"scan\", \"acme\", \"$id\", \"--dir\", \"[^\"]*/Library/Application Support/Zeus/handover/acme/$id\"" "$STATE/handoff.log"'
   check "only the listed files that may cross are in it" 'handover_has "files=[\"summary.md\", \"files/work/view/spec.json\"]"'
@@ -402,9 +405,10 @@ XML
     'python3 -c "import hashlib,json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if all(hashlib.sha256(open(sys.argv[2]+\"/\"+f[\"path\"],\"rb\").read()).hexdigest()==f[\"sha256\"] for f in m[\"files\"]) else 1)" "$app_root/acme/$id/manifest.json" "$released" && grep -q "masked-number-1" "$released/summary.md" && grep -q "masked-number-2" "$released/summary.md" && ! grep -q "4711\|9876" "$released/summary.md"'
   check "released.json records kinds and counts, never a group ID" \
     'python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if [f[\"path\"] for f in r[\"files\"]]==[\"summary.md\",\"files/work/view/spec.json\"] and r[\"kept\"]==[{\"kind\":\"known-value\",\"count\":1}] and r[\"masked\"]==[{\"kind\":\"number\",\"count\":2}] and r[\"summary_edited_in_app\"] and r[\"project\"]==\"acme\" and \"accepted_findings\" not in r and \"removed\" not in r and r[\"removed_count\"]==0 else 1)" "$released/released.json" && ! grep -Eq "g[0-9a-f]{15}" "$released/released.json"'
-  check "the EU copy of released.json is in the shared workspace, so it names no removed path, only their count" \
-    'python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if \"removed\" not in r and r[\"removed_count\"]==0 and r[\"id\"]==sys.argv[2] else 1)" "$SANDBOX/Code/zeus/clients/acme/handoff/$id/released.json" "$id"'
-  check "the EU handover is closed" '[ -f "$SANDBOX/Code/zeus/clients/acme/handoff/$id/released.json" ] && act test-handover-refresh && wait_handover "projects=[\"acme:false\"]" 10'
+  check "the EU copy of released.json is in the EU vault, with the removed paths" \
+    'python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r[\"removed\"]==[] and r[\"removed_count\"]==0 and r[\"id\"]==sys.argv[2] else 1)" "$eu_handoff/$id/released.json" "$id"'
+  check "the EU handover is closed, and no unreleased summary is in the shared workspace" \
+    '[ -f "$eu_handoff/$id/released.json" ] && [ -z "$(find "$SANDBOX/Code/zeus/clients" -path "*/handoff/*" -name summary.md ! -path "*/handoff/from-eu/*" -print)" ] && act test-handover-refresh && wait_handover "projects=[\"acme:false\"]" 10'
   check "no EU chat, EU tab, or EU data access file is in the shared workspace" \
     '[ -z "$(find "$SANDBOX/Code/zeus" \( -name "*.jsonl" -o -name "tabs-eu.json" -o -path "*/data-access/*" -o -name ".claude.json" \) -not -path "*/.git/*")" ] && [ -f "$VAULT/data-access/acme.json" ]'
 

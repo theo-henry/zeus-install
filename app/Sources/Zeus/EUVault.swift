@@ -70,6 +70,8 @@ final class EUVault {
     /// The mount folder: the EU folders of the EU profile are in it (`~/.zeus/eu/claude`, `~/.zeus/eu/editor`).
     static var mountPoint: String { Paths.home + "/.zeus/eu" }
     static var bundlePath: String { Paths.appSupport + "/eu-vault.sparsebundle" }
+    /// The project folders of EU client data in the vault (`~/.zeus/eu/vault/<project>`), with the unreleased handovers.
+    static var projectsFolder: String { mountPoint + "/vault" }
     /// The marker file in the vault: the vault is mounted and is the Zeus vault (zeus `eu_mode` checks it).
     static let markerName = ".zeus-vault"
     static let volumeName = "Zeus EU"

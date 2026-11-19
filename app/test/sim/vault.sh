@@ -97,6 +97,10 @@ vault_scenario() {
   check "a vault that is open needs no Touch ID" \
     'act test-vault-auth:cancel && act test-vault-unlock && wait_for "vault: unlock ok" 20 && act test-vault-auth:allow'
   printf 'ana@example.com,ACME\n' >"$VAULT/rows.csv"
+  # An unreleased handover summary that EU Zeus wrote into the vault.
+  SUMMARY="$VAULT/vault/acme/handoff/20261119T100000Z-abc123/summary.md"
+  mkdir -p "$(dirname "$SUMMARY")"
+  printf '# Handover summary\n\nOrders of ana@example.com\n' >"$SUMMARY"
 
   # The read block: a new Standard session tries the vault and the other EU folders as Claude would.
   mkdir -p "$WORK/large"
@@ -126,8 +130,8 @@ server.serve_forever()' "$WORK/large" "$WORK/large-port" </dev/null >"$WORK/larg
   python3 - "$STATE/jail-probe.json" <<PY
 import json, sys
 json.dump({
-    "read": ["$VAULT/rows.csv", "$VAULT/.zeus-vault", "$BUNDLE/Info.plist", "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv",
-             "$HANDOVER/probe.txt"],
+    "read": ["$VAULT/rows.csv", "$VAULT/.zeus-vault", "$SUMMARY", "$BUNDLE/Info.plist",
+             "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv", "$HANDOVER/probe.txt"],
     "write": ["$VAULT/standard-wrote.txt", "$JAIL", "$SANDBOX/Code/zeus-eu/clients/acme/standard-wrote.txt"],
     "control": "$SANDBOX/Code/zeus/clients/acme/project.json",
     "url": "http://127.0.0.1:$port/view.json",
@@ -157,7 +161,8 @@ PY
 
   PROBE_OUT="$STATE/jail-probe-$(grep " start standard" "$STATE/sessions" | tail -1 | awk '{print $1}').out"
   need "the session ran its probe" 'wait_file_has "^done$" "$PROBE_OUT" 60'
-  for file in "$VAULT/rows.csv" "$VAULT/.zeus-vault" "$BUNDLE/Info.plist" "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv" "$HANDOVER/probe.txt"; do
+  for file in "$VAULT/rows.csv" "$VAULT/.zeus-vault" "$SUMMARY" "$BUNDLE/Info.plist" "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv" \
+    "$HANDOVER/probe.txt"; do
     check "Standard cat, python3, bash, and node can not read ${file#"$SANDBOX"/}" \
       'probe_has "cat denied $file" && probe_has "python denied $file" && probe_has "bash denied $file" && probe_has "node denied $file"'
   done

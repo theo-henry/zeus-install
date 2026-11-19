@@ -155,7 +155,7 @@ const control = net.createServer((socket) => {
     if (eu && fs.existsSync(`${state}/eu-summary.md`)) {
      const project = fs.readFileSync(`${state}/eu-summary-project`, 'utf8').trim();
      const id = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z') + '-' + crypto.randomBytes(3).toString('hex');
-     const folder = path.join(os.homedir(), 'Code', 'zeus', 'clients', project, 'handoff', id);
+     const folder = path.join(os.homedir(), '.zeus', 'eu', 'vault', project, 'handoff', id);
      setTimeout(() => { fs.mkdirSync(folder, {recursive:true}); fs.copyFileSync(`${state}/eu-summary.md`, path.join(folder, 'summary.md')); record('summary', id); }, 1500);
     }
     reply({ok:true,result:{id:message.send_id}});

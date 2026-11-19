@@ -249,7 +249,7 @@ A person releases it in the app:
 
 1. In EU mode, click **Standard** in the mode switch, then click **Hand Over First…**.
 2. Click **Ask Zeus in this chat**.
-   The EU chat writes the handover summary of its project.
+   The EU chat writes the handover summary of its project into the EU vault (`~/.zeus/eu/vault/<project>/handoff/<id>/summary.md`), which Standard can not read.
    Then click **Review…** next to the project.
    When no project has work to hand over, the window says why.
 3. Review the summary and the files.

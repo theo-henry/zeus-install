@@ -4,9 +4,9 @@ The real commands are in the private zeus repo (scripts/handoff.py, scripts/hand
 references/eu-mode.md, "App contract"). This fixture keeps their contract: the arguments, one JSON object per answer, the
 exit codes (0 ok, 2 user error, 3 findings, 4 internal error), the handover folders, the manifest, and the finding fields
 (with `length` and `group`). The app builds, scans, and masks in its own folder (`--dir <folder>`, the handover's own
-folder, made with mode 700); the workspace keeps the summary that EU Zeus wrote. The scan finds e-mail addresses (mask
-only), the known value ACME, and numbers with three or more digits; `masked-<kind>-<n>` with n from 1 to 99 is not a
-finding. Each call is logged in $ZEUS_SIM_STATE/handoff.log with the script path, the import path, and the environment
+folder, made with mode 700); the EU vault (~/.zeus/eu/vault/<project>/handoff/<id>/) keeps the summary that EU Zeus
+wrote. The scan finds e-mail addresses (mask only), the known value ACME, and numbers with three or more digits;
+`masked-<kind>-<n>` with n from 1 to 99 is not a finding. Each call is logged in $ZEUS_SIM_STATE/handoff.log with the script path, the import path, and the environment
 that matters (the app runs it outside Claude, in the workspace ~/Code/zeus that EU and Standard share).
 
 Test switches in $ZEUS_SIM_STATE: `scan-project` makes the scan answer name that project (a forged answer);
@@ -58,8 +58,8 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2), encoding="utf-8")
 
 
-def handoffs(root, project):
-    folder = root / "clients" / project / "handoff"
+def handoffs(project):
+    folder = Path.home() / ".zeus" / "eu" / "vault" / project / "handoff"
     return sorted(x for x in folder.iterdir() if x.is_dir() and ID.fullmatch(x.name)) if folder.is_dir() else []
 
 
@@ -148,7 +148,7 @@ def apply_masks(folder, files, masks):
 
 
 def build(root, project, folder):
-    found = [x for x in handoffs(root, project) if (x / "summary.md").is_file()]
+    found = [x for x in handoffs(project) if (x / "summary.md").is_file()]
     if not found or (found[-1] / "released.json").exists():
         error(f"Project {project} has no handover summary. In the EU session, run handoff summary {project} first.")
     handover = found[-1].name
@@ -288,7 +288,7 @@ def main():
     if command == "pending":
         projects = []
         for path in sorted((root / "clients").glob("*/project.json")):
-            found = handoffs(root, path.parent.name)
+            found = handoffs(path.parent.name)
             activity = (root / "clients" / path.parent.name / "work").is_dir()
             projects.append({"project": path.parent.name, "last_eu_activity_at": "2026-11-16T10:00:00+00:00" if activity else None,
                              "has_open_handoff": bool(found) and (found[-1] / "summary.md").is_file()

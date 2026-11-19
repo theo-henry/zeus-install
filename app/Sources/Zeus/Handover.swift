@@ -4,8 +4,9 @@ import Foundation
 import SwiftUI
 
 /// The EU to Standard handover (zeus references/eu-mode.md, "Handover"). EU Claude writes a summary of its work on a fixed
-/// template. The app then builds the handover into a folder that only the app writes (`Handover.root`), scans it for data
-/// values, masks the values that the user chooses to mask, and copies the released files into
+/// template into the EU vault (`~/.zeus/eu/vault/<project>/handoff/<id>/`), which Standard can not read. The app then
+/// builds the handover into a folder that only the app writes (`Handover.root`), scans it for data values, masks the
+/// values that the user chooses to mask, and copies the released files into
 /// `clients/<project>/handoff/from-eu/<id>/` of the workspace, all with the Zeus commands of the workspace, outside Claude
 /// and out of reach of EU Claude. EU and Standard share the workspace (`~/Code/zeus`); EU client data is in the EU vault.
 /// The EU sandbox can not write the app folder: so the files that the scan reads, the files that the user sees, and the
@@ -315,6 +316,8 @@ final class HandoverModel: ObservableObject {
     let profile: EUProfile
     /// The shared workspace of both modes.
     let workspace: String
+    /// The project folders of the EU vault, with the unreleased handovers.
+    let vault: String
     private let cli: HandoffCLI
     private let queue = DispatchQueue(label: "zeus.handover")
     private var pollTimer: Timer?
@@ -327,9 +330,10 @@ final class HandoverModel: ObservableObject {
     /// After a release, the user can go on to Standard mode.
     var onSwitchToStandard: (() -> Void)?
 
-    init(profile: EUProfile = .load(), workspace: String = Paths.workspace) {
+    init(profile: EUProfile = .load(), workspace: String = Paths.workspace, vault: String = EUVault.projectsFolder) {
         self.profile = profile
         self.workspace = workspace
+        self.vault = vault
         cli = HandoffCLI(profile: profile, workspace: workspace)
     }
 
@@ -419,7 +423,7 @@ final class HandoverModel: ObservableObject {
         let root = try Handover.prepareRoot()
         // `--dir` is the handover's own folder, so the app needs the handover ID first: the latest summary of the project,
         // as `handoff build` takes it. The build must answer with the same ID and folder.
-        let expected = try Self.latestHandover(workspace: workspace, project: project)
+        let expected = try Self.latestHandover(vault: vault, project: project)
         let projectFolder = root + "/" + project
         try FileManager.default.createDirectory(atPath: projectFolder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         guard Handover.isDirectory(projectFolder) else { throw HandoffCLI.Failure(message: "The handover folder of the app is not a plain folder.") }
@@ -446,10 +450,10 @@ final class HandoverModel: ObservableObject {
                       findings: findings, note: note, summaryEdited: old?.summaryEdited ?? false, maskedKinds: maskedKinds(folder))
     }
 
-    /// The ID of the latest handover summary of an EU project (zeus `handoff.latest`): the newest `clients/<project>/handoff/<id>/`
-    /// with a `summary.md`. Only names are read, and no link is followed.
-    static func latestHandover(workspace: String, project: String) throws -> String {
-        let folder = workspace + "/clients/" + project + "/handoff"
+    /// The ID of the latest handover summary of an EU project (zeus `handoff.latest`): the newest `<project>/handoff/<id>/`
+    /// of the EU vault with a `summary.md`. Only names are read, and no link is followed.
+    static func latestHandover(vault: String, project: String) throws -> String {
+        let folder = vault + "/" + project + "/handoff"
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).filter(Handover.validID).sorted()
         guard Handover.isDirectory(folder), let latest = names.last(where: { Handover.isRegularFile(folder + "/" + $0 + "/summary.md") })
         else { throw HandoffCLI.Failure(message: "Project \(project) has no handover summary. Ask Zeus in the EU chat of the project to write it.") }
@@ -693,8 +697,8 @@ final class HandoverModel: ObservableObject {
     }
 
     /// Off the main queue. Copies the included files of the app's copy, with the hashes of its manifest, into
-    /// `clients/<project>/handoff/from-eu/<id>/`, and writes released.json there and in the EU handover folder. Returns the
-    /// released folder.
+    /// `clients/<project>/handoff/from-eu/<id>/`, and writes released.json there and in the EU handover folder of the vault.
+    /// Returns the released folder.
     private func copy(_ review: Review, keptKeys: Set<String>) throws -> String {
         let fail = { (message: String) in HandoffCLI.Failure(message: message) }
         let manager = FileManager.default
@@ -763,12 +767,13 @@ final class HandoverModel: ObservableObject {
             try? manager.removeItem(atPath: staging)
             throw error
         }
-        // The EU handover folder gets the same record, so that `handoff pending` shows the handover as closed. It is in the
-        // shared workspace, which Standard reads, so it names no removed path (a file name can name client data): only
-        // their count. EU Claude can write that folder, so no part of the path may be a link, and only a new file is written.
+        // The EU handover folder in the vault gets the same record with the removed paths, so that `handoff pending` shows
+        // the handover as closed. EU Claude can write that folder, so no part of the path may be a link, and only a new
+        // file is written.
         do {
-            let euJSON = try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
-            try Handover.writeNew(euJSON, "clients/\(review.project)/handoff/\(review.id)/released.json", under: workspace)
+            let euRecord = record.merging(["removed": removed]) { _, new in new }
+            let euJSON = try JSONSerialization.data(withJSONObject: euRecord, options: [.prettyPrinted, .sortedKeys])
+            try Handover.writeNew(euJSON, "\(review.project)/handoff/\(review.id)/released.json", under: vault)
         } catch {
             Trace.log("handover: EU record not written: \(error.localizedDescription)")
         }
