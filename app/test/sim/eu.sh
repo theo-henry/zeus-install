@@ -434,7 +434,9 @@ XML
     '[ "$(grep -c " stop " "$STATE/sessions")" -eq $(( $(grep -c " start " "$STATE/sessions") - $(grep -c " preflight-failed " "$STATE/sessions") )) ]'
 
   # The mode stays across app starts. The quit locked the vault; an EU start opens it again with Touch ID.
-  check "the quit locked the EU vault" '! vault_mounted'
+  # The app quits at most 4 s after it starts the lock; on a busy Mac the unmount can finish after the app ended.
+  check "the quit locked the EU vault" \
+    'waited=0; while vault_mounted && [ "$waited" -lt 30 ]; do sleep 1; waited=$((waited + 1)); done; ! vault_mounted'
   # The old EU workspace that comes back after the removal ran stays: the removal runs once.
   mkdir -p "$SANDBOX/Code/zeus-eu"
   git -C "$SANDBOX/Code/zeus-eu" init -q
