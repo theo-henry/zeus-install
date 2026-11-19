@@ -130,7 +130,7 @@ The installer skips each step that is already done.
 | 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
 | 12 | Google Cloud CLI 593.0.0 in `~/google-cloud-sdk`, for the Google sign-in of EU mode. The installer checks the SHA-256 of the official macOS archive and does not change your shell profile. | `gcloud` is already installed (on your `PATH`, in `~/google-cloud-sdk`, or from Homebrew). |
 | 13 | Copy of the zeus repo to `~/Code/zeus-eu`, the EU workspace, or an update of an existing copy (fast-forward only) | The copy is already up to date, or it cannot update safely. |
-| 14 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, and the first-start settings of that folder | Never skipped. Installed plugins are updated. |
+| 14 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, the first-start settings of that folder, and the status line of Standard Claude Code (see [EU mode](#eu-mode)) | Never skipped. Installed plugins are updated. |
 | 15 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
 
 The installer does not use `sudo`.
@@ -177,6 +177,9 @@ Fable is not available in EU mode.
 Web search is available; web fetch and MCP servers are off.
 EU mode has its own workspace (`~/Code/zeus-eu`), its own Claude Code folder (`~/.zeus/eu/claude`), and its own Zeus Editor state (`~/.zeus/eu/editor`).
 Nothing of EU mode goes into `~/Code/zeus` or `~/.claude`.
+EU Claude Code shows the same status line as Standard Claude Code.
+Each install and each EU session start in the app copy it again from `~/.claude/settings.json`, or remove it when Standard has none.
+A status line that you set yourself in `~/.zeus/eu/claude/settings.json` stays as it is.
 
 ### Set up EU mode
 

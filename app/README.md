@@ -280,6 +280,7 @@ app/test/plugin-scope/run.sh
 At project scope, Claude Code writes the tracked `.claude/settings.json` of the Zeus folder again, and then `git pull --ff-only` cannot update Zeus.
 The test runs the plugin steps of `install.sh` and the commands in its next steps against a simulated `claude` in a Zeus folder.
 It checks that each plugin install, update, and marketplace add uses `--scope user` and that `.claude/settings.json` does not change.
+It also checks the EU plugin list and that the EU status line follows the Standard one (`eu_mirror_status_line`, `install.sh --eu-status-line`).
 
 ## Test the Claude Code update
 
