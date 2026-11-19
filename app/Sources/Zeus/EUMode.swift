@@ -147,11 +147,12 @@ enum GoogleCloud {
 /// The words for a Vertex error that the EU chat reports (the bridge message `eu-error:<JSON>`): the same words as the
 /// EU preflight (zeus-editor src/eu/preflight.js `vertexErrorMessage`).
 enum VertexError {
-    static func message(status: Int, model: String) -> String {
+    /// `account`: the Google account, when it is known (the EU sign-in names it after a refused quota project step).
+    static func message(status: Int, model: String, account: String? = nil) -> String {
         switch status {
         case 401: return "Your Google sign-in expired."
         case 403:
-            return "Your Google account has no access to the EU project of Zeus. Ask the Zeus maintainer for the Vertex AI User and Service Usage Consumer roles."
+            return "Your Google account \(account.map { $0 + " " } ?? "")has no access to the EU project of Zeus. Ask the Zeus maintainer for the Vertex AI User and Service Usage Consumer roles."
         case 404: return "The EU model \(model) is not available. Tell the Zeus maintainer."
         case 429: return "The EU project has no capacity for \(model) now. Try again later or tell the Zeus maintainer."
         default: return "Google Cloud refused the EU model \(model) (HTTP \(status)). Try again later or tell the Zeus maintainer."
@@ -417,6 +418,8 @@ enum ModeWebData {
 /// so that it writes the application default credentials file that EU Claude Code reads.
 final class GoogleSignIn: TerminalSource {
     private let process: PTYProcess
+    /// The output of the sign-in, so that the app can tell why it failed (`QuotaProjectDenial`).
+    let log = TerminalLog()
     var onOutput: ((Data) -> Void)?
     var onExit: ((Int32) -> Void)?
     var terminalPID: pid_t { process.pid }
@@ -427,8 +430,20 @@ final class GoogleSignIn: TerminalSource {
         env.removeValue(forKey: "CLOUDSDK_CORE_DISABLE_PROMPTS")
         process = try PTYProcess(executable: "/bin/sh", arguments: GoogleCloud.signInArguments(gcloud: gcloud, project: project),
                                  environment: env, directory: Paths.home)
-        process.onOutput = { [weak self] data in self?.onOutput?(data) }
+        process.onOutput = { [weak self] data in
+            self?.log.append(data)
+            self?.onOutput?(data)
+        }
         process.onExit = { [weak self] code in self?.onExit?(code) }
+    }
+
+    /// The note of the tab after a failed sign-in: the access words when gcloud refused the EU project for a missing
+    /// permission, or else the exit code and where to see the gcloud output.
+    static func failureNote(code: Int32, output: String) -> String {
+        if let denial = QuotaProjectDenial(output: output) {
+            return VertexError.message(status: 403, model: "", account: denial.account)
+        }
+        return "The Google sign-in did not complete (exit code \(code)). See the terminal below (Cmd+J)."
     }
 
     func write(_ text: String) { process.write(text) }

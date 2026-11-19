@@ -1,7 +1,8 @@
 #!/bin/bash
 # Simulated Google Cloud CLI (the installer puts it in ~/google-cloud-sdk/bin). Each call is logged in
 # $ZEUS_SIM_STATE/gcloud.log. "auth application-default login" writes the credentials file and ends the simulated
-# EU sign-in problem ($ZEUS_SIM_STATE/eu-preflight), as a real sign-in does. Nothing reaches Google.
+# EU sign-in problem ($ZEUS_SIM_STATE/eu-preflight), as a real sign-in does. With $ZEUS_SIM_STATE/eu-quota-denied, the
+# account has no Service Usage Consumer role: set-quota-project fails with the words of real gcloud. Nothing reaches Google.
 S="$ZEUS_SIM_STATE"
 printf '%s\n' "$*" >>"$S/gcloud.log"
 case "$*" in
@@ -18,6 +19,10 @@ case "$*" in
     echo "Credentials saved to file: [$HOME/.config/gcloud/application_default_credentials.json]"
     ;;
   "auth application-default set-quota-project "*)
+    if [ -f "$S/eu-quota-denied" ]; then
+      printf 'ERROR: (gcloud.auth.application-default.set-quota-project) Cannot add the project "%s" to application default credentials (ADC) as a quota project because the account in ADC does not have the "serviceusage.services.use" permission on this project.\n' "${!#}" >&2
+      exit 1
+    fi
     echo "Quota project \"${*##* }\" was added to ADC (simulated)."
     ;;
   *) echo "gcloud (simulated): $*" ;;

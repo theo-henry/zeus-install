@@ -60,6 +60,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   Each mode has its own web data store, and the terminal of a tab runs in the environment of its mode.
   When EU mode does not start, the tab shows the `zeus:` message with **Sign in to Google Cloud** (it runs the gcloud sign-in in the tab's terminal),
   **Run the Zeus setup**, **Try again**, and **Switch to Standard**. An `eu-error:` message (Vertex AI 403, 404, or 429) shows a question with the fix.
+  When gcloud refuses the EU project as the quota project of the sign-in for a missing permission (no Service Usage Consumer role), the tab shows the 403 access message, with the Google account when gcloud names it, in place of the gcloud error.
 - **EU handover.** **Hand Over First…** at the switch to Standard opens the handover window (`Sources/Zeus/Handover.swift`).
   **Ask Zeus in this chat** sends the summary request to an EU tab, with the project that the tab shows.
   The app runs the handoff commands of `scripts/zeus.py` of the Standard workspace (`~/Code/zeus`, which EU Claude can not write) with `--workspace` set to the EU workspace.
@@ -230,6 +231,14 @@ app/test/pty/run.sh
 
 It sends 1 MiB to a raw-mode terminal and checks that every byte arrives, that a resize reaches the terminal, and that the UI run loop stays responsive.
 
+## Test the EU sign-in failure
+
+```bash
+app/test/eu-sign-in/run.sh
+```
+
+It checks which gcloud output of the EU sign-in is a quota project refused for a missing permission (`Sources/Zeus/EUSignInFailure.swift`), and that other errors, a failed login, and a completed sign-in are not.
+
 ## Test the releases and the self-update
 
 ```bash
@@ -344,7 +353,7 @@ It presses the app's buttons through the debug test actions and checks the trace
 `--eu` runs the EU mode scenario (`app/test/sim/eu.sh`) with a simulated `gcloud`, EU `zeus`, and handoff `scripts/zeus.py`:
 the setup question when EU mode is not set up; a switch stops every Standard session before `zeus --eu --no-open` starts in `~/Code/zeus-eu`;
 the EU pill, the EU web data store, and the cost label; a 429 error question; a failed start that needs the Google sign-in,
-the sign-in in the terminal, and the retry; a 403 failure; the handover request that names the project of the tab, the handover with findings, an accepted finding, an edited summary, a removed file,
+a failed Google login, a quota project refused for a missing permission (the 403 access message), the sign-in in the terminal, and the retry; a 403 failure; the handover request that names the project of the tab, the handover with findings, an accepted finding, an edited summary, a removed file,
 the release, and `released.json`; the handoff commands run the Standard `scripts/zeus.py` and never a script or module of the EU workspace; the switch back resumes the Standard tabs and never an EU tab; and a restart in EU mode.
 
 `--vault` runs the EU vault and Standard read block scenario (`app/test/sim/vault.sh`) with a real encrypted disk image in the temporary home folder,

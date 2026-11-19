@@ -222,6 +222,19 @@ XML
   check "an EU start without a Google sign-in stops with its message" 'wait_for "eu start failed: [0-9]* exit=3 sign-in=true You are not signed in to Google Cloud for EU mode." 20'
   sleep 1
   shot eu-7-sign-in-needed
+  # A failed login: the tab gives the exit code and points to the gcloud output.
+  : >"$STATE/eu-sign-in-fails"
+  act 'test-post:"eu-sign-in"'
+  check "a failed Google login gives its exit code" 'wait_for "eu sign-in: ended code=1" 20 && wait_for "eu sign-in: note The Google sign-in did not complete (exit code 1). See the terminal below (Cmd+J)." 10'
+  rm -f "$STATE/eu-sign-in-fails"
+  # An account without the Service Usage Consumer role: gcloud refuses the quota project, and the tab gives the
+  # access words of the EU start check in place of the gcloud error.
+  : >"$STATE/eu-quota-denied"
+  act 'test-post:"eu-sign-in"'
+  check "a quota project refused for a missing permission gives the access message" 'wait_count "eu sign-in: ended code=1" 2 20 && wait_for "eu sign-in: note Your Google account has no access to the EU project of Zeus. Ask the Zeus maintainer for the Vertex AI User and Service Usage Consumer roles.$" 10'
+  shot eu-7b-sign-in-no-access
+  check "the refused sign-in does not start EU mode again" '[ "$(grep -c "session [0-9]* started (eu)" "$TRACE")" = 2 ]'
+  rm -f "$STATE/eu-quota-denied"
   act 'test-post:"eu-sign-in"'
   check "Sign in to Google Cloud runs the sign-in in the terminal panel" 'wait_for "eu sign-in: started" 10 && wait_for "terminal visible: .* true" 10'
   check "the sign-in sets the EU project as the quota project" 'wait_for "eu sign-in: ended code=0" 20 && grep -q "^auth application-default login$" "$STATE/gcloud.log" && grep -q "^auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99$" "$STATE/gcloud.log"'

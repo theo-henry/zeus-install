@@ -45,6 +45,7 @@ run_test() {
 }
 
 run_test "pty" 300 "$TEST_DIR/pty/run.sh"
+run_test "eu sign-in" 120 "$TEST_DIR/eu-sign-in/run.sh"
 # A release build and a debug build of the app (swift build -c release takes minutes on a busy Mac).
 run_test "release env" 900 "$TEST_DIR/release-env/run.sh"
 run_test "plugin-scope" 300 "$TEST_DIR/plugin-scope/run.sh"
