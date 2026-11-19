@@ -32,6 +32,8 @@
 #   --check      app mode only: report which steps are already done, then stop. Installs nothing.
 #   --app-only   used by install-app.sh: steps 1 to 5 (GitHub login and access check), then the Zeus app.
 #                The app does the other steps in its setup window.
+#   --eu-status-line  used by the Zeus app before each EU session: EU gets the status line of Standard again
+#                (eu_mirror_status_line). Installs nothing else.
 
 # ShellCheck 0.11 reports SC2218 for helpers that are defined before main runs (0.10 does not).
 # shellcheck disable=SC2218
@@ -948,6 +950,47 @@ except Exception:
 PY
 }
 
+# EU Claude Code reads settings.json of the EU folder only. EU follows the status line of Standard Claude Code of this
+# Mac, so the two modes look the same. Zeus does not install a status line itself. zeus-status-line.json in the EU folder
+# keeps the value that Zeus last copied. While the EU status line is not set or still has that value, each run copies the
+# Standard one again, or removes it when Standard has none. An EU status line that the user set stays as it is.
+# Each install runs it, and the Zeus app runs it before each EU session (install.sh --eu-status-line).
+eu_mirror_status_line() {
+  python3 - "$EU_CONFIG_DIR/settings.json" "$EU_CONFIG_DIR/zeus-status-line.json" "$HOME/.claude/settings.json" <<'PY'
+import json, os, sys, tempfile
+target, record, standard = sys.argv[1], sys.argv[2], sys.argv[3]
+def read(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+def write(path, value):
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(dir=os.path.dirname(path), prefix="." + os.path.basename(path) + ".")
+    with os.fdopen(handle, "w", encoding="utf-8") as out:
+        json.dump(value, out, indent=2)
+    os.replace(temporary, path)
+line = read(standard).get("statusLine")
+settings, mirrored = read(target), read(record).get("statusLine")
+if "statusLine" in settings and settings["statusLine"] != mirrored:
+    sys.exit(0)
+if isinstance(line, dict):
+    if settings.get("statusLine") != line:
+        settings["statusLine"] = line
+        write(target, settings)
+    if mirrored != line:
+        write(record, {"statusLine": line})
+    sys.exit(0)
+if "statusLine" in settings:
+    del settings["statusLine"]
+    write(target, settings)
+if os.path.exists(record):
+    os.remove(record)
+PY
+}
+
 # Step 14/16 - The Zeus plugins in the EU Claude Code folder. EU Claude Code reads its plugins, settings, and chats there
 # only, never from ~/.claude. Each run updates them, as step 10 does for Standard.
 install_eu_plugins() {
@@ -974,6 +1017,7 @@ install_eu_plugins() {
     fi
   done < <(eu_plugin_entries)
   eu_first_start_settings || fail "The first-start settings of EU mode could not be written in ~/.zeus/eu/claude."
+  eu_mirror_status_line || fail "The status line of EU mode could not be written in ~/.zeus/eu/claude."
   info "Installed in ~/.zeus/eu/claude."
   record "done" "Zeus plugins of EU mode"
 }
@@ -1690,6 +1734,10 @@ main() {
   fi
   if [ "$(id -u)" -eq 0 ]; then
     fail "Do not run this installer with sudo." "Run the install line without sudo."
+  fi
+  if [ "${1:-}" = "--eu-status-line" ]; then
+    eu_mirror_status_line
+    return
   fi
 
   mkdir -p "$LOG_DIR"
