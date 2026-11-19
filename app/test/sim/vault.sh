@@ -182,6 +182,9 @@ PY
   rm -f "$STATE/jail-probe.json"
 
   # Lock: refused while a program has a vault file open; at quit, after the sessions stopped, it is forced.
+  # The chat page of the probe session must be loaded first: a page that is still loading can not tell that it is safe to
+  # close, so the quit would wait for a question (quit deferred: unavailable).
+  newest_page_loaded "$PAGE_LOAD_LIMIT" >/dev/null || true
   (exec 3<"$VAULT/rows.csv"; exec sleep 300) &
   HOLDER_PID=$!
   sleep 0.5

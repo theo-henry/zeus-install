@@ -704,10 +704,9 @@ check "a start while Whisper processes is busy" 'wait_for "speech event: state w
 check "the processing recording still gives its text" 'wait_for "speech event: final w4 " 10'
 act 'test-speech-post:{"type":"speech-start","id":"w6","locale":null,"version":2}'
 wait_for "speech event: state w6 listening" 10 >/dev/null
-act 'test-speech-post:{"type":"speech-stop","id":"w6"}'
-wait_for "speech event: state w6 processing" 10 >/dev/null
-act 'test-speech-post:{"type":"speech-cancel","id":"w6"}'
-check "a cancel while Whisper processes gives stopped and no text" 'wait_for "speech: cancel w6 (page)" 10 && sleep 1 && page_has "state w6 stopped" && ! grep -q "speech event: final w6" "$TRACE"'
+# The stop and the cancel go in one post, so the cancel comes while Whisper processes, also under load.
+act 'test-speech-post:[{"type":"speech-stop","id":"w6"},{"type":"speech-cancel","id":"w6"}]'
+check "a cancel while Whisper processes gives stopped and no text" 'wait_for "speech: cancel w6 (page)" 10 && grep -q "speech event: state w6 processing" "$TRACE" && sleep 1 && page_has "state w6 stopped" && ! grep -q "speech event: final w6" "$TRACE"'
 act 'test-speech-post:{"type":"speech-settings-set","model":"fast"}'
 check "the Fast model downloads when the user picks it, and loads" 'wait_for "dictation: download sim-fast-1 starts (needed)" 10 && wait_for "dictation: loaded sim-fast-1" 20'
 act test-clear
