@@ -194,8 +194,6 @@ Nothing of EU mode goes into `~/Code/zeus` or `~/.claude`.
    After you get the roles, run the setup again; you do not sign in again.
 3. When you skipped the sign-in, or it expired, sign in later.
    In the app, the EU start page shows **Sign in to Google Cloud** when it is necessary.
-   The install line signs in again with `ZEUS_INSTALL_EU_SIGN_IN=yes` before `bash`
-   (`curl -fsSL https://raw.githubusercontent.com/theo-henry/zeus-install/main/install.sh | ZEUS_INSTALL_EU_SIGN_IN=yes bash`).
    In Terminal, you can also use these two commands:
 
 ```text

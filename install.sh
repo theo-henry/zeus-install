@@ -17,8 +17,6 @@
 #                                             installer opens (for tests). ZEUS_APP_TEST_BACKGROUND=1 opens it behind
 #                                             the other apps.
 #   ZEUS_INSTALL_CLAUDE_UPDATE_TIMEOUT=300    stops the update of an installed Claude Code after this many seconds.
-#   ZEUS_INSTALL_EU_SIGN_IN=yes|no            answers the question of the Google sign-in of EU mode: yes signs in (also
-#                                             after an earlier skip), no skips it. Without it, the installer asks once.
 #   ZEUS_INSTALL_APP=1                        app mode, used by Zeus.app. It adds two steps (the Zeus skill plugins and
 #                                             the Claude login) and prints machine-readable lines that start with
 #                                             "@@zeus " so that the app can show a checklist. Terminal use is unchanged.
@@ -1052,16 +1050,14 @@ else:
 }
 
 # Returns success when the user wants the Google sign-in now. The answer "no" is kept, so that the installer does not
-# ask again; ZEUS_INSTALL_EU_SIGN_IN=yes signs in after it.
+# ask again.
 eu_sign_in_wanted() {
   local answer
-  [ "${ZEUS_INSTALL_EU_SIGN_IN:-}" != no ] || return 1
   if ! { exec 3</dev/tty; } 2>/dev/null; then
     info "No keyboard is connected, so the Google sign-in cannot run. Run the install line in the Terminal app."
     return 1
   fi
   exec 3<&-
-  [ "${ZEUS_INSTALL_EU_SIGN_IN:-}" != yes ] || return 0
   [ ! -f "$EU_SIGN_IN_SKIPPED" ] || return 1
   info "EU mode runs Claude on Google Cloud in the EU. It needs a Google sign-in with your work email."
   info "If you do not use EU mode, answer n. The installer then does not ask again."
@@ -1093,8 +1089,7 @@ sign_in_google() {
   eu_access_check
   if [ "$EU_ACCESS" = signed-out ]; then
     if ! eu_sign_in_wanted; then
-      info "Skipped. To use EU mode later, sign in to Google in the Zeus app, or run the install line with"
-      info "ZEUS_INSTALL_EU_SIGN_IN=yes."
+      info "Skipped. To use EU mode later, sign in to Google in the Zeus app."
       record "skipped" "Google sign-in (EU mode, skipped)"
       return 0
     fi
