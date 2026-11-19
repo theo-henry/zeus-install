@@ -88,6 +88,7 @@ final class ZeusSession: TerminalSource {
                 ? "The EU workspace is not in \(EUSetup.display(workspace)). Run the Zeus setup."
                 : "The Zeus workspace is not in ~/Code/zeus. Run the Zeus setup."])
         }
+        if mode == .eu { EUStatusLine.sync() }
         let arguments = (mode == .eu ? ["--eu"] : []) + ["--no-open"]
         var executable = Paths.zeusCommand
         var launchArguments = arguments

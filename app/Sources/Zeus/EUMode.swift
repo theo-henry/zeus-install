@@ -117,6 +117,29 @@ enum EUSetup {
     }
 }
 
+/// EU Claude Code shows the status line of Standard Claude Code. The installer copies it (install.sh
+/// `eu_mirror_status_line`), and the app runs that step again before each EU session, so that a change in Standard
+/// reaches EU. A failure only leaves the EU status line as it was.
+enum EUStatusLine {
+    static func sync() {
+        guard let installer = Paths.installer else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [installer, "--eu-status-line"]
+        process.environment = ShellEnvironment.make()
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            Trace.log("eu status line: exit \(process.terminationStatus)")
+        } catch {
+            Trace.log("eu status line: \(error.localizedDescription)")
+        }
+    }
+}
+
 /// The Google Cloud CLI, which the EU sign-in uses. The same places as the EU preflight of Zeus Editor
 /// (src/eu/preflight.js `gcloudCandidates`): the login PATH, then the usual install folders.
 enum GoogleCloud {

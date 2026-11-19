@@ -94,14 +94,25 @@ vault_scenario() {
   # The read block: a new Standard session tries the vault and the other EU folders as Claude would.
   mkdir -p "$WORK/large"
   head -c 20000000 /dev/urandom >"$WORK/large/view.json"
-  # The server writes its own port when it listens.
-  python3 -c 'import functools, http.server, os, sys
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1]))
+  # The server writes its own port when it listens. http.server.HTTPServer.server_bind calls socket.getfqdn(), a reverse
+  # DNS lookup of 127.0.0.1, which can take longer than the wait on a CI runner with a slow resolver. This server binds
+  # without that lookup, and it is not tied to the terminal of the test.
+  python3 -u -c 'import functools, http.server, os, socketserver, sys
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+server = Server(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1]))
 open(sys.argv[2] + ".tmp", "w").write(str(server.server_address[1]))
 os.replace(sys.argv[2] + ".tmp", sys.argv[2])
-server.serve_forever()' "$WORK/large" "$WORK/large-port" >"$WORK/large-server.log" 2>&1 &
+server.serve_forever()' "$WORK/large" "$WORK/large-port" </dev/null >"$WORK/large-server.log" 2>&1 &
   LARGE_SERVER_PID=$!
-  need "the large response server listens" 'wait_file_has "^[0-9][0-9]*$" "$WORK/large-port" 30'
+  if ! wait_file_has "^[0-9][0-9]*$" "$WORK/large-port" 30; then
+    echo "  The large response server did not write its port. Its log:"
+    sed 's/^/    | /' "$WORK/large-server.log"
+    kill -0 "$LARGE_SERVER_PID" 2>/dev/null && echo "  (the server process is still running)" || echo "  (the server process has stopped)"
+  fi
+  need "the large response server listens" 'wait_file_has "^[0-9][0-9]*$" "$WORK/large-port" 1'
   local port
   port="$(cat "$WORK/large-port")"
   printf 'EU handover\n' >"$HANDOVER/probe.txt"
