@@ -1,13 +1,14 @@
 #!/bin/bash
 # Test of the three environment failures of install.sh on a Mac that is not set up correctly, and of the
 # Macs that are set up correctly (they must not see any change):
-#   1. A folder of the user that root owns (~/.config, ~/.npm, ~/.local, ~/.claude): the installer stops
-#      before the first step with one exact "sudo chown" line. The installer never runs sudo.
+#   1. A folder of the user that root owns (~/.config, ~/.config/gh, ~/.npm, ~/.local, ~/.local/bin, ~/.claude):
+#      the installer stops before the first step with one exact "sudo chown" line. The installer never runs sudo.
 #   2. The Claude login: the command gets the real terminal device as its input, not /dev/tty (Claude Code stops
 #      with "EINVAL: invalid argument, kqueue" on /dev/tty). Without a terminal, the installer prints how to log
 #      in with the Terminal app, and the login that is already done is skipped.
 #   3. content-cli: when the global folder of npm is not writable, it goes to ~/.npm-global, and the command is
 #      linked into ~/.local/bin and found in the same run and on the next run.
+#      Root-owned files in the npm cache stop the step with the exact "sudo chown" line for ~/.npm.
 #
 # A folder that root owns is a symbolic link to /private/etc in a temporary home folder: no sudo is needed
 # and no real folder changes. install.sh is loaded with ZEUS_INSTALL_SOURCED=1 and runs against simulated

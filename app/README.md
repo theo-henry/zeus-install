@@ -293,7 +293,8 @@ app/test/env-failures/run.sh
 ```
 
 The test covers three problems of a Mac that is not set up correctly, and a Mac that is.
-A folder of the user that root owns (`~/.config`, `~/.npm`, `~/.local`, `~/.claude`) stops the installer before step 1 with one `sudo chown` line.
+A folder of the user that root owns (`~/.config`, `~/.config/gh`, `~/.npm`, `~/.local`, `~/.local/bin`, `~/.claude`) stops the installer before step 1 with one `sudo chown` line.
+Root-owned files in the npm cache stop step 8 with the `sudo chown` line for `~/.npm`.
 The installer never runs `sudo`.
 The Claude login command gets the real terminal device as its input, not `/dev/tty`, because Claude Code stops with `EINVAL: invalid argument, kqueue` on `/dev/tty`.
 Without a terminal, the login step tells the user to run `claude` in the Terminal app, and an existing login is skipped.
