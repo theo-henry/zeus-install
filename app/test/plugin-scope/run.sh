@@ -84,6 +84,27 @@ check "each plugin install, update, and marketplace add uses --scope user" \
   '! grep -E "^plugin (install|update|marketplace add) " "$CALLS" | grep -vE -- "--scope user( |$)"'
 check ".claude/settings.json of the Zeus folder did not change" 'cmp -s "$SETTINGS" "$WORK/settings.orig"'
 
+printf '\nEU mode: the plugin list and the status line\n'
+EU_PLUGINS="$(run_install 1 eu_plugin_entries 2>/dev/null)"
+check "EU installs the Zeus Editor plugin and each skill plugin of Standard" \
+  '[ "$(grep -c . <<<"$EU_PLUGINS")" -eq 4 ] && grep -q "^zeus-editor@zeus-editor:" <<<"$EU_PLUGINS" && grep -q "^celonis-pql@celonis-pql:" <<<"$EU_PLUGINS"'
+EU_SETTINGS="$HOME/.zeus/eu/claude/settings.json"
+run_install 1 eu_mirror_status_line >/dev/null 2>&1
+check "no status line in Standard: EU settings are not created" '[ ! -e "$EU_SETTINGS" ]'
+mkdir -p "$HOME/.claude"
+printf '{"statusLine": {"type": "command", "command": "node /x/line.cjs", "padding": 0}, "model": "opus"}\n' >"$HOME/.claude/settings.json"
+mkdir -p "$HOME/.zeus/eu/claude"
+printf '{"enabledPlugins": {"zeus-editor@zeus-editor": true}}\n' >"$EU_SETTINGS"
+run_install 1 eu_mirror_status_line >/dev/null 2>&1
+check "the status line of Standard is copied to EU" \
+  'python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"statusLine\"][\"command\"]==\"node /x/line.cjs\" else 1)" "$EU_SETTINGS"'
+check "the EU plugin settings stay and no other Standard setting is copied" \
+  'python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"enabledPlugins\"] and \"model\" not in d else 1)" "$EU_SETTINGS"'
+printf '{"statusLine": {"type": "command", "command": "own"}}\n' >"$EU_SETTINGS"
+run_install 1 eu_mirror_status_line >/dev/null 2>&1
+check "an EU status line that is already set stays as it is" 'grep -q "\"own\"" "$EU_SETTINGS"'
+check ".claude/settings.json of the Zeus folder still did not change" 'cmp -s "$SETTINGS" "$WORK/settings.orig"'
+
 printf '\nTerminal use: the next steps for the skill plugins\n'
 NEXT="$(run_install "" eval 'record done "Zeus folder"; print_summary' 2>&1)"
 check "no /plugin install line (it can install at project scope)" '! grep -q "/plugin install" <<<"$NEXT"'

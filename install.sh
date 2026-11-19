@@ -940,6 +940,33 @@ except Exception:
 PY
 }
 
+# EU Claude Code reads settings.json of the EU folder only. When Standard Claude Code of this Mac has a status line,
+# EU gets the same one, so the two modes look the same. Zeus does not install a status line itself: with none in
+# ~/.claude/settings.json this changes nothing. An EU status line that is already set stays as it is.
+eu_mirror_status_line() {
+  python3 - "$EU_CONFIG_DIR/settings.json" "$HOME/.claude/settings.json" <<'PY'
+import json, os, sys, tempfile
+target, standard = sys.argv[1], sys.argv[2]
+def read(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+line = read(standard).get("statusLine")
+settings = read(target)
+if not isinstance(line, dict) or "statusLine" in settings:
+    sys.exit(0)
+settings["statusLine"] = line
+os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
+handle, temporary = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".settings.json.")
+with os.fdopen(handle, "w", encoding="utf-8") as out:
+    json.dump(settings, out, indent=2)
+os.replace(temporary, target)
+PY
+}
+
 # Step 14/16 - The Zeus plugins in the EU Claude Code folder. EU Claude Code reads its plugins, settings, and chats there
 # only, never from ~/.claude. Each run updates them, as step 10 does for Standard.
 install_eu_plugins() {
@@ -966,6 +993,7 @@ install_eu_plugins() {
     fi
   done < <(eu_plugin_entries)
   eu_first_start_settings || fail "The first-start settings of EU mode could not be written in ~/.zeus/eu/claude."
+  eu_mirror_status_line || fail "The status line of EU mode could not be written in ~/.zeus/eu/claude."
   info "Installed in ~/.zeus/eu/claude."
   info "For EU mode, sign in to Google once in the Zeus app, and ask $ZEUS_OWNER for access to the EU project."
   record "done" "Zeus plugins of EU mode"
