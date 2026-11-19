@@ -736,6 +736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 model?.onFinished?()
             case "setup-menubar-on": model?.showMenuBar = true
             case "setup-answer-yes": model?.answerQuestion(true)
+            case "setup-answer-no": model?.answerQuestion(false)
             case "setup-enter": model?.send("")
             case "setup-show": self.showSetup(nil)
             case "test-cmd-t", "test-cmd-j":

@@ -6,10 +6,10 @@
 # home folder, Claude Code, and GitHub login are not used. The test presses the app's buttons through
 # its debug test actions (active only with ZEUS_APP_TRACE) and checks the trace.
 #
-# Usage: app/test/sim/run.sh [--eu | --vault] [screenshot-folder]
+# Usage: app/test/sim/run.sh [--eu | --vault | --signin] [screenshot-folder]
 # With a folder, it saves a screenshot of each app window state there (the app's windows only).
-# --eu runs only the EU mode scenario, and --vault only the EU vault and Standard read block scenario
-# (app/test/run-all.sh runs each part with its own time limit).
+# --eu runs only the EU mode scenario, --vault only the EU vault and Standard read block scenario, and --signin only the
+# Google sign-in step of the setup (app/test/run-all.sh runs each part with its own time limit).
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
 # shellcheck disable=SC2016,SC2034
@@ -21,6 +21,7 @@ REPO_DIR="$(dirname "$APP_DIR")"
 PART=main
 if [ "${1:-}" = "--eu" ]; then PART=eu; shift; fi
 if [ "${1:-}" = "--vault" ]; then PART=vault; shift; fi
+if [ "${1:-}" = "--signin" ]; then PART=signin; shift; fi
 SHOTS="${1:-}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
@@ -224,8 +225,14 @@ stop_app() {
 source "$SIM_DIR/eu.sh"
 # shellcheck source=app/test/sim/vault.sh
 source "$SIM_DIR/vault.sh"
-if [ "$PART" = eu ] || [ "$PART" = vault ]; then
-  if [ "$PART" = eu ]; then eu_scenario; else vault_scenario; fi
+# shellcheck source=app/test/sim/signin.sh
+source "$SIM_DIR/signin.sh"
+if [ "$PART" != main ]; then
+  case "$PART" in
+    eu) eu_scenario ;;
+    vault) vault_scenario ;;
+    signin) signin_scenario ;;
+  esac
   echo
   if [ "$FAILURES" -eq 0 ]; then
     printf '\033[32mAll checks passed.\033[0m\n'
@@ -240,7 +247,7 @@ echo "Scenario 1: a new Mac, full setup, chat, close"
 start_app new ZEUS_SIM_START_DELAY=2500
 need "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
-need "the check finds 15 steps to do on a new Mac (got $todo)" '[ "$todo" = 15 ]'
+need "the check finds 16 steps to do on a new Mac (got $todo)" '[ "$todo" = 16 ]'
 shot 1-check
 
 act setup-install
@@ -274,11 +281,17 @@ check "the EU plugins are installed apart from the Standard plugins" '[ "$(ls "$
 check "EU Claude Code starts without the first-start questions in the EU workspace" \
   'python3 -c "import json,os,sys; c=json.load(open(sys.argv[1])); p=c[\"projects\"][os.path.realpath(sys.argv[2])]; sys.exit(0 if c[\"hasCompletedOnboarding\"] and p[\"hasTrustDialogAccepted\"] and p[\"hasClaudeMdExternalIncludesWarningShown\"] and not p[\"hasClaudeMdExternalIncludesApproved\"] else 1)" "$SANDBOX/.zeus/eu/claude/.claude.json" "$SANDBOX/Code/zeus-eu"'
 check "the EU setup changes no shell profile" '! grep -qs "google-cloud-sdk\|zeus-eu\|CLOUDSDK\|CLAUDE_CONFIG_DIR\|\.zeus/eu" "$SANDBOX/.zprofile" "$SANDBOX/.zshrc" "$SANDBOX/.bash_profile" "$SANDBOX/.bashrc"'
+check "step 17: the installer asks for the Google sign-in of EU mode" 'wait_for "setup event: ask 17 " 20'
+shot 5-google-question
+act setup-answer-yes
+check "step 17: the Google sign-in runs, then the EU project becomes the quota project" \
+  'wait_for "setup event: done 17 Google sign-in (EU mode, sim@example.com)" 30 && grep -q "^auth application-default login$" "$STATE/gcloud.log" && grep -q "\"quota_project_id\": \"project-4bf0bacd-fec4-406b-a99\"" "$SANDBOX/.config/gcloud/application_default_credentials.json"'
+check "the access check gets the token in files, never on the command line" 'grep -q ":testIamPermissions" "$STATE/curl.log" && ! grep -q "sim-access-token" "$STATE/curl.log"'
 check "the setup finishes" 'wait_for "setup ended: check=false code=0" 20'
 shot 5-finished
 check "the installer wrote only into the simulated home folder" '[ -x "$SANDBOX/.local/bin/zeus" ] && [ -d "$SANDBOX/Code/zeus/.git" ]'
 check "install.sh --check then finds the EU steps done" \
-  '[ "$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check 2>&1 | grep -c "@@zeus state 1[456] ok")" = 3 ]'
+  '[ "$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check 2>&1 | grep -c "@@zeus state 1[4567] ok")" = 4 ]'
 
 act setup-start
 if [ -n "$SHOTS" ]; then
@@ -874,7 +887,8 @@ wait_for "setup event: ask 2 " 40 >/dev/null && act setup-answer-yes
 wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && act setup-enter
 check "step 14 fails: the Google Cloud CLI download fails" 'wait_for "setup event: failed 14 The download of google-cloud-cli-" 120 && [ ! -e "$SANDBOX/google-cloud-sdk" ]'
 check "the later EU steps still run" 'wait_for "setup event: done 15 " 30 && wait_for "setup event: done 16 " 30'
-check "the setup completes without an error" 'wait_for "setup ended: check=false code=0" 20 && [ "$(grep -c "setup event: failed " "$TRACE")" = 1 ]'
+check "step 17 fails without the Google Cloud CLI, and asks nothing" 'wait_for "setup event: failed 17 The Google Cloud CLI is not installed" 30 && ! grep -q "setup event: ask 17 " "$TRACE"'
+check "the setup completes without an error" 'wait_for "setup ended: check=false code=0" 20 && [ "$(grep -c "setup event: failed " "$TRACE")" = 2 ]'
 shot 7b-eu-step-failed
 act setup-start
 check "Standard mode starts" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'

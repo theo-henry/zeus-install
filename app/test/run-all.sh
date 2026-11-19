@@ -57,3 +57,4 @@ run_test "update upgrade" 600 "$TEST_DIR/update/run.sh" upgrade
 run_test "sim" 600 "$TEST_DIR/sim/run.sh"
 run_test "sim eu" 600 "$TEST_DIR/sim/run.sh" --eu
 run_test "sim vault" 600 "$TEST_DIR/sim/run.sh" --vault
+run_test "sim sign-in" 600 "$TEST_DIR/sim/run.sh" --signin

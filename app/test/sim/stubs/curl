@@ -2,10 +2,14 @@
 # Simulated curl: makes the files that the installer downloads. No network access.
 # The scripts that it writes expand their own variables when they run.
 # shellcheck disable=SC2016
-target="" url=""
+target="" url="" format="" header="" data=""
+[ -z "${ZEUS_SIM_STATE:-}" ] || printf '%s\n' "$*" >>"$ZEUS_SIM_STATE/curl.log"
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) target="$2"; shift ;;
+    -w) format="$2"; shift ;;
+    -H) case "$2" in @*) header="$(cat "${2#@}")" ;; esac; shift ;;
+    --data) case "$2" in @*) data="$(cat "${2#@}")" ;; esac; shift ;;
     http*://*|file://*) url="$1" ;;
   esac
   shift
@@ -37,6 +41,28 @@ case "$url" in
     tar -czf "$work/gcloud.tar.gz" -C "$work" google-cloud-sdk
     write <"$work/gcloud.tar.gz"
     rm -rf "$work"
+    ;;
+  # The Google sign-in step: the account of the token, and the access check of the EU project. The token must come
+  # in a file (-H @file, --data @file), never on the command line. $ZEUS_SIM_STATE/google-access: "none" (no role),
+  # "error" (no connection), or no file (both roles).
+  https://oauth2.googleapis.com/tokeninfo)
+    [ "$data" = "access_token=sim-access-token" ] || { echo '{"error": "invalid_token"}'; exit 22; }
+    echo '{"email": "sim@example.com", "scope": "openid https://www.googleapis.com/auth/cloud-platform"}'
+    ;;
+  https://cloudresourcemanager.googleapis.com/v1/projects/*:testIamPermissions)
+    access="$(cat "$ZEUS_SIM_STATE/google-access" 2>/dev/null || true)"
+    if [ "$access" = error ]; then echo "simulated curl: (6) Could not resolve host" >&2; exit 6; fi
+    code=200
+    if [ "$header" != "Authorization: Bearer sim-access-token" ]; then
+      code=401
+      echo '{"error": {"code": 401, "status": "UNAUTHENTICATED"}}'
+    elif [ "$access" = none ]; then
+      echo '{}'
+    else
+      echo '{"permissions": ["aiplatform.endpoints.predict", "serviceusage.services.use"]}'
+    fi
+    # shellcheck disable=SC2059 # The format of -w, as curl writes it.
+    [ -z "$format" ] || printf "${format//%\{http_code\}/$code}"
     ;;
   https://claude.ai/install.sh)
     printf '#!/bin/bash\n# Simulated Claude Code installer.\nmkdir -p "$HOME/.local/bin"\ncp "%s/claude" "$HOME/.local/bin/claude"\nchmod +x "$HOME/.local/bin/claude"\necho "Claude Code installed (simulated)."\n' "$P" | write

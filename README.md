@@ -95,7 +95,7 @@ Links to other websites open in your default browser. Zeus Editor pages stay in 
 The app runs its own copy of `install.sh` in app mode (`ZEUS_INSTALL_APP=1`).
 In app mode, the installer prints `@@zeus` status lines for the checklist, `--check` only reports which steps are done,
 and two more steps run: the Zeus skill plugins (step 12) and the Claude login (step 13).
-Steps 14 to 16 set up EU mode (see [EU mode](#eu-mode)).
+Steps 14 to 17 set up EU mode (see [EU mode](#eu-mode)).
 To build the app, see [app/README.md](app/README.md).
 
 ## Install in Terminal only
@@ -131,19 +131,21 @@ The installer skips each step that is already done.
 | 12 | Google Cloud CLI 593.0.0 in `~/google-cloud-sdk`, for the Google sign-in of EU mode. The installer checks the SHA-256 of the official macOS archive and does not change your shell profile. | `gcloud` is already installed (on your `PATH`, in `~/google-cloud-sdk`, or from Homebrew). |
 | 13 | Copy of the zeus repo to `~/Code/zeus-eu`, the EU workspace, or an update of an existing copy (fast-forward only) | The copy is already up to date, or it cannot update safely. |
 | 14 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, and the first-start settings of that folder | Never skipped. Installed plugins are updated. |
-| 15 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
+| 15 | Google sign-in of EU mode: `gcloud auth application-default login` in the browser, a check of the access of your Google account to the EU project, and the EU project as the quota project of the sign-in. The installer asks first; answer `n` if you do not use EU mode. The access check costs nothing: it calls no model. Without access, the step shows the message for the two roles with your Google account (see [Set up EU mode](#set-up-eu-mode)). | You are already signed in with access to the EU project, or you skipped the sign-in before (the installer asks only one time). |
+| 16 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
 
 The installer does not use `sudo`.
 Your Mac password can be necessary only for the Apple pop-up in step 1.
 The installer asks you to accept the Anaconda license before it installs Anaconda.
 Logs for Anaconda, the GitHub CLI, and the Claude Code update are in `~/Library/Logs/zeus-install`.
-A failed EU step (12 to 14, or 14 to 16 in the app) does not stop the installer.
+A failed EU step (12 to 15, or 14 to 17 in the app) does not stop the installer.
+This includes a Google account without access to the EU project.
 It is a warning, the other steps continue, and the Zeus app is installed.
 The app shows what EU mode is missing when you switch to EU mode; run the setup again to finish it.
 
 ## After the install
 
-When step 15 installed the Zeus app, it opens. Follow its setup window; it does the steps below for you.
+When step 16 installed the Zeus app, it opens. Follow its setup window; it does the steps below for you.
 Without the app:
 
 1. Close Terminal and open a new Terminal window.
@@ -180,16 +182,21 @@ Nothing of EU mode goes into `~/Code/zeus` or `~/.claude`.
 
 ### Set up EU mode
 
-1. Run the install line or Zeus > Zeus Setup… in the app.
-   The EU steps are the same on every Mac (steps 12 to 14, or 14 to 16 in the app).
-2. Ask the Zeus maintainer to give your Google account access to the EU project.
+1. Ask the Zeus maintainer to give your Google account access to the EU project.
    The maintainer gives the account two roles on the project `project-4bf0bacd-fec4-406b-a99`:
    Vertex AI User (`roles/aiplatform.user`) and Service Usage Consumer (`roles/serviceusage.serviceUsageConsumer`).
    The second role is necessary for the quota project of the sign-in and for the EU start check.
-   Without it, the sign-in or the EU start check fails with "no access".
-3. Sign in to Google one time.
+   Without it, the sign-in step or the EU start check fails with "no access".
+2. Run the install line or Zeus > Zeus Setup… in the app.
+   The EU steps are the same on every Mac (steps 12 to 15, or 14 to 17 in the app).
+   The last EU step signs you in to Google one time: answer `y` (in the app: **Sign in to Google**).
+   When your account has no access yet, the step shows the message, and the rest of the setup completes.
+   After you get the roles, run the setup again; you do not sign in again.
+3. When you skipped the sign-in, or it expired, sign in later.
    In the app, the EU start page shows **Sign in to Google Cloud** when it is necessary.
-   In Terminal, use these two commands:
+   The install line signs in again with `ZEUS_INSTALL_EU_SIGN_IN=yes` before `bash`
+   (`curl -fsSL https://raw.githubusercontent.com/theo-henry/zeus-install/main/install.sh | ZEUS_INSTALL_EU_SIGN_IN=yes bash`).
+   In Terminal, you can also use these two commands:
 
 ```text
 gcloud auth application-default login
@@ -246,7 +253,7 @@ Standard Zeus sends it, not EU mode.
 ## Release the Zeus app (maintainer)
 
 The app releases are in the private zeus repo, with tags `app-v<version>` and the assets `Zeus.zip` and `Zeus.zip.sha256`.
-The install line, step 15, and the self-update of the app use the newest of these releases.
+The install line, step 16, and the self-update of the app use the newest of these releases.
 Drafts, pre-releases, and the other releases of the zeus repo are not used.
 
 CI makes a release by itself.

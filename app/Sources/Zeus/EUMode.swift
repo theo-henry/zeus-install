@@ -92,7 +92,8 @@ struct EUProfile: Equatable {
 }
 
 /// What a Mac needs for EU mode. The Zeus setup installs it (install.sh, the EU steps), the same on every Mac.
-/// The Google sign-in is not part of it: the EU start checks it and gives the sign-in button (`EUStartFailure`).
+/// The Google sign-in is not part of it: the setup offers it (a user can skip it), and the EU start checks it and gives
+/// the sign-in button (`EUStartFailure`).
 enum EUSetup {
     /// The parts that are missing, in words; empty when EU mode can start.
     static func missing(profile: EUProfile = .load()) -> [String] {

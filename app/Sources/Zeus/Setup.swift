@@ -39,6 +39,7 @@ final class SetupModel: ObservableObject {
         Step(id: 14, name: "Google Cloud CLI", note: "For EU mode. Installed in ~/google-cloud-sdk."),
         Step(id: 15, name: "EU workspace", note: "Copied to ~/Code/zeus-eu, or updated there."),
         Step(id: 16, name: "Zeus plugins of EU mode", note: "Installed or updated in ~/.zeus/eu/claude."),
+        Step(id: 17, name: "Google sign-in", note: "For EU mode. Your browser opens. You can skip it."),
     ]
     @Published var phase: Phase = .checking
     @Published var logText = ""
@@ -147,7 +148,11 @@ final class SetupModel: ObservableObject {
             case "always": set(.always)
             default: set(.todo)
             }
-        case "running": set(.running); question = nil
+        case "running":
+            set(.running)
+            question = nil
+            // A link of an earlier step (such as the Claude login) is not the link of this step.
+            lastLink = nil
         case "done": set(.done); question = nil
         case "skipped": set(.skipped); question = nil
         case "failed": set(.failed); question = nil
@@ -212,6 +217,7 @@ struct SetupView: View {
                 checklist.frame(width: 300)
                 VStack(alignment: .leading, spacing: 10) {
                     prompts
+                    googleSignIn
                     output
                 }
             }
@@ -223,7 +229,7 @@ struct SetupView: View {
         .foregroundStyle(Brand.foreground)
         .tint(Brand.accent)
         .preferredColorScheme(.dark)
-        .frame(minWidth: 860, minHeight: 640)
+        .frame(minWidth: 860, minHeight: 700)
     }
 
     private var header: some View {
@@ -263,27 +269,36 @@ struct SetupView: View {
     }
 
     private var steps: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 9) {
-                ForEach(model.steps) { step in
-                    HStack(alignment: .top, spacing: 9) {
-                        icon(step.state).frame(width: 18, height: 18)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(step.name).fontWeight(step.state == .running ? .semibold : .regular)
-                            // Instructions matter only for a step that still has to run.
-                            let done = [.ok, .done, .skipped].contains(step.state)
-                            let note = !step.detail.isEmpty ? step.detail : done ? "" : step.note
-                            if !note.isEmpty {
-                                Text(note).font(.caption)
-                                    .foregroundStyle(step.state == .failed ? Color.red : Color.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(model.steps) { step in
+                        HStack(alignment: .top, spacing: 9) {
+                            icon(step.state).frame(width: 18, height: 18)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(step.name).fontWeight(step.state == .running ? .semibold : .regular)
+                                // Instructions matter only for a step that still has to run.
+                                let done = [.ok, .done, .skipped].contains(step.state)
+                                let note = !step.detail.isEmpty ? step.detail : done ? "" : step.note
+                                if !note.isEmpty {
+                                    Text(note).font(.caption)
+                                        .foregroundStyle(step.state == .failed ? Color.red : Color.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                             }
                         }
+                        .id(step.id)
                     }
                 }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // The step that runs, or else the last failed step, stays in view (the list can be longer than the window).
+            .onChange(of: model.steps) { steps in
+                guard let step = steps.first(where: { $0.state == .running }) ?? steps.last(where: { $0.state == .failed })
+                else { return }
+                withAnimation { proxy.scrollTo(step.id, anchor: .center) }
+            }
         }
     }
 
@@ -318,6 +333,18 @@ struct SetupView: View {
                     Button("Accept") { model.answerQuestion(true) }.keyboardShortcut(.defaultAction)
                 }
             }
+        } else if let question = model.question, question.step == 17 {
+            promptBox {
+                Text("Sign in to Google for EU mode?").fontWeight(.semibold)
+                Text("EU mode runs Claude on Google Cloud in the EU. Sign in with your work email. If you do not use EU mode, skip it; Zeus does not ask again.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Spacer()
+                    Button("Skip") { model.answerQuestion(false) }
+                    Button("Sign in to Google") { model.answerQuestion(true) }.keyboardShortcut(.defaultAction)
+                }
+            }
         } else if let question = model.question {
             promptBox {
                 Text(question.prompt).fontWeight(.semibold)
@@ -350,6 +377,22 @@ struct SetupView: View {
                     .font(.callout).foregroundStyle(.secondary)
                 HStack {
                     Button("Open the login page") { NSWorkspace.shared.open(link) }
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var googleSignIn: some View {
+        if model.phase == .installing, model.question == nil, model.steps.first(where: { $0.id == 17 })?.state == .running,
+           let link = model.lastLink {
+            promptBox {
+                Text("Google sign-in").fontWeight(.semibold)
+                Text("Sign in to Google in your browser and allow the access. If no browser window opened, open the link.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack {
+                    Button("Open the sign-in page") { NSWorkspace.shared.open(link) }
                     Spacer()
                 }
             }
@@ -497,7 +540,7 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
     let model = SetupModel()
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 680),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 740),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.titlebarAppearsTransparent = true

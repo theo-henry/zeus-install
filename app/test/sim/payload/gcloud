@@ -1,9 +1,12 @@
 #!/bin/bash
 # Simulated Google Cloud CLI (the installer puts it in ~/google-cloud-sdk/bin). Each call is logged in
 # $ZEUS_SIM_STATE/gcloud.log. "auth application-default login" writes the credentials file and ends the simulated
-# EU sign-in problem ($ZEUS_SIM_STATE/eu-preflight), as a real sign-in does. With $ZEUS_SIM_STATE/eu-quota-denied, the
-# account has no Service Usage Consumer role: set-quota-project fails with the words of real gcloud. Nothing reaches Google.
+# EU sign-in problem ($ZEUS_SIM_STATE/eu-preflight), as a real sign-in does. Nothing reaches Google.
+# $ZEUS_SIM_STATE/eu-quota-denied, or $ZEUS_SIM_STATE/google-access "none" (see stubs/curl), is an account without the
+# Service Usage Consumer role: set-quota-project fails with the words of real gcloud.
+# $ZEUS_SIM_STATE/google-token-expired makes print-access-token fail, as an expired sign-in.
 S="$ZEUS_SIM_STATE"
+ADC="$HOME/.config/gcloud/application_default_credentials.json"
 printf '%s\n' "$*" >>"$S/gcloud.log"
 case "$*" in
   "--version") echo "Google Cloud SDK 593.0.0 (simulated)" ;;
@@ -14,16 +17,27 @@ case "$*" in
     sleep 1
     if [ -f "$S/eu-sign-in-fails" ]; then echo "ERROR: (gcloud.auth.application-default.login) simulated failure" >&2; exit 1; fi
     mkdir -p "$HOME/.config/gcloud"
-    printf '{"type": "authorized_user", "simulated": true}\n' >"$HOME/.config/gcloud/application_default_credentials.json"
-    rm -f "$S/eu-preflight"
-    echo "Credentials saved to file: [$HOME/.config/gcloud/application_default_credentials.json]"
+    printf '{"type": "authorized_user", "simulated": true}\n' >"$ADC"
+    rm -f "$S/eu-preflight" "$S/google-token-expired"
+    echo "Credentials saved to file: [$ADC]"
     ;;
-  "auth application-default set-quota-project "*)
-    if [ -f "$S/eu-quota-denied" ]; then
-      printf 'ERROR: (gcloud.auth.application-default.set-quota-project) Cannot add the project "%s" to application default credentials (ADC) as a quota project because the account in ADC does not have the "serviceusage.services.use" permission on this project.\n' "${!#}" >&2
+  "auth application-default print-access-token")
+    if [ ! -f "$ADC" ] || [ -f "$S/google-token-expired" ]; then
+      echo "ERROR: (gcloud.auth.application-default.print-access-token) Reauthentication failed. (simulated)" >&2
       exit 1
     fi
-    echo "Quota project \"${*##* }\" was added to ADC (simulated)."
+    echo "sim-access-token"
+    ;;
+  "auth application-default set-quota-project "*)
+    project="${!#}"
+    if [ -f "$S/eu-quota-denied" ] || [ "$(cat "$S/google-access" 2>/dev/null)" = none ]; then
+      printf 'ERROR: (gcloud.auth.application-default.set-quota-project) Cannot add the project "%s" to application default credentials (ADC) as a quota project because the account in ADC does not have the "serviceusage.services.use" permission on this project.\n' "$project" >&2
+      exit 1
+    fi
+    if [ -f "$ADC" ]; then
+      python3 -c 'import json, sys; c = json.load(open(sys.argv[1])); c["quota_project_id"] = sys.argv[2]; json.dump(c, open(sys.argv[1], "w"))' "$ADC" "$project"
+    fi
+    echo "Quota project \"$project\" was added to ADC (simulated)."
     ;;
   *) echo "gcloud (simulated): $*" ;;
 esac

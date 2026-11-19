@@ -185,7 +185,7 @@ The GitHub CLI does not mark its downloads with the quarantine attribute, so mac
 
 CI publishes a release with `app/release.sh` after each merge to `main` that changes the app (see [Release the Zeus app](../README.md#release-the-zeus-app-maintainer)).
 It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in the private zeus repo.
-`install-app.sh` (through `install.sh --app-only`), step 15 of `install.sh`, and the app's self-update download the newest one.
+`install-app.sh` (through `install.sh --app-only`), step 16 of `install.sh`, and the app's self-update download the newest one.
 
 ## Debug
 
@@ -317,6 +317,7 @@ A Mac with its own folders, a writable npm folder, or a finished login takes the
 app/test/sim/run.sh [screenshot-folder]
 app/test/sim/run.sh --eu [screenshot-folder]   # EU mode only
 app/test/sim/run.sh --vault [screenshot-folder]   # EU vault and Standard read block only
+app/test/sim/run.sh --signin [screenshot-folder]   # Google sign-in step of the setup only
 ```
 
 The test runs the app (behind the other apps) and the bundled installer with `HOME` set to an empty temporary folder, and with
@@ -326,8 +327,8 @@ real home folder, Claude Code, GitHub login, and app settings are not used (the 
 The paste checks use the pasteboard, then put back what the user had on it.
 It presses the app's buttons through the debug test actions and checks the trace:
 
-1. A new Mac: the check finds 15 steps to do; all 16 steps install (with the three EU steps: the Google Cloud CLI, `~/Code/zeus-eu`, and the EU plugins, without shell profile changes), with the Anaconda license, the GitHub
-   one-time code, and the Claude login answered in the app; Start Zeus opens the chat page from `~/Code/zeus`
+1. A new Mac: the check finds 16 steps to do; all 17 steps install (with the four EU steps: the Google Cloud CLI, `~/Code/zeus-eu`, the EU plugins, and the Google sign-in with the EU quota project, without shell profile changes), with the Anaconda license, the GitHub
+   one-time code, the Claude login, and the Google sign-in question answered in the app; the access check gets the token in files, never on a command line; Start Zeus opens the chat page from `~/Code/zeus`
    with `--no-open` and the globe hand-over; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
    Cmd+T tabs start separate sessions and come in without the hand-over; a tab takes the name of the project picked in its chat,
    keeps a name given with Rename, and gets the project name again after an empty name;
@@ -362,7 +363,7 @@ It presses the app's buttons through the debug test actions and checks the trace
    apply at once; a damaged file gives the defaults without a crash; a symbol key shortcut with Shift works in a Zeus Editor window;
    Settings… calls `openSettings` in the chat page, also when it comes while a new tab still loads its chat page.
 5. No access to one private repo: step 5 fails, the setup stops, and nothing after step 5 is installed.
-   An EU step that fails (the Google Cloud CLI download) is a warning: the later steps run, the setup completes,
+   An EU step that fails (the Google Cloud CLI download) is a warning: the later steps run (the Google sign-in fails without gcloud and asks nothing), the setup completes,
    and a switch to EU mode names the missing Google Cloud CLI. In Terminal use, the steps after a failed EU step also run.
    An EU step that stops on a command without its own message (an EU config folder that can not be made) is also reported as failed.
 
@@ -371,6 +372,11 @@ the setup question when EU mode is not set up; a switch stops every Standard ses
 the EU pill, the EU web data store, and the cost label; a 429 error question; a failed start that needs the Google sign-in,
 a failed Google login, a quota project refused for a missing permission (the 403 access message), the sign-in in the terminal, and the retry; a 403 failure; the handover request that names the project of the tab, the handover with findings, an accepted finding, an edited summary, a removed file,
 the release, and `released.json`; the handoff commands run the Standard `scripts/zeus.py` and never a script or module of the EU workspace; the switch back resumes the Standard tabs and never an EU tab; and a restart in EU mode.
+
+`--signin` runs the Google sign-in step of the setup (`app/test/sim/signin.sh`) with a simulated `gcloud` and simulated Google answers:
+**Skip** completes the setup without a sign-in, and the setup again does not ask; an account without the two roles gets the message for the roles with the account, and the setup completes;
+after the roles, the setup again sets the EU quota project without a question or a second sign-in; a Mac that is signed in gets no question;
+in Terminal use, the same results are warnings that do not stop the setup, and without a keyboard an expired sign-in is skipped with a note.
 
 `--vault` runs the EU vault and Standard read block scenario (`app/test/sim/vault.sh`) with a real encrypted disk image in the temporary home folder,
 a keychain file of the test (`ZEUS_APP_TEST_KEYCHAIN`) instead of the login keychain, and test answers instead of Touch ID (`ZEUS_APP_TEST_VAULT_AUTH`), so no macOS window opens:
