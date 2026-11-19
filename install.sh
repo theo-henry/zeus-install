@@ -70,9 +70,6 @@ EU_VERTEX_PROJECT="project-4bf0bacd-fec4-406b-a99"
 # Zeus Editor read (src/eu/preflight.js), and one permission of each of the two roles, which the access check tests.
 ADC_FILE="$HOME/.config/gcloud/application_default_credentials.json"
 EU_PERMISSIONS='["aiplatform.endpoints.predict", "serviceusage.services.use"]'
-# The user skipped the Google sign-in: the installer does not ask again. Not in ~/.zeus/eu: the installer writes nothing
-# there except the EU steps' own folders.
-EU_SIGN_IN_SKIPPED="$HOME/.zeus/google-sign-in-skipped"
 # The Google Cloud CLI for the EU sign-in: the official macOS archive, pinned by version and checksum. gcloud updates
 # itself later (gcloud components update) when the user wants.
 GCLOUD_VERSION="593.0.0"
@@ -1097,8 +1094,8 @@ else:
 ' "$EU_PERMISSIONS" 2>/dev/null || echo error)"
 }
 
-# Returns success when the user wants the Google sign-in now. The answer "no" is kept, so that the installer does not
-# ask again.
+# Returns success when the user wants the Google sign-in now. The installer asks on each setup run while the user is
+# signed out.
 eu_sign_in_wanted() {
   local answer
   if ! { exec 3</dev/tty; } 2>/dev/null; then
@@ -1106,15 +1103,12 @@ eu_sign_in_wanted() {
     return 1
   fi
   exec 3<&-
-  [ ! -f "$EU_SIGN_IN_SKIPPED" ] || return 1
   info "EU mode runs Claude on Google Cloud in the EU. It needs a Google sign-in with your work email."
-  info "If you do not use EU mode, answer n. The installer then does not ask again."
+  info "If you do not use EU mode, answer n."
   answer="$(ask "Sign in to Google for EU mode now? (y/n)")"
   case "$answer" in
     y | Y | yes | YES | Yes) return 0 ;;
   esac
-  mkdir -p "$(dirname "$EU_SIGN_IN_SKIPPED")"
-  : >"$EU_SIGN_IN_SKIPPED"
   return 1
 }
 
@@ -1141,7 +1135,6 @@ sign_in_google() {
       record "skipped" "Google sign-in (EU mode, skipped)"
       return 0
     fi
-    rm -f "$EU_SIGN_IN_SKIPPED"
     info "Your browser opens. Sign in to Google with your work email, then allow the access."
     run_with_timeout 600 with_tty env -u CLOUDSDK_CORE_DISABLE_PROMPTS -u GOOGLE_APPLICATION_CREDENTIALS \
       "$EU_GCLOUD" auth application-default login || status=$?
@@ -1299,8 +1292,8 @@ check_steps() {
   if find_gcloud >/dev/null; then state 14 ok; else state 14 todo; fi
   if [ -d "$EU_WORKSPACE/.git" ]; then state 15 ok; else state 15 todo; fi
   if command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state 16 ok; else state 16 todo; fi
-  # No network here: a sign-in with the EU quota project, or a skip. The step itself checks the access.
-  if [ -f "$EU_SIGN_IN_SKIPPED" ] || { [ -f "$ADC_FILE" ] && [ "$(adc_quota_project)" = "$EU_VERTEX_PROJECT" ]; }; then
+  # No network here: a sign-in with the EU quota project. The step itself checks the access.
+  if [ -f "$ADC_FILE" ] && [ "$(adc_quota_project)" = "$EU_VERTEX_PROJECT" ]; then
     state "$EU_SIGN_IN_STEP" ok
   else
     state "$EU_SIGN_IN_STEP" todo

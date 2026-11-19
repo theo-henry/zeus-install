@@ -342,7 +342,7 @@ struct SetupView: View {
         } else if let question = model.question, question.step == model.googleSignInStep {
             promptBox {
                 Text("Sign in to Google for EU mode?").fontWeight(.semibold)
-                Text("EU mode runs Claude on Google Cloud in the EU. Sign in with your work email. If you do not use EU mode, skip it; Zeus does not ask again.")
+                Text("EU mode runs Claude on Google Cloud in the EU. Sign in with your work email. If you do not use EU mode, skip it.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {

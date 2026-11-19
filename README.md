@@ -131,7 +131,7 @@ The installer skips each step that is already done.
 | 12 | Google Cloud CLI 593.0.0 in `~/google-cloud-sdk`, for the Google sign-in of EU mode. The installer checks the SHA-256 of the official macOS archive and does not change your shell profile. | `gcloud` is already installed (on your `PATH`, in `~/google-cloud-sdk`, or from Homebrew). |
 | 13 | Copy of the zeus repo to `~/Code/zeus-eu`, the EU workspace, or an update of an existing copy (fast-forward only) | The copy is already up to date, or it cannot update safely. |
 | 14 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, the first-start settings of that folder, and the status line of Standard Claude Code (see [EU mode](#eu-mode)) | Never skipped. Installed plugins are updated. |
-| 15 | Google sign-in of EU mode: `gcloud auth application-default login` in the browser, a check of the access of your Google account to the EU project, and the EU project as the quota project of the sign-in. The installer asks first; answer `n` if you do not use EU mode. The access check costs nothing: it calls no model. Without access, the step shows the message for the two roles with your Google account (see [Set up EU mode](#set-up-eu-mode)). | You are already signed in with access to the EU project, or you skipped the sign-in before (the installer asks only one time). |
+| 15 | Google sign-in of EU mode: `gcloud auth application-default login` in the browser, a check of the access of your Google account to the EU project, and the EU project as the quota project of the sign-in. The installer asks first; answer `n` if you do not use EU mode. The access check costs nothing: it calls no model. Without access, the step shows the message for the two roles with your Google account (see [Set up EU mode](#set-up-eu-mode)). | You are already signed in with access to the EU project. While you are signed out, the installer asks on each run. |
 | 16 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
 
 The installer does not use `sudo`.
@@ -192,7 +192,8 @@ A status line that you set yourself in `~/.zeus/eu/claude/settings.json` stays a
    Without it, the sign-in step or the EU start check fails with "no access".
 2. Run the install line or Zeus > Zeus Setup… in the app.
    The EU steps are the same on every Mac (steps 12 to 15, or 14 to 17 in the app).
-   The last EU step signs you in to Google one time: answer `y` (in the app: **Sign in to Google**).
+   The last EU step signs you in to Google: answer `y` (in the app: **Sign in to Google**).
+   While you are signed out, each setup run asks again.
    When your account has no access yet, the step shows the message, and the rest of the setup completes.
    After you get the roles, run the setup again; you do not sign in again.
 3. When you skipped the sign-in, or it expired, sign in later.

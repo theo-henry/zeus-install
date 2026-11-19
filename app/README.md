@@ -376,7 +376,7 @@ a failed Google login, a quota project refused for a missing permission (the 403
 the release, and `released.json`; the handoff commands run the Standard `scripts/zeus.py` and never a script or module of the EU workspace; the switch back resumes the Standard tabs and never an EU tab; and a restart in EU mode.
 
 `--signin` runs the Google sign-in step of the setup (`app/test/sim/signin.sh`) with a simulated `gcloud` and simulated Google answers:
-**Skip** completes the setup without a sign-in, and the setup again does not ask; an account without the two roles gets the message for the roles with the account, and the setup completes;
+**Skip** completes the setup without a sign-in and writes no marker file, and the setup again asks while the user is signed out; an account without the two roles gets the message for the roles with the account, and the setup completes;
 after the roles, the setup again sets the EU quota project without a question or a second sign-in; a Mac that is signed in gets no question;
 in Terminal use, the same results are warnings that do not stop the setup, and without a keyboard an expired sign-in is skipped with a note.
 
