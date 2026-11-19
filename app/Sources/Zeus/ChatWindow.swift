@@ -462,6 +462,7 @@ final class ChatTab: NSObject {
             terminal.attach(process)
             if terminal.webView.isHidden { toggleTerminal() }
             Trace.log("eu sign-in: started \(process.terminalPID)")
+            let output = process.log
             process.onExit = { [weak self] code in
                 guard let self else { return }
                 Trace.log("eu sign-in: ended code=\(code)")
@@ -470,7 +471,9 @@ final class ChatTab: NSObject {
                     self.signInNote = nil
                     self.onRetry?()
                 } else {
-                    self.signInNote = "The Google sign-in did not complete (exit code \(code)). See the terminal below (Cmd+J)."
+                    let note = GoogleSignIn.failureNote(code: code, output: output.text)
+                    Trace.log("eu sign-in: note \(note)")
+                    self.signInNote = note
                     self.render()
                 }
             }
