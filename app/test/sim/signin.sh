@@ -72,6 +72,7 @@ signin_scenario() {
   setup_round 4
   check "after the roles, the setup again completes the step without a question or a new sign-in" \
     'wait_for "setup event: done 17 Google sign-in (EU mode, sim@example.com)" 120 && setup_ended 4 && [ "$(grep -c "setup event: ask 17 " "$TRACE")" = 2 ] && [ "$(grep -c "^auth application-default login$" "$STATE/gcloud.log")" = 1 ]'
+  check "after the roles, the sign-in row shows no old message" '[ "$(grep -c "setup detail 17: " "$TRACE")" = 1 ]'
   check "the EU project is then the quota project" 'grep -q "\"quota_project_id\": \"project-4bf0bacd-fec4-406b-a99\"" "$adc"'
   shot signin-4-access
 

@@ -139,7 +139,8 @@ final class SetupModel: ObservableObject {
         func set(_ state: StepState) {
             guard let number, let index = steps.firstIndex(where: { $0.id == number }) else { return }
             steps[index].state = state
-            if !text.isEmpty, state == .failed { steps[index].detail = text }
+            // A message of an earlier run is not the result of this run.
+            steps[index].detail = state == .failed ? text : ""
         }
         switch kind {
         case "state":
@@ -163,6 +164,7 @@ final class SetupModel: ObservableObject {
 
     private func ended(code: Int32, check: Bool) {
         Trace.log("setup ended: check=\(check) code=\(code)")
+        for step in steps where !step.detail.isEmpty { Trace.log("setup detail \(step.id): \(step.detail)") }
         process = nil
         idleTimer?.invalidate()
         waitingForInput = false
