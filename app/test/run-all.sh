@@ -48,6 +48,7 @@ run_test "pty" 300 "$TEST_DIR/pty/run.sh"
 # A release build and a debug build of the app (swift build -c release takes minutes on a busy Mac).
 run_test "release env" 900 "$TEST_DIR/release-env/run.sh"
 run_test "plugin-scope" 300 "$TEST_DIR/plugin-scope/run.sh"
+run_test "env-failures" 300 "$TEST_DIR/env-failures/run.sh"
 # Each update part builds the development app first (swift build): on a busy Mac that alone can take minutes.
 run_test "update install" 600 "$TEST_DIR/update/run.sh" install
 run_test "update app" 600 "$TEST_DIR/update/run.sh" app
