@@ -72,6 +72,8 @@ GCLOUD_DIR="$HOME/google-cloud-sdk"
 LOCAL_BIN="$HOME/.local/bin"
 NODE_DIR="$HOME/.local/node"
 TOOLS_ENV="$HOME/.local/zeus-tools"
+# Where content-cli goes when the global folder of npm is not writable.
+NPM_USER_PREFIX="$HOME/.npm-global"
 # The line is written to ~/.zprofile as it is, so it must not expand here.
 # shellcheck disable=SC2016
 PATH_LINE='export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"'
@@ -171,16 +173,61 @@ ask() {
   printf '%s' "$answer"
 }
 
+# Prints the device of the terminal of this script, such as /dev/ttys003. A program that reads "/dev/tty" as its
+# input can fail: Claude Code (Bun) stops with "EINVAL: invalid argument, kqueue" on it, but it works with the real
+# device. It falls back to /dev/tty when the device name is not known.
+keyboard_device() {
+  local name
+  name="$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')"
+  case "$name" in
+    ttys[0-9]*) if [ -c "/dev/$name" ]; then printf '/dev/%s' "$name"; return; fi ;;
+  esac
+  printf '/dev/tty'
+}
+
 # Runs a command with the keyboard as its input.
 with_tty() {
+  local device
   if ! { exec 3</dev/tty; } 2>/dev/null; then
     fail "This step needs the keyboard, but no keyboard is connected." \
       "Run the install line in the Terminal app."
+  fi
+  device="$(keyboard_device)"
+  if [ "$device" != "/dev/tty" ]; then
+    exec 3<&-
+    if ! { exec 3<"$device"; } 2>/dev/null; then exec 3</dev/tty; fi
   fi
   "$@" <&3
   local status=$?
   exec 3<&-
   return "$status"
+}
+
+# Stops with one exact command when a folder of the user belongs to another user (usually root, after an earlier
+# install with sudo). The installer never runs sudo itself. A missing folder is fine: the tools create it.
+# Arguments: the folders to check, as paths.
+require_owned() {
+  local dir bad=() owner
+  for dir in "$@"; do
+    [ -e "$dir" ] || continue
+    owner="$(stat -L -f %u "$dir" 2>/dev/null || true)"
+    if [ -n "$owner" ] && [ "$owner" != "$(id -u)" ]; then bad+=("$dir"); fi
+  done
+  [ "${#bad[@]}" -gt 0 ] || return 0
+  stop_not_owned "${bad[@]}"
+}
+
+# Stops with one exact "sudo chown" line for folders that belong to another user.
+# Arguments: the folders, as paths.
+stop_not_owned() {
+  local dir line="sudo chown -R \$(whoami)" shown=()
+  for dir in "$@"; do
+    shown+=("${dir/#$HOME/~}")
+  done
+  line="$line ${shown[*]}"
+  fail "These folders belong to another user, so the tools cannot save their settings there: ${shown[*]}" \
+    "Run this line in the Terminal app. It asks for your Mac password:" \
+    "" "$line" ""
 }
 
 # Returns success when version $1 is at least version $2.
@@ -591,6 +638,16 @@ install_claude() {
   record "done" "Claude Code"
 }
 
+# Installs content-cli with npm and adds the output to the log. Arguments: more npm options.
+# Stops with the exact "sudo chown" line when the npm cache has files of another user (after an earlier sudo npm).
+npm_install_content_cli() {
+  npm install -g "$@" @celonis/content-cli --no-fund --no-audit >>"$LOG_DIR/content-cli.log" 2>&1 && return 0
+  if grep -q 'cache folder contains root-owned files' "$LOG_DIR/content-cli.log"; then
+    stop_not_owned "$HOME/.npm"
+  fi
+  return 1
+}
+
 # Step 8 - Celonis content-cli.
 install_content_cli() {
   step 8 "Celonis content-cli"
@@ -600,12 +657,22 @@ install_content_cli() {
     return
   fi
   # npm hides parts of some paths in its output, so do not test its prefix folder here.
-  if ! npm install -g @celonis/content-cli --no-fund --no-audit >"$LOG_DIR/content-cli.log" 2>&1; then
-    if grep -q 'EACCES' "$LOG_DIR/content-cli.log"; then
-      fail "npm cannot install global packages without sudo." \
-        "Ask $ZEUS_OWNER for help. Do not use sudo." "See the log: $LOG_DIR/content-cli.log"
+  : >"$LOG_DIR/content-cli.log"
+  if ! npm_install_content_cli; then
+    if ! grep -q 'EACCES' "$LOG_DIR/content-cli.log"; then
+      fail "The content-cli install failed." "See the log: $LOG_DIR/content-cli.log"
     fi
-    fail "The content-cli install failed." "See the log: $LOG_DIR/content-cli.log"
+    # The global folder of npm (for example /usr/local) is not writable. Without sudo, install into a folder of
+    # the user and link the command into ~/.local/bin, which is on PATH for this run and in ~/.zprofile.
+    info "The global folder of npm is not writable. Installing content-cli in $NPM_USER_PREFIX instead."
+    mkdir -p "$NPM_USER_PREFIX" "$LOCAL_BIN" ||
+      fail "The folder $NPM_USER_PREFIX could not be created."
+    npm_install_content_cli --prefix "$NPM_USER_PREFIX" ||
+      fail "The content-cli install failed." "See the log: $LOG_DIR/content-cli.log"
+    [ -x "$NPM_USER_PREFIX/bin/content-cli" ] ||
+      fail "content-cli was installed, but the command file is missing." "See the log: $LOG_DIR/content-cli.log"
+    ln -sf "$NPM_USER_PREFIX/bin/content-cli" "$LOCAL_BIN/content-cli"
+    add_path_line
   fi
   hash -r
   command -v content-cli >/dev/null 2>&1 ||
@@ -983,6 +1050,14 @@ login_claude() {
     record "skipped" "Claude login"
     return
   fi
+  # Without a keyboard (the app's Try again, or a pipe with no terminal) the login cannot run here.
+  if ! { exec 3</dev/tty; } 2>/dev/null; then
+    fail "The Claude login needs the Terminal app, and no terminal is connected." \
+      "1. Open the Terminal app and run: claude" \
+      "2. Log in to Claude there, then type /exit" \
+      "Then the setup finds the login and goes on."
+  fi
+  exec 3<&-
   info "Your browser opens. Log in to Claude there."
   with_tty claude auth login ||
     fail "The Claude login did not complete."
@@ -1483,6 +1558,14 @@ main() {
   if [ -x "$HOME/anaconda3/bin/conda" ]; then
     PATH="$PATH:$HOME/anaconda3/bin"
     export PATH
+  fi
+
+  # Before any step: a folder of the user that root owns stops a step half way (for example "mkdir ~/.config/gh:
+  # permission denied" after the browser login). A Mac with its own folders passes without any output.
+  if [ -n "$APP_ONLY" ]; then
+    require_owned "$HOME/.config" "$HOME/.config/gh" "$HOME/.local" "$LOCAL_BIN"
+  else
+    require_owned "$HOME/.config" "$HOME/.config/gh" "$HOME/.local" "$LOCAL_BIN" "$HOME/.npm" "$HOME/.claude"
   fi
 
   install_xcode_tools

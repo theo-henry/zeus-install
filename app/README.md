@@ -286,6 +286,22 @@ It checks that a failed update, an npm folder that needs `sudo`, and an update t
 It checks that the time limit also stops the child processes of the update.
 It also checks the `@@zeus` lines of step 7 in app mode.
 
+## Test the environment failures
+
+```bash
+app/test/env-failures/run.sh
+```
+
+The test covers three problems of a Mac that is not set up correctly, and a Mac that is.
+A folder of the user that root owns (`~/.config`, `~/.config/gh`, `~/.npm`, `~/.local`, `~/.local/bin`, `~/.claude`) stops the installer before step 1 with one `sudo chown` line.
+Root-owned files in the npm cache stop step 8 with the `sudo chown` line for `~/.npm`.
+The installer never runs `sudo`.
+The Claude login command gets the real terminal device as its input, not `/dev/tty`, because Claude Code stops with `EINVAL: invalid argument, kqueue` on `/dev/tty`.
+Without a terminal, the login step tells the user to run `claude` in the Terminal app, and an existing login is skipped.
+When the global folder of npm is not writable, content-cli goes to `~/.npm-global` and is linked into `~/.local/bin`.
+A root-owned folder in the test is a link to `/private/etc` in a temporary home folder, so no `sudo` and no real folder is used.
+A Mac with its own folders, a writable npm folder, or a finished login takes the same path as before, with no new output.
+
 ## Test on a simulated new Mac
 
 ```bash
