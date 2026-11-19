@@ -10,11 +10,17 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) process.exit(2);
 process.stdin.setRawMode(true);
 const state = process.env.ZEUS_SIM_STATE;
 const record = (event, detail = '') => fs.appendFileSync(`${state}/sessions`, `${process.pid} ${event} ${detail}\n`);
-// EU mode (`zeus --eu`, zeus-editor src/chat/cli.js): its own editor state folder and workspace, a Google Cloud check
+// EU mode (`zeus --eu`, zeus-editor src/chat/cli.js): its own editor state folder in the shared workspace, a Google Cloud check
 // before the start, and the session cost after each reply.
 const eu = process.argv.includes('--eu');
 record('start', eu ? 'eu' : 'standard');
 if (eu) {
+ // zeus refuses EU mode without the open EU vault (zeus eu_mode: the marker in the EU state folder).
+ if (!fs.existsSync(path.join(os.homedir(), '.zeus', 'eu', '.zeus-vault'))) {
+  record('no-vault');
+  process.stderr.write('zeus: The EU vault is not open. Open EU mode in the Zeus app.\n');
+  process.exit(2);
+ }
  // The EU preflight (zeus-editor src/eu/preflight.js): <state>/eu-preflight names the step that fails.
  let failing = '';
  try { failing = fs.readFileSync(`${state}/eu-preflight`, 'utf8').trim(); } catch {}
@@ -149,7 +155,7 @@ const control = net.createServer((socket) => {
     if (eu && fs.existsSync(`${state}/eu-summary.md`)) {
      const project = fs.readFileSync(`${state}/eu-summary-project`, 'utf8').trim();
      const id = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z') + '-' + crypto.randomBytes(3).toString('hex');
-     const folder = path.join(os.homedir(), 'Code', 'zeus-eu', 'clients', project, 'handoff', id);
+     const folder = path.join(os.homedir(), 'Code', 'zeus', 'clients', project, 'handoff', id);
      setTimeout(() => { fs.mkdirSync(folder, {recursive:true}); fs.copyFileSync(`${state}/eu-summary.md`, path.join(folder, 'summary.md')); record('summary', id); }, 1500);
     }
     reply({ok:true,result:{id:message.send_id}});
@@ -170,7 +176,7 @@ setTimeout(()=>control.listen(socketPath,()=>server.listen(0,'127.0.0.1',()=>{
  console.log(`Zeus chat: http://127.0.0.1:${server.address().port}/chat/${process.pid}#k=simulated`);
 })), Number(process.env.ZEUS_SIM_START_DELAY || 0));
 fs.writeFileSync(`${state}/zeus-started`,JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),app:process.env.ZEUS_APP}));
-fs.appendFileSync(`${state}/zeus-starts`,JSON.stringify({pid:process.pid,args:process.argv.slice(2),cwd:process.cwd()})+'\n');
+fs.appendFileSync(`${state}/zeus-starts`,JSON.stringify({pid:process.pid,args:process.argv.slice(2),cwd:process.cwd(),run:process.env.ZEUS_APP_RUN||null})+'\n');
 // The read block test (app/test/sim/vault.sh): a Standard session tries the EU folders, as a Claude Bash command would.
 if (!eu && fs.existsSync(`${state}/jail-probe.json`)) {
  import('node:child_process').then(({spawn}) => spawn(process.execPath, [path.join(process.env.ZEUS_SIM_PAYLOAD, 'jail-probe.mjs'),

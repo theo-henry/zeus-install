@@ -95,7 +95,7 @@ Links to other websites open in your default browser. Zeus Editor pages stay in 
 The app runs its own copy of `install.sh` in app mode (`ZEUS_INSTALL_APP=1`).
 In app mode, the installer prints `@@zeus` status lines for the checklist, `--check` only reports which steps are done,
 and two more steps run: the Zeus skill plugins (step 12) and the Claude login (step 13).
-Steps 14 to 16 set up EU mode (see [EU mode](#eu-mode)).
+Steps 14 and 15 set up EU mode (see [EU mode](#eu-mode)).
 To build the app, see [app/README.md](app/README.md).
 
 ## Install in Terminal only
@@ -129,21 +129,20 @@ The installer skips each step that is already done.
 | 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. |
 | 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
 | 12 | Google Cloud CLI 593.0.0 in `~/google-cloud-sdk`, for the Google sign-in of EU mode. The installer checks the SHA-256 of the official macOS archive and does not change your shell profile. | `gcloud` is already installed (on your `PATH`, in `~/google-cloud-sdk`, or from Homebrew). |
-| 13 | Copy of the zeus repo to `~/Code/zeus-eu`, the EU workspace, or an update of an existing copy (fast-forward only) | The copy is already up to date, or it cannot update safely. |
-| 14 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, the first-start settings of that folder, and the status line of Standard Claude Code (see [EU mode](#eu-mode)) | Never skipped. Installed plugins are updated. |
-| 15 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
+| 13 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, the first-start settings of that folder, and the status line of Standard Claude Code (see [EU mode](#eu-mode)). That folder is in the EU vault, so the step runs only while the vault is open. | The EU vault is not open (or not made yet). The Zeus app asks you to run the setup again after it opened the vault. Installed plugins are updated. |
+| 14 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
 
 The installer does not use `sudo`.
 Your Mac password can be necessary only for the Apple pop-up in step 1.
 The installer asks you to accept the Anaconda license before it installs Anaconda.
 Logs for Anaconda, the GitHub CLI, and the Claude Code update are in `~/Library/Logs/zeus-install`.
-A failed EU step (12 to 14, or 14 to 16 in the app) does not stop the installer.
+A failed EU step (12 and 13, or 14 and 15 in the app) does not stop the installer.
 It is a warning, the other steps continue, and the Zeus app is installed.
 The app shows what EU mode is missing when you switch to EU mode; run the setup again to finish it.
 
 ## After the install
 
-When step 15 installed the Zeus app, it opens. Follow its setup window; it does the steps below for you.
+When step 14 installed the Zeus app, it opens. Follow its setup window; it does the steps below for you.
 Without the app:
 
 1. Close Terminal and open a new Terminal window.
@@ -175,16 +174,21 @@ EU mode runs Zeus with Claude on Google Vertex AI in the EU (location `eu`), for
 The default model is Claude Sonnet 5.5; Opus 5.5 and Haiku 5.5 are also available, and small background calls use Haiku 5.5.
 Fable is not available in EU mode.
 Web search is available; web fetch and MCP servers are off.
-EU mode has its own workspace (`~/Code/zeus-eu`), its own Claude Code folder (`~/.zeus/eu/claude`), and its own Zeus Editor state (`~/.zeus/eu/editor`).
-Nothing of EU mode goes into `~/Code/zeus` or `~/.claude`.
+EU mode and Standard mode work in the same workspace, `~/Code/zeus`.
+A project that you make in one mode is in the other mode at once.
+EU mode keeps its Claude Code folder (`~/.zeus/eu/claude`), its Zeus Editor state (`~/.zeus/eu/editor`), and its client data in the EU vault.
+The EU vault is an encrypted disk image (`~/Library/Application Support/Zeus/eu-vault.sparsebundle`) that the app opens at `~/.zeus/eu` with Touch ID.
+Standard sessions can not read the vault.
+Nothing of EU mode goes into `~/.claude`.
 EU Claude Code shows the same status line as Standard Claude Code.
-Each install and each EU session start in the app copy it again from `~/.claude/settings.json`, or remove it when Standard has none.
+Each install while the EU vault is open and each EU session start in the app copy it again from `~/.claude/settings.json`, or remove it when Standard has none.
 A status line that you set yourself in `~/.zeus/eu/claude/settings.json` stays as it is.
 
 ### Set up EU mode
 
 1. Run the install line or Zeus > Zeus Setup… in the app.
-   The EU steps are the same on every Mac (steps 12 to 14, or 14 to 16 in the app).
+   The EU steps are the same on every Mac (steps 12 and 13, or 14 and 15 in the app).
+   The EU plugins go into the EU vault, so they install at the first EU start (step 4).
 2. Ask the Zeus maintainer to give your Google account access to the EU project.
    The maintainer gives the account two roles on the project `project-4bf0bacd-fec4-406b-a99`:
    Vertex AI User (`roles/aiplatform.user`) and Service Usage Consumer (`roles/serviceusage.serviceUsageConsumer`).
@@ -199,10 +203,28 @@ gcloud auth application-default login
 gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99
 ```
 
+4. The first EU start in the app makes the EU vault:
+   - Click **EU** in the mode switch, then **Switch to EU**.
+   - Confirm with Touch ID (or your login password). The app makes the vault and opens it.
+   - The app says that the Zeus plugins of EU mode are missing. Click **Run the Zeus Setup**. The setup installs them in the open vault.
+   - Click **EU** again. EU mode starts.
+
+   Later EU starts ask for Touch ID once per app run, to open the vault.
+   After an app update, macOS asks once for your login password so that the new app can read the key of the vault: click **Always Allow**.
+   The vault locks when you quit the app.
+
+The first start of this app version removes EU mode from before the shared workspace, one time: the old EU workspace `~/Code/zeus-eu` (only when it is a copy of the zeus repo) and the old files in `~/.zeus/eu`.
+These were test data only; they are not moved.
+The app never removes the vault, an open vault, or `~/Code/zeus`.
+The list of what it removed is in `~/Library/Logs/zeus-install/eu-cleanup.log`.
+
 ### Use EU mode in the app
 
 - The mode switch is at the right of the tab bar (`Standard | EU`).
   A green EU pill shows in EU mode.
+- EU mode starts only when the EU vault is open.
+  When Touch ID is cancelled, the app stays in Standard mode.
+  At an app start in EU mode, it starts Standard mode and says why; switch to EU to try again.
 - A switch closes all the tabs of the current mode and stops their sessions before the other mode starts.
   The app asks first when a tab has unsent text or Zeus is working.
   The tabs of each mode come back when you switch back to that mode.
@@ -210,7 +232,7 @@ gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99
 - Each mode has its own web data (cookies and storage) and its own terminal environment.
 - In EU mode, the tab bar shows **EU data access** for the project of the tab.
   It is off for each project until you turn it on.
-  When it is on, Zeus can read client data rows of that project in EU mode (SQL results, data profiles, research results) and write row files into the project's `out` folder.
+  When it is on, Zeus can read client data rows of that project in EU mode (SQL results, data profiles, research results) and write row files into the project's folder in the EU vault.
   Only you can turn it on or off, with this switch; Zeus can not.
   Tell Zeus in the chat when you turned it on.
 - In EU mode, the tab bar shows an estimate of the session cost in euros, at the daily reference rate of the European Central Bank.
@@ -231,7 +253,7 @@ A person releases it in the app:
    Then click **Review…** next to the project.
    When no project has work to hand over, the window says why.
 3. Review the summary and the files.
-   The app copies them into its own folder (`~/Library/Application Support/Zeus/handover`), which EU Claude can not write, and scans them for client data with the Zeus scripts of the Standard workspace, which EU Claude can not change.
+   The app copies them into its own folder (`~/Library/Application Support/Zeus/handover`), which EU Claude can not write, and scans them for client data with the Zeus scripts of the workspace, whose `scripts` folder EU Claude can not write.
    Each finding group is one value (with its places in all files), and the window shows the value.
    For each group, choose **Keep** (it is not client data, and it crosses as it is) or **Mask** (Zeus replaces it with `masked-<kind>-<n>` in every file).
    **Mask All** masks every group that you did not decide yet.
@@ -249,7 +271,7 @@ Standard Zeus sends it, not EU mode.
 ## Release the Zeus app (maintainer)
 
 The app releases are in the private zeus repo, with tags `app-v<version>` and the assets `Zeus.zip` and `Zeus.zip.sha256`.
-The install line, step 15, and the self-update of the app use the newest of these releases.
+The install line, step 14, and the self-update of the app use the newest of these releases.
 Drafts, pre-releases, and the other releases of the zeus repo are not used.
 
 CI makes a release by itself.

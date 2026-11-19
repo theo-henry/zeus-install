@@ -51,8 +51,12 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   for chat pages that do not send it, the app reads the project button of the chat.
   Cmd+J shows or hides the live terminal of the tab, for login prompts, slash commands, or debugging.
 - **Standard | EU.** The mode switch at the right of the tab bar switches between Standard mode and EU mode
-  (`Sources/Zeus/EUMode.swift`). EU mode runs `zeus --eu --no-open` in `~/Code/zeus-eu` (from the EU launch profile `eu-profile.json` of Zeus Editor),
-  shows a green EU pill, and shows the session cost estimate (in euros, see below) from the `cost:` messages of the chat page.
+  (`Sources/Zeus/EUMode.swift`). EU mode runs `zeus --eu --no-open` in `~/Code/zeus`, the workspace that both modes share (`Paths.workspace`), with the EU launch profile `eu-profile.json` of Zeus Editor (schema 1 or 2; the app does not use its `workspace`).
+  An EU session starts only while the EU vault is open: the first EU start makes the vault after Touch ID, a later one unlocks it after Touch ID, and the vault stays open until the app quits.
+  Without the Zeus plugins of EU mode in the vault, the app asks for the Zeus setup, which installs them in the open vault.
+  A cancelled Touch ID keeps Standard; at an app start in EU mode, the app starts Standard and shows why on its window.
+  Each app start sets a new `ZEUS_APP_RUN` for the sessions, so Zeus Editor keeps a passed EU start check for one app run.
+  EU mode shows a green EU pill, and shows the session cost estimate (in euros, see below) from the `cost:` messages of the chat page.
   A switch closes and stops every session of the old mode before the new mode starts, and asks first about unsent text or busy tabs.
   The tabs of each mode are kept apart, and an EU tab never resumes in Standard mode.
   Standard tabs are in `~/Library/Application Support/Zeus/tabs-standard.json`.
@@ -63,10 +67,10 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   When gcloud refuses the EU project as the quota project of the sign-in for a missing permission (no Service Usage Consumer role), the tab shows the 403 access message, with the Google account when gcloud names it, in place of the gcloud error.
 - **EU handover.** **Hand Over First…** at the switch to Standard opens the handover window (`Sources/Zeus/Handover.swift`).
   **Ask Zeus in this chat** sends the summary request to an EU tab, with the project that the tab shows.
-  The app runs the handoff commands of `scripts/zeus.py` of the Standard workspace (`~/Code/zeus`, which EU Claude can not write) with `--workspace` set to the EU workspace.
-  It runs `python3 -E -s`, so no module of the EU workspace loads, and EU Claude can not change the scan.
+  The app runs the handoff commands of `scripts/zeus.py` of the shared workspace `~/Code/zeus` with `--workspace ~/Code/zeus`.
+  EU Claude can not write the `scripts` folder (Zeus Editor denies it to EU), and the app runs `python3 -E -s`, so no module in the working folder loads, and EU Claude can not change the scan.
   `handoff build`, `scan`, and `mask` get `--dir ~/Library/Application Support/Zeus/handover/<project>/<id>` (owner only, mode 700), the handover's own folder: the handover is built, scanned, masked, and released only there, where no Claude session can write.
-  The app takes `<id>` from the newest `clients/<project>/handoff/<id>/summary.md` of the EU workspace, as `handoff build` does, and refuses a build answer for another ID.
+  The app takes `<id>` from the newest `clients/<project>/handoff/<id>/summary.md` of the workspace, as `handoff build` does, and refuses a build answer for another ID.
   The app refuses an answer whose `id` or `project` is not the handover of the review (a decoy folder), and every path that is not in that folder.
   The app shows the summary, the files, and one row per finding group with its real values, read from the app's copy (not selectable, never written to a file or the trace).
   For each group the user chooses Keep or Mask (`Mask All` for the rest); e-mail and IBAN groups offer only Mask, and a changed or missing file needs **Build Again**.
@@ -75,10 +79,10 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   A failed step goes back to the review with the user's choices; the masks that were made stay.
   The app copies the checked files to `~/Code/zeus/clients/<project>/handoff/from-eu/<id>/` and writes `released.json`
   (`kept` and `masked` as kinds and counts, never a group ID or a value; `removed_count`, never the path of a removed file, because the scan does not check those paths).
-  A copy of it with the removed paths (`removed`) goes into the EU handover folder without following a link.
+  The same record goes into the EU handover folder `clients/<project>/handoff/<id>/` without following a link; it is in the shared workspace, so it also names no removed path.
   Claude never releases a handover.
 - **EU data access.** In EU mode, the title bar shows **EU data access** for the project of the selected tab (`EUDataAccess` in `Sources/Zeus/EUMode.swift`).
-  The app reads it with `eu-access <project> --json` and changes it with `eu-access <project> on|off --json` (the Standard workspace's `zeus.py`, outside Claude, as for the handover); on asks first.
+  The app reads it with `eu-access <project> --json` and changes it with `eu-access <project> on|off --json` (the workspace's `zeus.py`, outside Claude, as for the handover); on asks first.
 - **EU cost in euros.** The EU cost shows in euros at the daily ECB reference rate (`EuroRate`), loaded in EU mode once a day and kept in
   `~/Library/Application Support/Zeus/euro-rate.json`. Without a rate of today, it shows USD with "(no euro rate)". The tooltip shows the USD estimate.
   The euro value is a conversion of the Vertex USD estimate at the ECB daily reference rate, not the amount that Google bills; the label stays an estimate.
@@ -118,8 +122,9 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   No Standard process can rename or delete a denied folder or a folder that holds one (a `(deny file-write-unlink ...)` rule for each of them up to `/Users` and `/private`), so `mv ~/Code ~/Code-x` can not give an EU folder a new path outside the denies.
   The profile is `(allow default)` with three deny rules: `(deny file-read* file-write* ...)` for the EU folders, `(deny file-write* ...)` for its own jail folder, and `(deny file-write-unlink ...)` for each EU folder and every folder above it, such as `~/Code`, `~/.zeus`, `~/Library/Application Support/Zeus`, the home folder, `/Users`, `/private`, and `/tmp`.
   These folders can not be renamed or deleted; the network, the keychain, and every other folder work as before, and content-cli reads a large View as without it.
-  The app always denies its own EU folders, whatever the Zeus Editor EU profile (`eu-profile.json`) says: the EU vault (`~/.zeus/eu` and its disk image), the default EU Claude Code folder and editor state (`~/.zeus/eu/claude`, `~/.zeus/eu/editor`), the default EU workspace `~/Code/zeus-eu`, the default EU temporary folder `/tmp/zeus-eu-<uid>` (`/private/tmp/zeus-eu-<uid>`), and the app's handover folder.
-  The EU profile can only add denied folders (its Claude Code folder, editor state, EU workspace, and `tmp_dir`); an added folder that holds the home folder, `~/Code/zeus`, or the app folder is never denied.
+  The app always denies its own EU folders, whatever the Zeus Editor EU profile (`eu-profile.json`) says: the EU vault (`~/.zeus/eu` and its disk image), the default EU Claude Code folder and editor state (`~/.zeus/eu/claude`, `~/.zeus/eu/editor`), the old EU workspace `~/Code/zeus-eu` (when the one-time removal kept it), the default EU temporary folder `/tmp/zeus-eu-<uid>` (`/private/tmp/zeus-eu-<uid>`), and the app's handover folder.
+  The EU profile can only add denied folders (its Claude Code folder, editor state, and `tmp_dir`); an added folder that holds the home folder, `~/Code/zeus`, or the app folder is never denied.
+  The shared workspace `~/Code/zeus` stays open to Standard: EU client data is in the vault.
   Without an EU vault, Standard starts exactly as before, without `sandbox-exec`.
   The app writes the profile to `~/Library/Application Support/Zeus/jail/standard.sb` (owner only) at start and again before each Standard start, and the profile also denies writes to its own folder.
   EU sessions do not run in it. A macOS sandbox can not start inside another one, so Standard Claude Code must run its commands without the Claude Code sandbox (zeus-editor PR 139).
@@ -133,7 +138,11 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The app does not make the vault over a `~/.zeus/eu` folder that holds files, because the mount would hide them.
   The vault locks only when the app quits, after every session stopped (`hdiutil detach`, forced when a program still has a file of it open).
   After a crash, the next app start locks it before anything else.
-  This version does not make or open the vault in the normal use of the app yet; EU mode still uses `~/.zeus/eu` and `~/Code/zeus-eu` as before. The tests make and open it with debug test actions.
+  The first EU start makes the vault, and each later EU start of an app run opens it (see **Standard | EU**); the tests also make and open it with debug test actions.
+- **One-time removal of the old EU mode.** `Sources/Zeus/LegacyEU.swift` runs at the first start of this version, after a vault that stayed open is locked and before any session.
+  It removes `~/Code/zeus-eu` when it is a copy of the zeus repo (a `.git/config` with a `theo-henry/zeus` remote URL; a link or another folder stays) and everything in the plain folder `~/.zeus/eu` (the EU folders from before the vault, which the vault mount would hide).
+  It never touches the vault's disk image, a mounted vault, or `~/Code/zeus`, and writes what it removed and kept to `~/Library/Logs/zeus-install/eu-cleanup.log`.
+  It does not run again when it ran to the end; a removal that failed is tried again at the next start.
   The app has an ad-hoc signature, so the keychain knows it by the hash of its code, which changes with each version: after an app update, the first unlock of the vault makes macOS ask once for the login password, so that the new Zeus can read the key. Click **Always Allow**.
   Another program that asks for the key gets the same question from macOS.
 - **No hidden sessions.** Quitting the app stops every session.
@@ -185,7 +194,7 @@ The GitHub CLI does not mark its downloads with the quarantine attribute, so mac
 
 CI publishes a release with `app/release.sh` after each merge to `main` that changes the app (see [Release the Zeus app](../README.md#release-the-zeus-app-maintainer)).
 It makes the release `app-v<version>` with `Zeus.zip` and `Zeus.zip.sha256` in the private zeus repo.
-`install-app.sh` (through `install.sh --app-only`), step 15 of `install.sh`, and the app's self-update download the newest one.
+`install-app.sh` (through `install.sh --app-only`), step 14 of `install.sh`, and the app's self-update download the newest one.
 
 ## Debug
 
@@ -327,7 +336,7 @@ real home folder, Claude Code, GitHub login, and app settings are not used (the 
 The paste checks use the pasteboard, then put back what the user had on it.
 It presses the app's buttons through the debug test actions and checks the trace:
 
-1. A new Mac: the check finds 15 steps to do; all 16 steps install (with the three EU steps: the Google Cloud CLI, `~/Code/zeus-eu`, and the EU plugins, without shell profile changes), with the Anaconda license, the GitHub
+1. A new Mac: the check finds 13 steps to do; all 15 steps run (with the two EU steps: the Google Cloud CLI, and the EU plugins, which wait without an open EU vault and write nothing in `~/.zeus/eu`; with `ZEUS_INSTALL_TEST_EU_VAULT_OPEN` they install, trust `~/Code/zeus`, and change no shell profile), with the Anaconda license, the GitHub
    one-time code, and the Claude login answered in the app; Start Zeus opens the chat page from `~/Code/zeus`
    with `--no-open` and the globe hand-over; a close with unsent text waits and can be cancelled; closing the window stops `zeus` with SIGTERM;
    Cmd+T tabs start separate sessions and come in without the hand-over; a tab takes the name of the project picked in its chat,
@@ -368,21 +377,24 @@ It presses the app's buttons through the debug test actions and checks the trace
    An EU step that stops on a command without its own message (an EU config folder that can not be made) is also reported as failed.
 
 `--eu` runs the EU mode scenario (`app/test/sim/eu.sh`) with a simulated `gcloud`, EU `zeus`, and handoff `scripts/zeus.py`:
-the setup question when EU mode is not set up; a switch stops every Standard session before `zeus --eu --no-open` starts in `~/Code/zeus-eu`;
+the one-time removal of the old EU workspace and the old `~/.zeus/eu` files at the first start (logged, `~/Code/zeus` untouched, not again at the next start);
+a real EU vault (as in `--vault`): a cancelled Touch ID makes no vault and keeps Standard, the first EU start makes it, the setup question when the EU plugins are not in it, and the EU plugins step of `install.sh` installs them in the mounted vault;
+a switch stops every Standard session before `zeus --eu --no-open` starts in `~/Code/zeus`, the same workspace as Standard;
 before each EU session, the app gives EU Claude Code the status line of Standard (`install.sh --eu-status-line`), also after a Standard status line change;
 the EU pill, the EU web data store, and the cost label; a 429 error question; a failed start that needs the Google sign-in,
 a failed Google login, a quota project refused for a missing permission (the 403 access message), the sign-in in the terminal, and the retry; a 403 failure; the handover request that names the project of the tab, the handover with findings, an accepted finding, an edited summary, a removed file,
-the release, and `released.json`; the handoff commands run the Standard `scripts/zeus.py` and never a script or module of the EU workspace; the switch back resumes the Standard tabs and never an EU tab; and a restart in EU mode.
+the release, and `released.json` (the EU copy in the shared workspace names no removed path); the handoff commands run the workspace's `scripts/zeus.py` and never a module of the working folder; the switch back resumes the Standard tabs and never an EU tab;
+an app start in EU mode with a cancelled Touch ID starts Standard and says why; and a restart in EU mode that unlocks the vault before the EU session, with a new `ZEUS_APP_RUN` for each app start.
 
 `--vault` runs the EU vault and Standard read block scenario (`app/test/sim/vault.sh`) with a real encrypted disk image in the temporary home folder,
 a keychain file of the test (`ZEUS_APP_TEST_KEYCHAIN`) instead of the login keychain, and test answers instead of Touch ID (`ZEUS_APP_TEST_VAULT_AUTH`), so no macOS window opens:
-the read block profile and its folders; no vault over the EU folders from before the vault; a cancelled Touch ID makes no vault and no key;
+the one-time removal keeps an old EU workspace that is not a copy of the zeus repo; the read block profile and its folders; no vault over the EU folders from before the vault; a cancelled Touch ID makes no vault and no key;
 the vault is made encrypted, mounted without a Finder icon, owner only, with its marker, and its key is only in the keychain item that only the app may read, and not in the trace;
-a new Standard session in the read block can not read the vault, its disk image, the EU workspace, or the handover folder with `cat`, Python, a child shell, or Node, and can not write the vault, the EU workspace, or its own profile,
-and can not rename `~/Code`, `~/.zeus`, the app folder, or the EU workspace to read an EU file at a new path,
+a new Standard session in the read block can not read the vault, its disk image, the old EU workspace, or the handover folder with `cat`, Python, a child shell, or Node, and can not write the vault, the old EU workspace, or its own profile,
+and can not rename `~/Code`, `~/.zeus`, the app folder, or the old EU workspace to read an EU file at a new path,
 while it reads and renames in its own workspace and gets a 20 MB response complete (as content-cli gets a large View);
 a lock fails while a program has a vault file open, and the quit locks the vault after the sessions stopped; a cancelled Touch ID keeps it locked, and Touch ID opens it;
-after a crash the next start locks it before anything else; a wrong key does not open it; with an EU profile that names other EU folders, the profile still denies the fixed EU folders and adds the profile's;
+after a crash the next start locks it before anything else; a wrong key does not open it; with an EU profile that names other EU folders, the profile still denies the fixed EU folders and adds the profile's, but not a schema 1 `workspace`, and a schema 2 profile without `workspace` loads;
 and with a Zeus Editor that still runs Standard commands in the Claude Code sandbox, Standard does not start on a Mac with a vault and the app tells the user to update Zeus Editor.
 
 With a folder, it saves a screenshot of each state (only the test app's windows), a recording of the startup animation, and the traces. It needs Screen Recording

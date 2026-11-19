@@ -17,13 +17,17 @@
 #                                             installer opens (for tests). ZEUS_APP_TEST_BACKGROUND=1 opens it behind
 #                                             the other apps.
 #   ZEUS_INSTALL_CLAUDE_UPDATE_TIMEOUT=300    stops the update of an installed Claude Code after this many seconds.
+#   ZEUS_INSTALL_TEST_EU_VAULT_OPEN=1         treats ~/.zeus/eu as the open EU vault, also when no vault is mounted
+#                                             there (for tests).
 #   ZEUS_INSTALL_APP=1                        app mode, used by Zeus.app. It adds two steps (the Zeus skill plugins and
 #                                             the Claude login) and prints machine-readable lines that start with
 #                                             "@@zeus " so that the app can show a checklist. Terminal use is unchanged.
 #
-# EU mode (Claude on Google Vertex AI in the EU) gets the same three steps on every Mac: the Google Cloud CLI in
-# ~/google-cloud-sdk, the EU workspace ~/Code/zeus-eu, and the Zeus plugins in the EU Claude Code folder ~/.zeus/eu/claude.
-# No shell profile changes for EU mode. Each user then signs in to Google once (the Zeus app shows the button), and the
+# EU mode (Claude on Google Vertex AI in the EU) gets the same two steps on every Mac: the Google Cloud CLI in
+# ~/google-cloud-sdk, and the Zeus plugins in the EU Claude Code folder ~/.zeus/eu/claude. EU mode works in the same
+# workspace as Standard (~/Code/zeus). The EU Claude Code folder is in the EU vault, an encrypted disk image that the
+# Zeus app mounts at ~/.zeus/eu: the plugins install only while the vault is open, and the Zeus app asks for this setup
+# after it opened the vault the first time. No shell profile changes for EU mode. Each user then signs in to Google once (the Zeus app shows the button), and the
 # Zeus maintainer gives the user's Google account two roles on the EU project: Vertex AI User (roles/aiplatform.user) and
 # Service Usage Consumer (roles/serviceusage.serviceUsageConsumer), which the quota project of the sign-in needs.
 #
@@ -62,8 +66,8 @@ ANACONDA_LICENSE_URL="https://www.anaconda.com/legal/terms/terms-of-service"
 PYTHON_MIN_VERSION="3.10"
 
 # EU mode. The values of the EU launch profile of Zeus Editor (eu-profile.json): `zeus --eu` uses these folders.
-EU_WORKSPACE="$HOME/Code/zeus-eu"
-EU_CONFIG_DIR="$HOME/.zeus/eu/claude"
+EU_STATE_DIR="$HOME/.zeus/eu"
+EU_CONFIG_DIR="$EU_STATE_DIR/claude"
 # The Google Cloud CLI for the EU sign-in: the official macOS archive, pinned by version and checksum. gcloud updates
 # itself later (gcloud components update) when the user wants.
 GCLOUD_VERSION="593.0.0"
@@ -97,12 +101,12 @@ ZEUS_APP_REPO="${ZEUS_APP_REPO:-$ZEUS_REPO}"
 APP_BUNDLE_ID="io.github.theo-henry.zeus"
 APP_ONLY=""
 if [ "${1:-}" = "--app-only" ]; then APP_ONLY=1; fi
-# Terminal use: steps 12 to 14 set up EU mode, and step 15 installs the Zeus app. App mode: steps 12 and 13 finish the
-# setup that the app needs, and steps 14 to 16 set up EU mode.
-# --app-only: step 6 installs the Zeus app, and the app does steps 6 to 16 in its setup window.
-TOTAL_STEPS=15
+# Terminal use: steps 12 and 13 set up EU mode, and step 14 installs the Zeus app. App mode: steps 12 and 13 finish the
+# setup that the app needs, and steps 14 and 15 set up EU mode.
+# --app-only: step 6 installs the Zeus app, and the app does steps 6 to 15 in its setup window.
+TOTAL_STEPS=14
 EU_FIRST_STEP=12
-if [ -n "$APP_MODE" ]; then TOTAL_STEPS=16; EU_FIRST_STEP=14; fi
+if [ -n "$APP_MODE" ]; then TOTAL_STEPS=15; EU_FIRST_STEP=14; fi
 if [ -n "$APP_ONLY" ]; then TOTAL_STEPS=6; fi
 CURRENT_STEP=0
 
@@ -815,7 +819,7 @@ install_zeus_command() {
   record "done" "The zeus command"
 }
 
-# EU mode, steps 12 to 14 (terminal use) or 14 to 16 (app mode). The same on every Mac; no shell profile changes.
+# EU mode, steps 12 and 13 (terminal use) or 14 and 15 (app mode). The same on every Mac; no shell profile changes.
 
 # Prints the first gcloud in the places where Zeus Editor's EU check looks (src/eu/preflight.js): PATH, then the usual
 # install folders.
@@ -871,11 +875,13 @@ install_gcloud() {
   record "done" "Google Cloud CLI"
 }
 
-# Step 13/15 - The EU workspace: a second clone of the zeus repo, for EU mode only.
-clone_eu_workspace() {
-  step $((EU_FIRST_STEP + 1)) "EU workspace"
-  # shellcheck disable=SC2088 # A name for the user, not a path.
-  clone_workspace "$EU_WORKSPACE" "~/Code/zeus-eu"
+# The EU vault is open: a volume is mounted at ~/.zeus/eu, with the marker file of the Zeus vault. The EU Claude Code
+# folder is in it. The installer never writes ~/.zeus/eu while no vault is mounted there: the vault would hide those files,
+# and the Zeus app does not open the vault over a folder that holds files.
+eu_vault_open() {
+  if [ "${ZEUS_INSTALL_TEST_EU_VAULT_OPEN:-}" = 1 ]; then return 0; fi
+  [ -f "$EU_STATE_DIR/.zeus-vault" ] && [ ! -L "$EU_STATE_DIR/.zeus-vault" ] &&
+    python3 -c 'import os, sys; sys.exit(0 if os.path.ismount(sys.argv[1]) else 1)' "$EU_STATE_DIR" 2>/dev/null
 }
 
 # Runs claude with the EU Claude Code folder.
@@ -898,11 +904,11 @@ eu_plugins_installed() {
   done < <(eu_plugin_entries)
 }
 
-# The first start of Claude Code in the EU folder asks for a theme and for trust in the EU workspace, which the Zeus app
+# The first start of Claude Code in the EU folder asks for a theme and for trust in the workspace, which the Zeus app
 # can not answer. The installer answers them as the Standard Claude Code of this Mac did: the same theme, and trust for
-# the EU workspace, which is the same zeus repo as ~/Code/zeus. Imports of files outside the workspace stay off.
+# the workspace ~/Code/zeus, which EU and Standard share. Imports of files outside the workspace stay off.
 eu_first_start_settings() {
-  python3 - "$EU_CONFIG_DIR/.claude.json" "$HOME/.claude.json" "$EU_WORKSPACE" <<'PY'
+  python3 - "$EU_CONFIG_DIR/.claude.json" "$HOME/.claude.json" "$ZEUS_DIR" <<'PY'
 import json, os, sys, tempfile
 target, standard, workspace = sys.argv[1], sys.argv[2], os.path.realpath(sys.argv[3])
 def read(path):
@@ -930,7 +936,7 @@ PY
 }
 
 eu_first_start_done() {
-  python3 - "$EU_CONFIG_DIR/.claude.json" "$EU_WORKSPACE" <<'PY' 2>/dev/null
+  python3 - "$EU_CONFIG_DIR/.claude.json" "$ZEUS_DIR" <<'PY' 2>/dev/null
 import json, os, sys
 try:
     config = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -946,7 +952,8 @@ PY
 # Mac, so the two modes look the same. Zeus does not install a status line itself. zeus-status-line.json in the EU folder
 # keeps the value that Zeus last copied. While the EU status line is not set or still has that value, each run copies the
 # Standard one again, or removes it when Standard has none. An EU status line that the user set stays as it is.
-# Each install runs it, and the Zeus app runs it before each EU session (install.sh --eu-status-line).
+# The EU folder is in the EU vault: the EU plugin step runs it while the vault is open, and the Zeus app runs it before
+# each EU session, after it opened the vault (install.sh --eu-status-line).
 eu_mirror_status_line() {
   python3 - "$EU_CONFIG_DIR/settings.json" "$EU_CONFIG_DIR/zeus-status-line.json" "$HOME/.claude/settings.json" <<'PY'
 import json, os, sys, tempfile
@@ -983,12 +990,19 @@ if os.path.exists(record):
 PY
 }
 
-# Step 14/16 - The Zeus plugins in the EU Claude Code folder. EU Claude Code reads its plugins, settings, and chats there
-# only, never from ~/.claude. Each run updates them, as step 10 does for Standard.
+# Step 13/15 - The Zeus plugins in the EU Claude Code folder, in the EU vault. EU Claude Code reads its plugins, settings,
+# and chats there only, never from ~/.claude. Each run updates them, as step 10 does for Standard. While the vault is
+# locked (or not made yet), the step waits: the Zeus app asks for the setup again after it opened the vault.
 install_eu_plugins() {
-  step $((EU_FIRST_STEP + 2)) "Zeus plugins of EU mode"
+  step $((EU_FIRST_STEP + 1)) "Zeus plugins of EU mode"
+  if ! eu_vault_open; then
+    info "The EU vault is not open, so they can not be installed now."
+    info "Switch to EU mode in the Zeus app: it opens the vault with Touch ID and asks you to run this setup again."
+    record "skipped" "Zeus plugins of EU mode (EU vault not open)"
+    return
+  fi
   mkdir -p "$EU_CONFIG_DIR"
-  chmod 700 "$HOME/.zeus/eu" "$EU_CONFIG_DIR" 2>/dev/null || true
+  chmod 700 "$EU_CONFIG_DIR" 2>/dev/null || true
   local entry plugin repo marketplace log="$LOG_DIR/eu-plugins.log"
   : >"$log"
   while IFS= read -r entry; do
@@ -1010,7 +1024,7 @@ install_eu_plugins() {
   done < <(eu_plugin_entries)
   eu_first_start_settings || fail "The first-start settings of EU mode could not be written in ~/.zeus/eu/claude."
   eu_mirror_status_line || fail "The status line of EU mode could not be written in ~/.zeus/eu/claude."
-  info "Installed in ~/.zeus/eu/claude."
+  info "Installed in ~/.zeus/eu/claude, in the EU vault."
   info "For EU mode, sign in to Google once in the Zeus app, and ask $ZEUS_OWNER for access to the EU project."
   record "done" "Zeus plugins of EU mode"
 }
@@ -1047,7 +1061,6 @@ eu_step_exit() {
 
 install_eu() {
   eu_step install_gcloud "Google Cloud CLI"
-  eu_step clone_eu_workspace "EU workspace"
   eu_step install_eu_plugins "Zeus plugins of EU mode"
 }
 
@@ -1138,8 +1151,10 @@ check_steps() {
   state 12 "$all"
   if command -v claude >/dev/null 2>&1 && claude_logged_in; then state 13 ok; else state 13 todo; fi
   if find_gcloud >/dev/null; then state 14 ok; else state 14 todo; fi
-  if [ -d "$EU_WORKSPACE/.git" ]; then state 15 ok; else state 15 todo; fi
-  if command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state 16 ok; else state 16 todo; fi
+  # The EU plugins are in the EU vault: while it is not open, the step runs at each setup and waits for the vault.
+  if ! eu_vault_open; then
+    state 15 always
+  elif command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state 15 ok; else state 15 todo; fi
   emit "checked"
 }
 

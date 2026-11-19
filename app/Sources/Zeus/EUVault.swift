@@ -4,8 +4,9 @@ import Security
 
 /// The EU vault: one encrypted APFS disk image (a sparse bundle, AES-256) per user, in
 /// `~/Library/Application Support/Zeus/eu-vault.sparsebundle`, mounted at `~/.zeus/eu` without a Finder icon. EU data
-/// will be kept in it (EU chat transcripts, EU editor state, the project vaults), so that it is encrypted when the vault
-/// is locked. While it is open, Standard sessions can not read it (`StandardJail`).
+/// is kept in it (the EU Claude Code folder with the EU chats and plugins, EU editor state, EU data access, the project
+/// vaults), so that it is encrypted when the vault is locked. While it is open, Standard sessions can not read it
+/// (`StandardJail`). The app opens it before the first EU session (`open`): it makes it on the first use of EU mode.
 ///
 /// The key is a random password in the user's login keychain. The app creates the item, so the item trusts only the
 /// Zeus app: another program that asks for it makes macOS ask the user for the login password. The app reads it only
@@ -99,6 +100,12 @@ final class EUVault {
     /// A volume is mounted at the mount folder.
     var isMounted: Bool { Self.isMountPoint(Self.mountPoint) }
 
+    /// The Zeus vault is open: a volume is mounted at the mount folder, with the marker of a Zeus vault. A quick check
+    /// for the start of an EU session; `unlock` checks that the marker names the mounted volume.
+    static var isOpen: Bool {
+        isMountPoint(mountPoint) && markerData()?["kind"] as? String == "zeus-eu-vault"
+    }
+
     // MARK: Create, unlock, lock
 
     /// Creates the vault and its key after Touch ID, and leaves it mounted. Main queue in, main queue out.
@@ -113,6 +120,12 @@ final class EUVault {
                 DispatchQueue.main.async { self.finish(outcome, "create", completion) }
             }
         }
+    }
+
+    /// Opens the vault for EU mode: makes it on the first use, else unlocks it, each after Touch ID. An open vault needs no
+    /// Touch ID. Main queue in, main queue out.
+    func open(completion: @escaping (Result<Void, Failure>) -> Void) {
+        if isMounted || exists { unlock(completion: completion) } else { create(completion: completion) }
     }
 
     /// Mounts the vault after Touch ID. An open vault needs no Touch ID. Main queue in, main queue out.

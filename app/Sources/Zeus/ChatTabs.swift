@@ -666,7 +666,7 @@ final class ModeBarView: NSView {
         pill.setAccessibilityElement(true)
         pill.setAccessibilityRole(.staticText)
         pill.setAccessibilityLabel("EU mode")
-        pill.toolTip = "EU mode: Claude on Google Vertex AI in the EU, with its own chats and workspace."
+        pill.toolTip = "EU mode: Claude on Google Vertex AI in the EU, with its own chats and data in the EU vault."
         costLabel.font = NSFont(name: "ObjectSans-Regular", size: 12) ?? .systemFont(ofSize: 12)
         costLabel.textColor = TabColors.dimText
         costLabel.lineBreakMode = .byTruncatingTail

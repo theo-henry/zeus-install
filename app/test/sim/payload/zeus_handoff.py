@@ -1,13 +1,13 @@
-"""Simulated `scripts/zeus.py` of the Standard workspace: only the commands of the Zeus app contract that the app runs.
+"""Simulated `scripts/zeus.py` of the shared workspace: only the commands of the Zeus app contract that the app runs.
 
 The real commands are in the private zeus repo (scripts/handoff.py, scripts/handoff_scan.py, scripts/eu_mode.py,
 references/eu-mode.md, "App contract"). This fixture keeps their contract: the arguments, one JSON object per answer, the
 exit codes (0 ok, 2 user error, 3 findings, 4 internal error), the handover folders, the manifest, and the finding fields
 (with `length` and `group`). The app builds, scans, and masks in its own folder (`--dir <folder>`, the handover's own
-folder, made with mode 700); the EU workspace keeps the summary that EU Zeus wrote. The scan finds e-mail addresses (mask
+folder, made with mode 700); the workspace keeps the summary that EU Zeus wrote. The scan finds e-mail addresses (mask
 only), the known value ACME, and numbers with three or more digits; `masked-<kind>-<n>` with n from 1 to 99 is not a
 finding. Each call is logged in $ZEUS_SIM_STATE/handoff.log with the script path, the import path, and the environment
-that matters (the app runs it outside Claude, from the Standard workspace, pointed at the EU workspace).
+that matters (the app runs it outside Claude, in the workspace ~/Code/zeus that EU and Standard share).
 
 Test switches in $ZEUS_SIM_STATE: `scan-project` makes the scan answer name that project (a forged answer);
 `mask-fails` makes the next mask fail after it masked the first group.
@@ -112,7 +112,7 @@ def scan_folder(folder, manifest):
 
 
 def app_folder(root, raw, create):
-    """The --dir of the app: the handover's own folder, never in the EU workspace."""
+    """The --dir of the app: the handover's own folder, never in the workspace."""
     folder = Path(raw)
     if not folder.is_absolute() or ".." in folder.parts:
         error("--dir must be an absolute folder path without '..'.")
@@ -266,8 +266,8 @@ def main():
     if "--json" not in args:
         error("simulated zeus.py: only ... --json")
     args = [x for x in args if x != "--json"]
-    if root.resolve() != (Path.home() / "Code" / "zeus-eu").resolve():
-        error("These commands run only in the EU workspace (references/eu-mode.md).")
+    if root.resolve() != (Path.home() / "Code" / "zeus").resolve():
+        error("These commands run only in the Zeus workspace ~/Code/zeus (references/eu-mode.md).")
     base = None
     if "--dir" in args:
         index = args.index("--dir")

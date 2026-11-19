@@ -50,9 +50,10 @@ vault_scenario() {
   BUNDLE="$SANDBOX/Library/Application Support/Zeus/eu-vault.sparsebundle"
   JAIL="$SANDBOX/Library/Application Support/Zeus/jail/standard.sb"
   HANDOVER="$SANDBOX/Library/Application Support/Zeus/handover"
-  # The EU folders of the EU mode from before the vault, which a vault mount would hide.
-  mkdir -p "$VAULT/claude" "$HANDOVER"
-  printf 'old EU state\n' >"$VAULT/claude/settings.json"
+  mkdir -p "$HANDOVER"
+  # The old EU workspace here is not a copy of the zeus repo: the one-time removal of the old EU mode keeps it, and the
+  # read block still denies it.
+  rm -rf "$SANDBOX/Code/zeus-eu/.git"
   VAULT_REAL="$(real_path "$VAULT")"
   # A keychain file of the test, which never locks while the test runs.
   VAULT_KEYCHAIN="$WORK/vault/test.keychain-db"
@@ -62,10 +63,16 @@ vault_scenario() {
 
   launch_app vault ZEUS_APP_TEST_VAULT_AUTH=allow ZEUS_APP_TEST_KEYCHAIN="$VAULT_KEYCHAIN"
   need "the app opens a Standard chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOAD_LIMIT && sleep 1'
+  check "the one-time removal keeps an old EU workspace that is not a copy of the zeus repo, and says why" \
+    '[ -f "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv" ] && grep -q " kept ~/Code/zeus-eu: not a copy of the zeus repo$" "$SANDBOX/Library/Logs/zeus-install/eu-cleanup.log"'
+  check "it removes the plain old EU state in ~/.zeus/eu" '[ -d "$VAULT" ] && [ -z "$(ls -A "$VAULT")" ]'
   check "without an EU vault, Standard starts as before, without the read block" \
     'grep -q "jail: off: no EU vault on this Mac" "$TRACE" && ! grep -q "jail: on" "$TRACE" && [ ! -e "$JAIL" ] && grep -qxF "session command: $SANDBOX/.local/bin/zeus --no-open" <(sed "s/^[^ ]* //" "$TRACE")'
 
-  # Create: refused over the old EU folders, cancelled Touch ID, then made.
+  # Create: refused over EU folders from before the vault (made again after the removal at the start), cancelled
+  # Touch ID, then made.
+  mkdir -p "$VAULT/claude"
+  printf 'old EU state\n' >"$VAULT/claude/settings.json"
   act test-vault-create
   check "the vault is not made over the EU folders from before the vault" \
     'wait_for "vault: create failed: folder not empty" 20 && [ ! -e "$BUNDLE" ] && [ -f "$VAULT/claude/settings.json" ]'
@@ -221,6 +228,7 @@ PY
   python3 - "$SIM_DIR/payload/eu-profile.json" "$plugin/eu-profile.json" <<'PY'
 import json, sys
 profile = json.load(open(sys.argv[1]))
+# Schema 1 (with its workspace field, which the app does not use) and schema 2 (without it) both load.
 profile.update(config_dir="~/.zeus/other/claude", editor_state_dir="~/.zeus/other/editor", workspace="~/Code/other-eu",
                tmp_dir="/tmp/other-eu-{uid}")
 json.dump(profile, open(sys.argv[2], "w"))
@@ -232,9 +240,22 @@ PY
   for folder in "$real_home/.zeus/eu" "$real_home/Library/Application Support/Zeus/eu-vault.sparsebundle" \
     "$real_home/.zeus/eu/claude" "$real_home/.zeus/eu/editor" "$real_home/Code/zeus-eu" "/private/tmp/zeus-eu-$(id -u)" \
     "$real_home/Library/Application Support/Zeus/handover" "$real_home/.zeus/other/claude" "$real_home/.zeus/other/editor" \
-    "$real_home/Code/other-eu" "/private/tmp/other-eu-$(id -u)"; do
+    "/private/tmp/other-eu-$(id -u)"; do
     check "with a profile of other EU folders, the profile denies ${folder#"$real_home"/}" 'grep -qxF "  (subpath \"$folder\")" "$JAIL"'
   done
+  check "the workspace of a schema 1 profile is not an EU folder: EU and Standard share ~/Code/zeus" '! grep -qF "Code/other-eu" "$JAIL"'
+  python3 - "$plugin/eu-profile.json" <<'PY'
+import json, sys
+profile = json.load(open(sys.argv[1]))
+profile.pop("workspace")
+profile.update(schema=2, config_dir="~/.zeus/two/claude")
+json.dump(profile, open(sys.argv[1], "w"))
+PY
+  jailed="$(grep -c "jail: on" "$TRACE" || true)"
+  newest_page_loaded "$PAGE_LOAD_LIMIT" >/dev/null || true
+  act new-chat
+  check "a schema 2 profile without a workspace loads: the profile denies its EU folders" \
+    'wait_count "jail: on" $((jailed + 1)) 30 && grep -qxF "  (subpath \"$real_home/.zeus/two/claude\")" "$JAIL"'
   cp "$SIM_DIR/payload/eu-profile.json" "$plugin/eu-profile.json"
   newest_page_loaded "$PAGE_LOAD_LIMIT" >/dev/null || true
 

@@ -35,6 +35,12 @@ enum Preferences {
         set { defaults.set(newValue, forKey: "euClipboardNoteShown") }
     }
 
+    /// The one-time removal of EU mode from before the shared workspace and the EU vault ran to the end (`LegacyEU`).
+    static var oldEURemoved: Bool {
+        get { defaults.bool(forKey: "oldEURemoved") }
+        set { defaults.set(newValue, forKey: "oldEURemoved") }
+    }
+
     /// The dictation settings (see `DictationSettings`).
     static var dictationModel: String? {
         get { defaults.string(forKey: "dictationModel") }
