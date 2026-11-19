@@ -79,8 +79,9 @@ signin_scenario() {
   setup_round 5
   check "a Mac that is signed in skips the step without a question" \
     'wait_for "setup event: skipped 17 Google sign-in (EU mode, sim@example.com)" 120 && setup_ended 5 && [ "$(grep -c "setup event: ask 17 " "$TRACE")" = 2 ] && [ "$(grep -c "^auth application-default login$" "$STATE/gcloud.log")" = 1 ]'
-  check "install.sh --check finds the sign-in done" \
-    'env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check 2>&1 | grep -q "@@zeus state 17 ok"'
+  # The whole output first, then grep: with pipefail, grep -q can end the pipe before install.sh ends (SIGPIPE).
+  out="$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check 2>&1 || true)"
+  check "install.sh --check finds the sign-in done" 'printf "%s" "$out" | grep -q "@@zeus state 17 ok"'
   stop_app
 
   # Terminal use (no Zeus app): the same results, as warnings that do not stop the setup.
