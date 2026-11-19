@@ -33,7 +33,8 @@ check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 
 [ "$(stat -f %u "$ROOT_DIR")" = 0 ] || { echo "$ROOT_DIR is not owned by root: the test cannot run."; exit 1; }
 
-# Simulated tools. $STATE/npm: "ok" (the default folder is writable) or "eacces" (it is not).
+# Simulated tools. $STATE/npm: "ok" (the default folder is writable), "eacces" (it is not), or "cache" (the npm
+# cache has root-owned files).
 mkdir -p "$WORK/tools"
 cat >"$WORK/tools/npm" <<'TOOL'
 #!/bin/bash
@@ -43,6 +44,12 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "--prefix" ]; then prefix="$2"; fi
   shift
 done
+if [ "$(cat "$STATE/npm")" = cache ]; then
+  echo "npm error code EACCES" >&2
+  echo "npm error Your cache folder contains root-owned files, due to a bug in" >&2
+  echo "npm error previous versions of npm which has since been addressed. (simulated)" >&2
+  exit 243
+fi
 if [ -z "$prefix" ] && [ "$(cat "$STATE/npm")" = eacces ]; then
   echo "npm error code EACCES" >&2
   echo "npm error Error: EACCES: permission denied, mkdir '/usr/local/lib/node_modules' (simulated)" >&2
@@ -120,6 +127,9 @@ check "unwritable npm folder: the PATH line is in ~/.zprofile, not ~/.zshrc" 'gr
 check "unwritable npm folder: the installer never runs sudo" 'no_sudo'
 check "unwritable npm folder: a new bash with the PATH line finds content-cli" '[ "$(env -i HOME="$HOME" PATH=/usr/bin:/bin bash -c "source \"$HOME/.zprofile\"; content-cli")" = content-cli ]'
 check "the next run skips the step" ': >"$CALLS"; runs_ok install_content_cli && grep -q "Already installed." "$OUT" && [ ! -s "$CALLS" ]'
+setup npm-cache cache
+check "root-owned files in the npm cache: the step stops with the exact fix line for ~/.npm" '! run install_content_cli && grep -qxF "    sudo chown -R \$(whoami) ~/.npm" "$OUT" && no_sudo'
+check "root-owned files in the npm cache: no fallback install into ~/.npm-global" '[ ! -e "$HOME/.npm-global" ] && [ "$(grep -c "^npm" "$CALLS")" = 1 ]'
 setup npm-other eacces
 sed -i '' 's/EACCES/ENOENT/g' "$HOME/../bin/npm"
 check "another npm error still stops with the log" '! run install_content_cli && grep -q "The content-cli install failed." "$OUT" && [ ! -e "$HOME/.npm-global" ]'

@@ -214,8 +214,14 @@ require_owned() {
     if [ -n "$owner" ] && [ "$owner" != "$(id -u)" ]; then bad+=("$dir"); fi
   done
   [ "${#bad[@]}" -gt 0 ] || return 0
-  local line="sudo chown -R \$(whoami)" shown=()
-  for dir in "${bad[@]}"; do
+  stop_not_owned "${bad[@]}"
+}
+
+# Stops with one exact "sudo chown" line for folders that belong to another user.
+# Arguments: the folders, as paths.
+stop_not_owned() {
+  local dir line="sudo chown -R \$(whoami)" shown=()
+  for dir in "$@"; do
     shown+=("${dir/#$HOME/~}")
   done
   line="$line ${shown[*]}"
@@ -632,6 +638,16 @@ install_claude() {
   record "done" "Claude Code"
 }
 
+# Installs content-cli with npm and adds the output to the log. Arguments: more npm options.
+# Stops with the exact "sudo chown" line when the npm cache has files of another user (after an earlier sudo npm).
+npm_install_content_cli() {
+  npm install -g "$@" @celonis/content-cli --no-fund --no-audit >>"$LOG_DIR/content-cli.log" 2>&1 && return 0
+  if grep -q 'cache folder contains root-owned files' "$LOG_DIR/content-cli.log"; then
+    stop_not_owned "$HOME/.npm"
+  fi
+  return 1
+}
+
 # Step 8 - Celonis content-cli.
 install_content_cli() {
   step 8 "Celonis content-cli"
@@ -641,7 +657,8 @@ install_content_cli() {
     return
   fi
   # npm hides parts of some paths in its output, so do not test its prefix folder here.
-  if ! npm install -g @celonis/content-cli --no-fund --no-audit >"$LOG_DIR/content-cli.log" 2>&1; then
+  : >"$LOG_DIR/content-cli.log"
+  if ! npm_install_content_cli; then
     if ! grep -q 'EACCES' "$LOG_DIR/content-cli.log"; then
       fail "The content-cli install failed." "See the log: $LOG_DIR/content-cli.log"
     fi
@@ -650,7 +667,7 @@ install_content_cli() {
     info "The global folder of npm is not writable. Installing content-cli in $NPM_USER_PREFIX instead."
     mkdir -p "$NPM_USER_PREFIX" "$LOCAL_BIN" ||
       fail "The folder $NPM_USER_PREFIX could not be created."
-    npm install -g --prefix "$NPM_USER_PREFIX" @celonis/content-cli --no-fund --no-audit >>"$LOG_DIR/content-cli.log" 2>&1 ||
+    npm_install_content_cli --prefix "$NPM_USER_PREFIX" ||
       fail "The content-cli install failed." "See the log: $LOG_DIR/content-cli.log"
     [ -x "$NPM_USER_PREFIX/bin/content-cli" ] ||
       fail "content-cli was installed, but the command file is missing." "See the log: $LOG_DIR/content-cli.log"
