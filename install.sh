@@ -1563,9 +1563,9 @@ main() {
   # Before any step: a folder of the user that root owns stops a step half way (for example "mkdir ~/.config/gh:
   # permission denied" after the browser login). A Mac with its own folders passes without any output.
   if [ -n "$APP_ONLY" ]; then
-    require_owned "$HOME/.config" "$HOME/.local" "$LOCAL_BIN"
+    require_owned "$HOME/.config" "$HOME/.config/gh" "$HOME/.local" "$LOCAL_BIN"
   else
-    require_owned "$HOME/.config" "$HOME/.local" "$LOCAL_BIN" "$HOME/.npm" "$HOME/.claude"
+    require_owned "$HOME/.config" "$HOME/.config/gh" "$HOME/.local" "$LOCAL_BIN" "$HOME/.npm" "$HOME/.claude"
   fi
 
   install_xcode_tools

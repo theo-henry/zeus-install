@@ -103,6 +103,10 @@ check "a root-owned ~/.config stops the installer" '! run require_owned "$HOME/.
 check "the stop prints the exact fix line" 'grep -qxF "    $CHOWN_LINE" "$OUT"'
 check "the installer does not continue and does not run sudo" '! grep -q "the installer continues" "$OUT" && no_sudo'
 check "the stop tells how to run the step again" 'grep -q "run the same install line again" "$OUT"'
+setup root-gh ok
+mkdir -p "$HOME/.config"
+ln -s "$ROOT_DIR" "$HOME/.config/gh"
+check "a root-owned ~/.config/gh in an own ~/.config stops with the exact fix line" '! run require_owned "$HOME/.config" "$HOME/.config/gh" "$HOME/.local" && grep -qxF "    sudo chown -R \$(whoami) ~/.config/gh" "$OUT" && no_sudo'
 setup root-two ok
 ln -s "$ROOT_DIR" "$HOME/.npm"
 ln -s "$ROOT_DIR" "$HOME/.claude"
@@ -111,9 +115,9 @@ rm "$HOME/.npm" "$HOME/.claude"
 check "after the fix (own folders), the same check passes" 'runs_ok require_owned "$HOME/.config" "$HOME/.npm" "$HOME/.claude"'
 setup own-dirs ok
 mkdir -p "$HOME/.config/gh" "$HOME/.npm" "$HOME/.local/bin" "$HOME/.claude"
-check "own folders: no stop and no output" 'runs_ok require_owned "$HOME/.config" "$HOME/.local" "$HOME/.local/bin" "$HOME/.npm" "$HOME/.claude" && [ "$(cat "$OUT")" = "the installer continues" ]'
+check "own folders: no stop and no output" 'runs_ok require_owned "$HOME/.config" "$HOME/.config/gh" "$HOME/.local" "$HOME/.local/bin" "$HOME/.npm" "$HOME/.claude" && [ "$(cat "$OUT")" = "the installer continues" ]'
 setup new-mac ok
-check "folders that do not exist yet: no stop and no output" 'runs_ok require_owned "$HOME/.config" "$HOME/.local" "$HOME/.npm" "$HOME/.claude" && [ "$(cat "$OUT")" = "the installer continues" ]'
+check "folders that do not exist yet: no stop and no output" 'runs_ok require_owned "$HOME/.config" "$HOME/.config/gh" "$HOME/.local" "$HOME/.npm" "$HOME/.claude" && [ "$(cat "$OUT")" = "the installer continues" ]'
 
 printf '\n3. content-cli\n'
 setup npm-writable ok
