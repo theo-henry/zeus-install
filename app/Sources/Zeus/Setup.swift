@@ -39,7 +39,7 @@ final class SetupModel: ObservableObject {
         Step(id: 14, name: "Google Cloud CLI", note: "For EU mode. Installed in ~/google-cloud-sdk."),
         Step(id: 15, name: "EU workspace", note: "Copied to ~/Code/zeus-eu, or updated there."),
         Step(id: 16, name: "Zeus plugins of EU mode", note: "Installed or updated in ~/.zeus/eu/claude."),
-        Step(id: 17, name: "Google sign-in", note: "For EU mode. Your browser opens. You can skip it."),
+        Step(id: 17, name: SetupModel.googleSignInName, note: "For EU mode. Your browser opens. You can skip it."),
     ]
     @Published var phase: Phase = .checking
     @Published var logText = ""
@@ -59,6 +59,10 @@ final class SetupModel: ObservableObject {
     private var log = TerminalLog()
     private var lastOutput = Date()
     private var idleTimer: Timer?
+
+    /// The Google sign-in of EU mode, the last EU step: its number comes from the step list, not from a fixed value.
+    static let googleSignInName = "Google sign-in"
+    var googleSignInStep: Int? { steps.first { $0.name == Self.googleSignInName }?.id }
 
     /// Step 0 (the app in Applications) is not an installer step.
     var needsInstall: Bool { steps.contains { $0.id != 0 && $0.state == .todo } }
@@ -335,7 +339,7 @@ struct SetupView: View {
                     Button("Accept") { model.answerQuestion(true) }.keyboardShortcut(.defaultAction)
                 }
             }
-        } else if let question = model.question, question.step == 17 {
+        } else if let question = model.question, question.step == model.googleSignInStep {
             promptBox {
                 Text("Sign in to Google for EU mode?").fontWeight(.semibold)
                 Text("EU mode runs Claude on Google Cloud in the EU. Sign in with your work email. If you do not use EU mode, skip it; Zeus does not ask again.")
@@ -387,7 +391,7 @@ struct SetupView: View {
 
     @ViewBuilder
     private var googleSignIn: some View {
-        if model.phase == .installing, model.question == nil, model.steps.first(where: { $0.id == 17 })?.state == .running,
+        if model.phase == .installing, model.question == nil, model.steps.first(where: { $0.id == model.googleSignInStep })?.state == .running,
            let link = model.lastLink {
             promptBox {
                 Text("Google sign-in").fontWeight(.semibold)

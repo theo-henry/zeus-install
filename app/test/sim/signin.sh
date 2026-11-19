@@ -36,32 +36,34 @@ signin_scenario() {
   start_app signin
   adc="$SANDBOX/.config/gcloud/application_default_credentials.json"
   need "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
-  check "the check finds the Google sign-in to do on a new Mac" 'grep -q "setup event: state 17 todo" "$TRACE"'
+  # The sign-in is the last step of the check (the last EU step in app mode), whatever its number.
+  SIGNIN="$(grep -o "setup event: state [0-9]*" "$TRACE" | tail -1 | awk '{print $4}')"
+  need "the check finds the Google sign-in, step $SIGNIN, to do on a new Mac" '[ -n "$SIGNIN" ] && grep -q "setup event: state $SIGNIN todo" "$TRACE"'
 
   # Skip: a user who does not use EU mode.
   setup_round 1
-  need "step 17: the installer asks for the Google sign-in" 'wait_for "setup event: ask 17 " 150'
+  need "the installer asks for the Google sign-in" 'wait_for "setup event: ask $SIGNIN " 150'
   shot signin-1-question
   act setup-answer-no
   check "Skip skips the Google sign-in, and the setup completes" \
-    'wait_for "setup event: skipped 17 Google sign-in (EU mode, skipped)" 20 && setup_ended 1 && [ "$(grep -c "setup event: failed " "$TRACE")" = 0 ]'
+    'wait_for "setup event: skipped $SIGNIN Google sign-in (EU mode, skipped)" 20 && setup_ended 1 && [ "$(grep -c "setup event: failed " "$TRACE")" = 0 ]'
   check "Skip runs no Google sign-in" '! grep -q "application-default login" "$STATE/gcloud.log" && [ ! -e "$adc" ]'
-  check "the skip is kept" '[ -f "$SANDBOX/.zeus/eu/google-sign-in-skipped" ]'
+  check "the skip is kept outside the EU folder ~/.zeus/eu" '[ -f "$SANDBOX/.zeus/google-sign-in-skipped" ] && [ -z "$(find "$SANDBOX/.zeus/eu" -name "*sign-in*" 2>/dev/null)" ]'
   shot signin-2-skipped
   setup_round 2
   check "the setup again does not ask after a skip" \
-    'wait_count "setup event: skipped 17 Google sign-in (EU mode, skipped)" 2 120 && setup_ended 2 && [ "$(grep -c "setup event: ask 17 " "$TRACE")" = 1 ]'
+    'wait_count "setup event: skipped $SIGNIN Google sign-in (EU mode, skipped)" 2 120 && setup_ended 2 && [ "$(grep -c "setup event: ask $SIGNIN " "$TRACE")" = 1 ]'
 
   # No access: the sign-in completes, but the account has not the two roles. The message names the account, and the
   # setup completes; EU mode is not ready.
-  rm -f "$SANDBOX/.zeus/eu/google-sign-in-skipped"
+  rm -f "$SANDBOX/.zeus/google-sign-in-skipped"
   printf 'none\n' >"$STATE/google-access"
   setup_round 3
-  need "after the skip is removed, the installer asks again" 'wait_count "setup event: ask 17 " 2 120'
+  need "after the skip is removed, the installer asks again" 'wait_count "setup event: ask $SIGNIN " 2 120'
   act setup-answer-yes
-  check "the Google sign-in runs" 'wait_for "setup event: failed 17 " 30 && [ "$(grep -c "^auth application-default login$" "$STATE/gcloud.log")" = 1 ]'
+  check "the Google sign-in runs" 'wait_for "setup event: failed $SIGNIN " 30 && [ "$(grep -c "^auth application-default login$" "$STATE/gcloud.log")" = 1 ]'
   check "an account without access gets the message for the two roles, with the account" \
-    'grep -q "setup event: failed 17 Your Google account sim@example.com has no access to the EU project of Zeus. Ask the Zeus maintainer for the Vertex AI User and Service Usage Consumer roles.$" "$TRACE"'
+    'grep -q "setup event: failed $SIGNIN Your Google account sim@example.com has no access to the EU project of Zeus. Ask the Zeus maintainer for the Vertex AI User and Service Usage Consumer roles.$" "$TRACE"'
   check "without access, the setup still completes" 'setup_ended 3'
   check "without access, the EU project is not the quota project" '! grep -q quota_project_id "$adc"'
   shot signin-3-no-access
@@ -71,18 +73,18 @@ signin_scenario() {
   rm -f "$STATE/google-access"
   setup_round 4
   check "after the roles, the setup again completes the step without a question or a new sign-in" \
-    'wait_for "setup event: done 17 Google sign-in (EU mode, sim@example.com)" 120 && setup_ended 4 && [ "$(grep -c "setup event: ask 17 " "$TRACE")" = 2 ] && [ "$(grep -c "^auth application-default login$" "$STATE/gcloud.log")" = 1 ]'
-  check "after the roles, the sign-in row shows no old message" '[ "$(grep -c "setup detail 17: " "$TRACE")" = 1 ]'
+    'wait_for "setup event: done $SIGNIN Google sign-in (EU mode, sim@example.com)" 120 && setup_ended 4 && [ "$(grep -c "setup event: ask $SIGNIN " "$TRACE")" = 2 ] && [ "$(grep -c "^auth application-default login$" "$STATE/gcloud.log")" = 1 ]'
+  check "after the roles, the sign-in row shows no old message" '[ "$(grep -c "setup detail $SIGNIN: " "$TRACE")" = 1 ]'
   check "the EU project is then the quota project" 'grep -q "\"quota_project_id\": \"project-4bf0bacd-fec4-406b-a99\"" "$adc"'
   shot signin-4-access
 
   # An existing sign-in with access: nothing to do and no question.
   setup_round 5
   check "a Mac that is signed in skips the step without a question" \
-    'wait_for "setup event: skipped 17 Google sign-in (EU mode, sim@example.com)" 120 && setup_ended 5 && [ "$(grep -c "setup event: ask 17 " "$TRACE")" = 2 ] && [ "$(grep -c "^auth application-default login$" "$STATE/gcloud.log")" = 1 ]'
+    'wait_for "setup event: skipped $SIGNIN Google sign-in (EU mode, sim@example.com)" 120 && setup_ended 5 && [ "$(grep -c "setup event: ask $SIGNIN " "$TRACE")" = 2 ] && [ "$(grep -c "^auth application-default login$" "$STATE/gcloud.log")" = 1 ]'
   # The whole output first, then grep: with pipefail, grep -q can end the pipe before install.sh ends (SIGPIPE).
   out="$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check 2>&1 || true)"
-  check "install.sh --check finds the sign-in done" 'printf "%s" "$out" | grep -q "@@zeus state 17 ok"'
+  check "install.sh --check finds the sign-in done" 'printf "%s" "$out" | grep -q "@@zeus state $SIGNIN ok"'
   stop_app
 
   # Terminal use (no Zeus app): the same results, as warnings that do not stop the setup.
@@ -97,6 +99,6 @@ signin_scenario() {
   touch "$STATE/google-token-expired"
   out="$(signin_terminal)"
   check "in Terminal use without a keyboard, an expired sign-in is skipped with a note, and the setup goes on" \
-    'printf "%s" "$out" | grep -q "No keyboard is connected" && printf "%s" "$out" | grep -q "^skipped   Google sign-in (EU mode, skipped)$" && printf "%s" "$out" | grep -q "^after-eu$" && [ ! -f "$SANDBOX/.zeus/eu/google-sign-in-skipped" ]'
+    'printf "%s" "$out" | grep -q "No keyboard is connected" && printf "%s" "$out" | grep -q "^skipped   Google sign-in (EU mode, skipped)$" && printf "%s" "$out" | grep -q "^after-eu$" && [ ! -f "$SANDBOX/.zeus/google-sign-in-skipped" ]'
   check "the access check never puts the token on a command line" '! grep -q "sim-access-token" "$STATE/curl.log"'
 }

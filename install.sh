@@ -70,8 +70,9 @@ EU_VERTEX_PROJECT="project-4bf0bacd-fec4-406b-a99"
 # Zeus Editor read (src/eu/preflight.js), and one permission of each of the two roles, which the access check tests.
 ADC_FILE="$HOME/.config/gcloud/application_default_credentials.json"
 EU_PERMISSIONS='["aiplatform.endpoints.predict", "serviceusage.services.use"]'
-# The user skipped the Google sign-in: the installer does not ask again.
-EU_SIGN_IN_SKIPPED="$HOME/.zeus/eu/google-sign-in-skipped"
+# The user skipped the Google sign-in: the installer does not ask again. Not in ~/.zeus/eu: the installer writes nothing
+# there except the EU steps' own folders.
+EU_SIGN_IN_SKIPPED="$HOME/.zeus/google-sign-in-skipped"
 # The Google Cloud CLI for the EU sign-in: the official macOS archive, pinned by version and checksum. gcloud updates
 # itself later (gcloud components update) when the user wants.
 GCLOUD_VERSION="593.0.0"
@@ -112,6 +113,9 @@ TOTAL_STEPS=16
 EU_FIRST_STEP=12
 if [ -n "$APP_MODE" ]; then TOTAL_STEPS=17; EU_FIRST_STEP=14; fi
 if [ -n "$APP_ONLY" ]; then TOTAL_STEPS=6; fi
+# The Google sign-in is the last EU step: the last step in app mode, and the step before the Zeus app in Terminal use.
+EU_SIGN_IN_STEP=$((TOTAL_STEPS - 1))
+if [ -n "$APP_MODE" ]; then EU_SIGN_IN_STEP=$TOTAL_STEPS; fi
 CURRENT_STEP=0
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -1126,7 +1130,7 @@ eu_no_access() {
 # check, and the EU project as the quota project, as the sign-in button of the Zeus app does. A Mac that is already signed
 # in gets no question. Without access, the step gives the message for the roles; the setup goes on.
 sign_in_google() {
-  step $((EU_FIRST_STEP + 3)) "Google sign-in (EU mode)"
+  step "$EU_SIGN_IN_STEP" "Google sign-in (EU mode)"
   EU_GCLOUD="$(find_gcloud)" ||
     fail "The Google Cloud CLI is not installed, so the Google sign-in of EU mode cannot run."
   local signed_in="" status=0
@@ -1297,9 +1301,9 @@ check_steps() {
   if command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state 16 ok; else state 16 todo; fi
   # No network here: a sign-in with the EU quota project, or a skip. The step itself checks the access.
   if [ -f "$EU_SIGN_IN_SKIPPED" ] || { [ -f "$ADC_FILE" ] && [ "$(adc_quota_project)" = "$EU_VERTEX_PROJECT" ]; }; then
-    state 17 ok
+    state "$EU_SIGN_IN_STEP" ok
   else
-    state 17 todo
+    state "$EU_SIGN_IN_STEP" todo
   fi
   emit "checked"
 }
