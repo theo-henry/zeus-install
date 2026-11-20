@@ -438,7 +438,7 @@ XML
   check "the app keeps the three tabs and quits" 'wait_for "restore: kept 3 tabs" 20'
   waited=0
   while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
-  check "the quit locks the vault" '! kill -0 "$APP_PID" 2>/dev/null && ! vault_mounted'
+  check "the quit locks the vault" '! kill -0 "$APP_PID" 2>/dev/null && vault_locked_after_quit'
   restore_file="$SANDBOX/Library/Application Support/Zeus/restore.json"
   check "the Standard record keeps the place of each EU tab, never its chat or project" \
     'python3 -c "import json,sys; r=json.load(open(sys.argv[1])); t=r[\"windows\"][0][\"tabs\"]; sys.exit(0 if [x.get(\"mode\") for x in t]==[\"eu\",\"eu\",\"standard\"] and all(set(x)<={\"mode\",\"terminalVisible\",\"selected\"} for x in t[:2]) and t[2][\"sessionID\"]==sys.argv[2] else 1)" "$restore_file" "$standard_chat" && ! grep -q "$eu_chat" "$restore_file"'
@@ -457,7 +457,7 @@ XML
     '[ "$(grep -c " stop " "$STATE/sessions")" -eq $(( $(grep -c " start " "$STATE/sessions") - $(grep -c " preflight-failed " "$STATE/sessions") )) ]'
 
   # The mode of the tab used last stays across app starts. The quit locked the vault; an EU start opens it again with Touch ID.
-  check "the quit locked the EU vault" '! vault_mounted'
+  check "the quit locked the EU vault" 'vault_locked_after_quit'
   defaults write "$PREFS_DOMAIN" zeusMode -string eu
   # A cancelled Touch ID at an EU start with no chat open: the user can go on in Standard mode.
   launch_app eu-locked ZEUS_APP_TEST_VAULT_AUTH=cancel ZEUS_APP_TEST_KEYCHAIN="$VAULT_KEYCHAIN"
@@ -485,7 +485,7 @@ XML
   check "the next EU session follows the new status line of Standard" \
     'python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"statusLine\"][\"command\"] == \"node /sim/hud/1.1.0/line.cjs\" else 1)" "$SANDBOX/.zeus/eu/claude/settings.json"'
   stop_app
-  check "the quit locks the vault again" '! vault_mounted'
+  check "the quit locks the vault again" 'vault_locked_after_quit'
   check "each app start gives its sessions a new ZEUS_APP_RUN (the EU start check holds for one app run)" \
     'python3 -c "import json,sys; runs=[json.loads(x)[\"run\"] for x in open(sys.argv[1])]; sys.exit(0 if all(runs) and len(set(runs))==4 else 1)" "$STATE/zeus-starts"'
 }

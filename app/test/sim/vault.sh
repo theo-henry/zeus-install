@@ -11,6 +11,14 @@ real_path() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "
 # vault_mounted: a volume is mounted at the vault folder of the simulated home.
 vault_mounted() { mount | grep -qF " on $VAULT_REAL (apfs"; }
 
+# vault_locked_after_quit: the vault is not mounted after the quit. The app quits at most 4 s after it starts the lock;
+# on a busy Mac the unmount that it started finishes after the app ended.
+vault_locked_after_quit() {
+  local waited=0
+  while vault_mounted && [ "$waited" -lt 30 ]; do sleep 1; waited=$((waited + 1)); done
+  ! vault_mounted
+}
+
 # vault_state_has <text>: the app writes the state of the vault into the trace, and it has this text.
 vault_state_has() {
   local before
