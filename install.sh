@@ -1088,23 +1088,34 @@ claude_logged_in() {
 }
 
 # Prints why the macOS keychain cannot store the Claude login: "none" (no default keychain), "missing" (the default
-# keychain file does not exist), or "locked" (it cannot be read). Prints nothing when it is usable. Only reads;
-# it never changes a keychain. Without the security command (not macOS) it prints nothing.
+# keychain file does not exist), "locked" (it cannot be read), or "unlisted" (it is not in the keychain search list of
+# the user). Prints nothing when it is usable. Only reads; it never changes a keychain. Without the security command
+# (not macOS) it prints nothing.
 keychain_problem() {
-  local default_keychain
+  local default_keychain keychains
   command -v security >/dev/null 2>&1 || return 0
   default_keychain="$(security default-keychain -d user 2>/dev/null </dev/null)" || { echo none; return 0; }
   default_keychain="$(printf '%s' "$default_keychain" | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')"
   [ -n "$default_keychain" ] || { echo none; return 0; }
   [ -e "$default_keychain" ] || { echo missing; return 0; }
-  security show-keychain-info "$default_keychain" </dev/null >/dev/null 2>&1 || echo locked
+  security show-keychain-info "$default_keychain" </dev/null >/dev/null 2>&1 || { echo locked; return 0; }
+  keychains="$(security list-keychains -d user 2>/dev/null </dev/null | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')" || true
+  grep -qxF "$default_keychain" <<<"$keychains" || echo unlisted
 }
 
 # Stops with one plain message and the exact fix for the keychain problem. The installer never runs sudo and never
-# creates, deletes, or resets a keychain.
+# creates, deletes, or resets a keychain, and never changes the keychain search list.
 # Argument: the problem from keychain_problem.
 fail_keychain() {
-  local login_keychain='~/Library/Keychains/login.keychain-db' reason
+  local login_keychain='~/Library/Keychains/login.keychain-db' keychains reason
+  local warning="If a macOS window says \"Keychain Not Found\", click Cancel. Never click \"Reset To Defaults\": it replaces your login keychain."
+  if [ "$1" = unlisted ]; then
+    keychains="$(security list-keychains -d user 2>/dev/null </dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '\n' ' ')" || true
+    fail "The default keychain of this Mac is not in its keychain list, so Claude cannot save your login." \
+      "Run this to add the login keychain to the list, then go on:" \
+      "security list-keychains -d user -s $login_keychain${keychains:+ ${keychains% }}" \
+      "$warning"
+  fi
   case "$1" in
     locked) reason="The login keychain of this Mac is locked, so Claude cannot save your login." ;;
     *) reason="This Mac has no usable default keychain, so Claude cannot save your login." ;;
@@ -1114,7 +1125,7 @@ fail_keychain() {
     "- Open the Keychain Access app, right-click \"login\", and choose Unlock Keychain." \
     "- Or run: security unlock-keychain $login_keychain" \
     "- If the Mac has no default keychain, run: security default-keychain -s $login_keychain" \
-    "If a macOS window says \"Keychain Not Found\", click Cancel. Never click \"Reset To Defaults\": it replaces your login keychain."
+    "$warning"
 }
 
 login_claude() {

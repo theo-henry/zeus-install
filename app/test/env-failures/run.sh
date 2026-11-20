@@ -7,7 +7,8 @@
 #      with "EINVAL: invalid argument, kqueue" on /dev/tty). Without a terminal, the installer prints how to log
 #      in with the Terminal app, and the login that is already done is skipped.
 #   4. The Claude login and the macOS keychain: no default keychain, a missing keychain file, or a locked keychain stops
-#      step 13 before the browser opens with the exact fix; a failed login with an unusable keychain shows the same fix.
+#      step 13 before the browser opens with the exact fix, and so does a default keychain that is not in the
+#      search list; a failed login with an unusable keychain shows the same fix.
 #   3. content-cli: when the global folder of npm is not writable, it goes to ~/.npm-global, and the command is
 #      linked into ~/.local/bin and found in the same run and on the next run.
 #      Root-owned files in the npm cache stop the step with the exact "sudo chown" line for ~/.npm.
@@ -195,7 +196,7 @@ check "an existing login is skipped, with or without a terminal" 'python3 -I "$W
 
 printf '\n4. Claude login and the macOS keychain\n'
 # Simulated security command: $STATE/keychain is "ok", "none" (no default keychain), "missing" (the file is not there),
-# or "locked" (the keychain cannot be read). It records every call; a keychain command that changes something is a failure.
+# "locked" (the keychain cannot be read), or "unlisted" (not in the search list). It records every call; a keychain command that changes something is a failure.
 cat >"$WORK/tools/security" <<'TOOL'
 #!/bin/bash
 printf 'security %s\n' "$*" >>"$CALLS"
@@ -209,6 +210,10 @@ case "${1:-}" in
     if [ "$mode" = locked ]; then echo "security: SecKeychainCopySettings $2: User canceled the operation." >&2; exit 128; fi
     echo "Keychain \"$2\" lock-on-sleep timeout=300s"
     ;;
+  list-keychains)
+    if [ "$mode" != unlisted ]; then echo "    \"$HOME/Library/Keychains/login.keychain-db\""; fi
+    echo "    \"/Library/Keychains/System Other.keychain\""
+    ;;
   *) echo "unexpected security call: $*" >&2; exit 99 ;;
 esac
 TOOL
@@ -220,7 +225,7 @@ keychain_setup() {
   cp "$WORK/tools/security" "$HOME/../bin/security"
   printf '%s\n' "$2" >"$STATE/keychain"
   if [ "$2" != none ] && [ "$2" != missing ]; then mkdir -p "$HOME/Library/Keychains"; fi
-  if [ "$2" = ok ] || [ "$2" = locked ]; then : >"$HOME/Library/Keychains/login.keychain-db"; fi
+  if [ "$2" = ok ] || [ "$2" = locked ] || [ "$2" = unlisted ]; then : >"$HOME/Library/Keychains/login.keychain-db"; fi
   cat >"$HOME/../bin/claude" <<'TOOL'
 #!/bin/bash
 printf 'claude %s\n' "$*" >>"$CALLS"
@@ -247,7 +252,7 @@ login_in_terminal() {
 
 keychain_setup kc-ok ok
 check "a usable keychain: the login runs and nothing changes" 'login_in_terminal; grep -q "Login successful." "$OUT" && grep -q "the installer continues" "$OUT" && ! grep -q "Stopped:" "$OUT"'
-check "a usable keychain: only reads the keychain" '! grep "^security" "$CALLS" | grep -vqE "^security (default-keychain -d user|show-keychain-info )"'
+check "a usable keychain: only reads the keychain" '! grep "^security" "$CALLS" | grep -vqE "^security (default-keychain -d user|show-keychain-info |list-keychains -d user$)"'
 keychain_setup kc-in ok
 touch "$STATE/logged-in"
 check "an existing login is skipped before any keychain check" 'login_in_terminal; grep -q "Already logged in." "$OUT" && ! grep -q "^security" "$CALLS"'
@@ -259,6 +264,9 @@ check "the default keychain file is missing: stops before the browser login" 'lo
 keychain_setup kc-locked locked
 check "a locked keychain: stops before the browser login with the unlock line" 'login_in_terminal; grep -q "keychain of this Mac is locked" "$OUT" && grep -q "security unlock-keychain ~/Library/Keychains/login.keychain-db" "$OUT" && ! grep -q "^claude auth login" "$CALLS"'
 check "a locked keychain: the installer never changes a keychain" '! grep "^security" "$CALLS" | grep -qE "unlock-keychain|create-keychain|delete-keychain|default-keychain -s|reset"'
+keychain_setup kc-unlisted unlisted
+check "the default keychain is not in the search list: stops before the browser login with the list line" 'login_in_terminal; grep -q "not in its keychain list" "$OUT" && grep -qF "security list-keychains -d user -s ~/Library/Keychains/login.keychain-db \"/Library/Keychains/System Other.keychain\"" "$OUT" && grep -q "Never click \"Reset To Defaults\"" "$OUT" && ! grep -q "^claude auth login" "$CALLS" && ! grep -q "the installer continues" "$OUT"'
+check "the default keychain is not in the search list: the installer never changes the list" '! grep "^security" "$CALLS" | grep -qE "list-keychains .*-s|unlock-keychain|default-keychain -s"'
 keychain_setup kc-nosave ok nosave
 check "the keychain locks during the login: shows the keychain fix, not only \"did not complete\"" 'login_in_terminal; grep -q "Couldn.t save your login" "$OUT" && grep -q "keychain of this Mac is locked" "$OUT" && grep -q "security unlock-keychain" "$OUT" && grep -q "Never click \"Reset To Defaults\"" "$OUT" && ! grep -q "The Claude login did not complete" "$OUT"'
 keychain_setup kc-other ok fail
