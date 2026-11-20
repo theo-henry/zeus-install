@@ -27,14 +27,9 @@ final class AppUpdate {
     /// The page bridge: `window.zeusApp.update` (see `WebViewHandler.pageBridgeScript`).
     static let pageInfo: [String: Any] = ["version": 1]
 
-    /// The app delegate, which owns the tabs.
+    /// The app delegate, which owns the tabs and the update step (its `AppLifecycle`).
     weak var app: AppDelegate?
 
-    private enum Phase: String {
-        case idle, checking, downloading, waiting, installing
-    }
-
-    private var phase = Phase.idle
     private var version: String?
     private var busyTabs = 0
     /// The page that asked for the update, also a Zeus Editor page.
@@ -124,8 +119,9 @@ final class AppUpdate {
 
     private func apply(from webView: WKWebView?) {
         requester = webView ?? requester
-        guard phase == .idle else {
-            Trace.log("app update: apply while \(phase.rawValue)")
+        guard let app else { return }
+        guard app.lifecycle.app == .running(update: nil) else {
+            Trace.log("app update: apply while \(app.lifecycle.app)")
             reply(["type": "app-update-apply", "status": "started"])
             sendProgress()
             return
@@ -138,7 +134,7 @@ final class AppUpdate {
             return
         }
         Trace.log("app update: apply")
-        phase = .checking
+        app.apply(.updateCheckStarted)
         version = nil
         sendProgress()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -146,7 +142,7 @@ final class AppUpdate {
                 DispatchQueue.main.async {
                     self.version = version
                     self.reply(["type": "app-update-apply", "status": "started"])
-                    self.phase = .downloading
+                    self.app?.apply(.updateFound)
                     self.sendProgress()
                 }
             }
@@ -154,7 +150,7 @@ final class AppUpdate {
                 switch result {
                 case .none(let why):
                     Trace.log("app update: none (\(why))")
-                    self.phase = .idle
+                    self.app?.apply(.updateNone)
                     let error = why == "up to date" ? "up-to-date" : why == "no gh" ? "no-gh"
                         : why == "no app release" ? "no-release" : why.hasPrefix("no release list") ? "unreachable" : "download-failed"
                     // A page that did not get "started" yet (the release was not found) gets its error here.
@@ -162,6 +158,7 @@ final class AppUpdate {
                     self.broadcast(["type": "app-update-failed", "error": error, "message": Self.message(for: error)])
                 case .ready(let update):
                     self.version = update.version
+                    self.app?.apply(.updateReady)
                     self.waitForIdleTabs(update)
                 }
             }
@@ -170,8 +167,7 @@ final class AppUpdate {
 
     /// The update waits until no tab works, so that no turn is cut off.
     private func waitForIdleTabs(_ update: Updater.Update) {
-        guard let app else { return }
-        phase = .waiting
+        guard let app, app.lifecycle.app.updateStep == .waiting else { return }
         app.busyTabCount { [weak self] busy in
             guard let self else { return }
             guard busy == 0 else {
@@ -189,8 +185,7 @@ final class AppUpdate {
     }
 
     private func install(_ update: Updater.Update) {
-        guard let app else { return }
-        phase = .installing
+        guard let app, app.apply(.installStarted) else { return }
         sendProgress()
         Trace.log("app update: installing \(update.version)")
         app.endTabsForUpdate(to: update.version) { restore in
@@ -201,7 +196,6 @@ final class AppUpdate {
             Updater.install(update) { relaunching in
                 guard !relaunching else { return }
                 // The new copy did not start or confirm: this copy runs on and opens the same tabs again.
-                self.phase = .idle
                 TabRestore.remove()
                 app.reopenAfterFailedUpdate(restore, version: update.version)
             }
@@ -211,10 +205,12 @@ final class AppUpdate {
     // MARK: Events
 
     private func sendProgress() {
-        var event: [String: Any] = ["type": "app-update-progress", "state": phase.rawValue]
+        let step = app?.lifecycle.app.updateStep
+        let state = step?.rawValue ?? "idle"
+        var event: [String: Any] = ["type": "app-update-progress", "state": state]
         if let version { event["version"] = version }
-        if phase == .waiting { event["busy"] = busyTabs }
-        Trace.log("app update: progress \(phase.rawValue)")
+        if step == .waiting { event["busy"] = busyTabs }
+        Trace.log("app update: progress \(state)")
         broadcast(event)
     }
 
