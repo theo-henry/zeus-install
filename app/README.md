@@ -145,7 +145,7 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   The app reads the key only after Touch ID, or the login password on a Mac without Touch ID (`LAContext`, `deviceOwnerAuthentication`), and gives it to `hdiutil -stdinpass` on standard input.
   The key is never in an environment, an argument, a log, a file, or a Claude session.
   The app does not make the vault over a `~/.zeus/eu` folder that holds files, because the mount would hide them.
-  The vault locks only when the app quits, after every session stopped (`hdiutil detach`, forced when a program still has a file of it open).
+  The vault locks only when the app quits, after every session stopped (`hdiutil detach -force`, because a program can still have a file of it open; the app waits for it at most 4 s).
   After a crash, the next app start locks it before anything else.
   The first EU start makes the vault, and each later EU start of an app run opens it (see **Standard | EU**); the tests also make and open it with debug test actions.
 - **Old EU folders.** The app never uses or removes `~/Code/zeus-eu` or the files in a plain `~/.zeus/eu` from before the shared workspace and the vault.
