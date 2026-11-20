@@ -254,7 +254,8 @@ start_app new ZEUS_SIM_START_DELAY=2500
 need "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
 need "the check finds 14 steps to do on a new Mac (got $todo)" '[ "$todo" = 14 ]'
-check "the EU plugins step waits for the EU vault (no vault on a new Mac)" 'wait_for "setup event: state 15 always" 5'
+# A new Mac has no Zeus Editor yet, so no EU profile with isolation: simple EU uses the plugins of Standard.
+check "the EU plugins step is not needed on a new Mac (simple EU)" 'wait_for "setup event: state 15 ok" 5'
 shot 1-check
 
 act setup-install

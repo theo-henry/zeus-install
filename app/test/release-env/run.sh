@@ -96,7 +96,8 @@ launch() {
 echo "Settings (Environment.swift, compiled without and with DEBUG)"
 settings() {
   local binary="$WORK/settings-$#"
-  swiftc "$@" -o "$binary" "$APP_DIR/Sources/Zeus/Environment.swift" "$TEST_DIR/main.swift" 2>/dev/null
+  swiftc "$@" -o "$binary" "$APP_DIR/Sources/Zeus/Environment.swift" "$APP_DIR/Sources/Zeus/GcloudPython.swift" \
+    "$TEST_DIR/main.swift" 2>/dev/null
   HOME="$WORK/settings-home" ZEUS_APP_TRACE="$WORK/settings-trace.log" ZEUS_EDITOR_STATE_DIR="$WORK/settings-editor" "$binary"
 }
 release_settings="$(settings)"

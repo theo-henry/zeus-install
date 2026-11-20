@@ -199,6 +199,8 @@ eu_scenario() {
 
   # The setup installs the Zeus plugins of EU mode in the open vault (the EU plugins step of install.sh).
   mkdir -p "$WORK/eu/bin"
+  # The check runs only the step, not the main part of install.sh that makes the log folder.
+  mkdir -p "$SANDBOX/Library/Logs/zeus-install"
   ln -sf "$SIM_DIR/payload/claude" "$WORK/eu/bin/claude"
   check "with the vault open, the EU plugins step of the setup installs the Zeus plugins in the vault" \
     'env HOME="$SANDBOX" PATH="$WORK/eu/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; install_eu_plugins" _ "$REPO_DIR/install.sh" >"$WORK/eu/eu-plugins.out" 2>&1 && grep -q "^@@zeus done " "$WORK/eu/eu-plugins.out" && grep -q "zeus-editor@zeus-editor" "$VAULT/claude/plugins/installed_plugins.json" && df "$VAULT/claude" | tail -1 | grep -qF "$VAULT_REAL"'
