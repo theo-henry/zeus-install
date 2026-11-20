@@ -196,7 +196,8 @@ check "an existing login is skipped, with or without a terminal" 'python3 -I "$W
 
 printf '\n4. Claude login and the macOS keychain\n'
 # Simulated security command: $STATE/keychain is "ok", "none" (no default keychain), "missing" (the file is not there),
-# "locked" (the keychain cannot be read), or "unlisted" (not in the search list). It records every call; a keychain command that changes something is a failure.
+# "locked" (the keychain cannot be read), "unlisted" (not in the search list), or "work-unlisted" (the default is
+# work.keychain-db, which is not in the search list, and the login keychain is in it). It records every call; a keychain command that changes something is a failure.
 cat >"$WORK/tools/security" <<'TOOL'
 #!/bin/bash
 printf 'security %s\n' "$*" >>"$CALLS"
@@ -204,6 +205,7 @@ mode="$(cat "$STATE/keychain")"
 case "${1:-}" in
   default-keychain)
     if [ "$mode" = none ]; then echo "security: SecKeychainCopyDefault: A default keychain could not be found." >&2; exit 1; fi
+    if [ "$mode" = work-unlisted ]; then echo "    \"$HOME/Library/Keychains/work.keychain-db\""; exit 0; fi
     echo "    \"$HOME/Library/Keychains/login.keychain-db\""
     ;;
   show-keychain-info)
@@ -226,6 +228,7 @@ keychain_setup() {
   printf '%s\n' "$2" >"$STATE/keychain"
   if [ "$2" != none ] && [ "$2" != missing ]; then mkdir -p "$HOME/Library/Keychains"; fi
   if [ "$2" = ok ] || [ "$2" = locked ] || [ "$2" = unlisted ]; then : >"$HOME/Library/Keychains/login.keychain-db"; fi
+  if [ "$2" = work-unlisted ]; then : >"$HOME/Library/Keychains/work.keychain-db"; fi
   cat >"$HOME/../bin/claude" <<'TOOL'
 #!/bin/bash
 printf 'claude %s\n' "$*" >>"$CALLS"
@@ -265,8 +268,10 @@ keychain_setup kc-locked locked
 check "a locked keychain: stops before the browser login with the unlock line" 'login_in_terminal; grep -q "keychain of this Mac is locked" "$OUT" && grep -q "security unlock-keychain ~/Library/Keychains/login.keychain-db" "$OUT" && ! grep -q "^claude auth login" "$CALLS"'
 check "a locked keychain: the installer never changes a keychain" '! grep "^security" "$CALLS" | grep -qE "unlock-keychain|create-keychain|delete-keychain|default-keychain -s|reset"'
 keychain_setup kc-unlisted unlisted
-check "the default keychain is not in the search list: stops before the browser login with the list line" 'login_in_terminal; grep -q "not in its keychain list" "$OUT" && grep -qF "security list-keychains -d user -s ~/Library/Keychains/login.keychain-db \"/Library/Keychains/System Other.keychain\"" "$OUT" && grep -q "Never click \"Reset To Defaults\"" "$OUT" && ! grep -q "^claude auth login" "$CALLS" && ! grep -q "the installer continues" "$OUT"'
+check "the default keychain is not in the search list: stops before the browser login with the list line" 'login_in_terminal; grep -q "not in its keychain list" "$OUT" && grep -qF "security list-keychains -d user -s \"$HOME/Library/Keychains/login.keychain-db\" \"/Library/Keychains/System Other.keychain\"" "$OUT" && grep -q "Never click \"Reset To Defaults\"" "$OUT" && ! grep -q "^claude auth login" "$CALLS" && ! grep -q "the installer continues" "$OUT"'
 check "the default keychain is not in the search list: the installer never changes the list" '! grep "^security" "$CALLS" | grep -qE "list-keychains .*-s|unlock-keychain|default-keychain -s"'
+keychain_setup kc-work work-unlisted
+check "a default keychain that is not the login keychain and not in the search list: the list line adds that keychain" 'login_in_terminal; grep -q "not in its keychain list" "$OUT" && grep -qF "security list-keychains -d user -s \"$HOME/Library/Keychains/work.keychain-db\" \"$HOME/Library/Keychains/login.keychain-db\" \"/Library/Keychains/System Other.keychain\"" "$OUT" && ! grep -q "^claude auth login" "$CALLS"'
 keychain_setup kc-nosave ok nosave
 check "the keychain locks during the login: shows the keychain fix, not only \"did not complete\"" 'login_in_terminal; grep -q "Couldn.t save your login" "$OUT" && grep -q "keychain of this Mac is locked" "$OUT" && grep -q "security unlock-keychain" "$OUT" && grep -q "Never click \"Reset To Defaults\"" "$OUT" && ! grep -q "The Claude login did not complete" "$OUT"'
 keychain_setup kc-other ok fail

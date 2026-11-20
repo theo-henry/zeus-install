@@ -1110,10 +1110,13 @@ fail_keychain() {
   local login_keychain='~/Library/Keychains/login.keychain-db' keychains reason
   local warning="If a macOS window says \"Keychain Not Found\", click Cancel. Never click \"Reset To Defaults\": it replaces your login keychain."
   if [ "$1" = unlisted ]; then
-    keychains="$(security list-keychains -d user 2>/dev/null </dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '\n' ' ')" || true
+    keychains="$(
+      { security default-keychain -d user; security list-keychains -d user; } 2>/dev/null </dev/null |
+        sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '\n' ' '
+    )" || true
     fail "The default keychain of this Mac is not in its keychain list, so Claude cannot save your login." \
-      "Run this to add the login keychain to the list, then go on:" \
-      "security list-keychains -d user -s $login_keychain${keychains:+ ${keychains% }}" \
+      "Run this to add the default keychain to the list, then go on:" \
+      "security list-keychains -d user -s ${keychains% }" \
       "$warning"
   fi
   case "$1" in
