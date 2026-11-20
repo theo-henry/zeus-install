@@ -1089,8 +1089,9 @@ claude_logged_in() {
 
 # Prints why the macOS keychain cannot store the Claude login: "none" (no default keychain), "missing" (the default
 # keychain file does not exist), "locked" (it cannot be read), or "unlisted" (it is not in the keychain search list of
-# the user). Prints nothing when it is usable. Only reads; it never changes a keychain. Without the security command
-# (not macOS) it prints nothing.
+# the user). Prints nothing when it is usable. It never creates, resets, or changes the list of a keychain. When the
+# keychain is locked, macOS can show a dialog that asks for the keychain password: the keychain is unlocked only if the
+# user enters the password, and Cancel gives "locked". Without the security command (not macOS) it prints nothing.
 keychain_problem() {
   local default_keychain keychains
   command -v security >/dev/null 2>&1 || return 0
@@ -1101,6 +1102,12 @@ keychain_problem() {
   security show-keychain-info "$default_keychain" </dev/null >/dev/null 2>&1 || { echo locked; return 0; }
   keychains="$(security list-keychains -d user 2>/dev/null </dev/null | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')" || true
   grep -qxF "$default_keychain" <<<"$keychains" || echo unlisted
+}
+
+# Tells the user, before keychain_problem, about the password dialog that macOS can show. Prints nothing when not macOS.
+keychain_note() {
+  command -v security >/dev/null 2>&1 || return 0
+  info "macOS may ask for your login keychain password: enter it to continue, or click Cancel."
 }
 
 # Stops with one plain message and the exact fix for the keychain problem. The installer never runs sudo and never
@@ -1148,10 +1155,12 @@ login_claude() {
   exec 3<&-
   # The browser login can succeed and then fail when the keychain cannot store it: check before the browser opens.
   local problem
+  keychain_note
   problem="$(keychain_problem)"
   if [ -n "$problem" ]; then fail_keychain "$problem"; fi
   info "Your browser opens. Log in to Claude there."
   if ! with_tty claude auth login || ! claude_logged_in; then
+    keychain_note
     problem="$(keychain_problem)"
     if [ -n "$problem" ]; then fail_keychain "$problem"; fi
     fail "The Claude login did not complete."

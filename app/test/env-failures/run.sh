@@ -255,10 +255,11 @@ login_in_terminal() {
 
 keychain_setup kc-ok ok
 check "a usable keychain: the login runs and nothing changes" 'login_in_terminal; grep -q "Login successful." "$OUT" && grep -q "the installer continues" "$OUT" && ! grep -q "Stopped:" "$OUT"'
+check "a usable keychain: says before the keychain check that macOS may ask for the keychain password" 'grep -q "macOS may ask for your login keychain password: enter it to continue, or click Cancel." "$OUT"'
 check "a usable keychain: only reads the keychain" '! grep "^security" "$CALLS" | grep -vqE "^security (default-keychain -d user|show-keychain-info |list-keychains -d user$)"'
 keychain_setup kc-in ok
 touch "$STATE/logged-in"
-check "an existing login is skipped before any keychain check" 'login_in_terminal; grep -q "Already logged in." "$OUT" && ! grep -q "^security" "$CALLS"'
+check "an existing login is skipped before any keychain check" 'login_in_terminal; grep -q "Already logged in." "$OUT" && ! grep -q "^security" "$CALLS" && ! grep -q "keychain password" "$OUT"'
 keychain_setup kc-none none
 check "no default keychain (a home folder without Library/Keychains): stops before the browser login" 'login_in_terminal; grep -q "no usable default keychain" "$OUT" && grep -q "security default-keychain -s ~/Library/Keychains/login.keychain-db" "$OUT" && ! grep -q "^claude auth login" "$CALLS" && ! grep -q "the installer continues" "$OUT"'
 check "no default keychain: the message warns about Reset To Defaults" 'grep -q "Never click \"Reset To Defaults\"" "$OUT"'
@@ -266,6 +267,7 @@ keychain_setup kc-missing missing
 check "the default keychain file is missing: stops before the browser login" 'login_in_terminal; grep -q "no usable default keychain" "$OUT" && ! grep -q "^claude auth login" "$CALLS"'
 keychain_setup kc-locked locked
 check "a locked keychain: stops before the browser login with the unlock line" 'login_in_terminal; grep -q "keychain of this Mac is locked" "$OUT" && grep -q "security unlock-keychain ~/Library/Keychains/login.keychain-db" "$OUT" && ! grep -q "^claude auth login" "$CALLS"'
+check "a locked keychain: the password line shows before the stop" 'awk "/macOS may ask for your login keychain password/ {n=NR} /keychain of this Mac is locked/ {if (n && n < NR) ok=1} END {exit !ok}" "$OUT"'
 check "a locked keychain: the installer never changes a keychain" '! grep "^security" "$CALLS" | grep -qE "unlock-keychain|create-keychain|delete-keychain|default-keychain -s|reset"'
 keychain_setup kc-unlisted unlisted
 check "the default keychain is not in the search list: stops before the browser login with the list line" 'login_in_terminal; grep -q "not in its keychain list" "$OUT" && grep -qF "security list-keychains -d user -s \"$HOME/Library/Keychains/login.keychain-db\" \"/Library/Keychains/System Other.keychain\"" "$OUT" && grep -q "Never click \"Reset To Defaults\"" "$OUT" && ! grep -q "^claude auth login" "$CALLS" && ! grep -q "the installer continues" "$OUT"'
