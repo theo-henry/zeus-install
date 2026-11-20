@@ -6,6 +6,8 @@
 #   2. The Claude login: the command gets the real terminal device as its input, not /dev/tty (Claude Code stops
 #      with "EINVAL: invalid argument, kqueue" on /dev/tty). Without a terminal, the installer prints how to log
 #      in with the Terminal app, and the login that is already done is skipped.
+#   4. The Claude login and the macOS keychain: no default keychain, a missing keychain file, or a locked keychain stops
+#      step 13 before the browser opens with the exact fix; "Couldn't save your login" shows the same fix.
 #   3. content-cli: when the global folder of npm is not writable, it goes to ~/.npm-global, and the command is
 #      linked into ~/.local/bin and found in the same run and on the next run.
 #      Root-owned files in the npm cache stop the step with the exact "sudo chown" line for ~/.npm.
@@ -190,6 +192,75 @@ cat >"$HOME/login.sh" <<'LOGIN'
 claude() { if [ "$1 $2" = "auth status" ]; then echo '{"loggedIn": true}'; else echo "claude was started"; fi; }
 LOGIN
 check "an existing login is skipped, with or without a terminal" 'python3 -I "$WORK/notty.py" "source \"$REPO_DIR/install.sh\"; source \"$HOME/login.sh\"; login_claude" >"$OUT" && grep -q "Already logged in." "$OUT"'
+
+printf '\n4. Claude login and the macOS keychain\n'
+# Simulated security command: $STATE/keychain is "ok", "none" (no default keychain), "missing" (the file is not there),
+# or "locked" (the keychain cannot be read). It records every call; a keychain command that changes something is a failure.
+cat >"$WORK/tools/security" <<'TOOL'
+#!/bin/bash
+printf 'security %s\n' "$*" >>"$CALLS"
+mode="$(cat "$STATE/keychain")"
+case "${1:-}" in
+  default-keychain)
+    if [ "$mode" = none ]; then echo "security: SecKeychainCopyDefault: A default keychain could not be found." >&2; exit 1; fi
+    echo "    \"$HOME/Library/Keychains/login.keychain-db\""
+    ;;
+  show-keychain-info)
+    if [ "$mode" = locked ]; then echo "security: SecKeychainCopySettings $2: User canceled the operation." >&2; exit 128; fi
+    echo "Keychain \"$2\" lock-on-sleep timeout=300s"
+    ;;
+  *) echo "unexpected security call: $*" >&2; exit 99 ;;
+esac
+TOOL
+chmod +x "$WORK/tools/security"
+# keychain_setup <name> <mode> <claude mode>: claude mode "ok" logs in; "nosave" prints the Claude Code keychain error, "fail" fails with another error.
+keychain_setup() {
+  setup "$1" ok
+  cp "$WORK/tools/security" "$HOME/../bin/security"
+  printf '%s\n' "$2" >"$STATE/keychain"
+  if [ "$2" != none ] && [ "$2" != missing ]; then mkdir -p "$HOME/Library/Keychains"; fi
+  if [ "$2" = ok ] || [ "$2" = locked ]; then : >"$HOME/Library/Keychains/login.keychain-db"; fi
+  cat >"$HOME/../bin/claude" <<'TOOL'
+#!/bin/bash
+printf 'claude %s\n' "$*" >>"$CALLS"
+if [ "$1 $2" = "auth status" ]; then
+  if [ -e "$STATE/logged-in" ]; then echo '{"loggedIn": true}'; else echo '{"loggedIn": false}'; fi
+  exit 0
+fi
+if [ "$(cat "$STATE/claude")" = nosave ]; then
+  echo "Couldn't log in: Couldn't save your login. If your Mac's keychain is locked, unlock it and log in again."
+  exit 1
+fi
+if [ "$(cat "$STATE/claude")" = fail ]; then echo "Login failed."; exit 1; fi
+touch "$STATE/logged-in"
+echo "Login successful."
+TOOL
+  chmod +x "$HOME/../bin/claude"
+  printf '%s\n' "${3:-ok}" >"$STATE/claude"
+}
+# login_in_terminal: step 13 with a pseudo terminal, with the result in $OUT.
+login_in_terminal() {
+  python3 -I "$WORK/pty.py" "source \"$REPO_DIR/install.sh\"; LOG_DIR=\"$HOME\"; login_claude; echo \"the installer continues\"" >"$OUT"
+}
+
+keychain_setup kc-ok ok
+check "a usable keychain: the login runs and nothing changes" 'login_in_terminal; grep -q "Login successful." "$OUT" && grep -q "the installer continues" "$OUT" && ! grep -q "Stopped:" "$OUT"'
+check "a usable keychain: only reads the keychain" '! grep "^security" "$CALLS" | grep -vqE "^security (default-keychain -d user|show-keychain-info )"'
+keychain_setup kc-in ok
+touch "$STATE/logged-in"
+check "an existing login is skipped before any keychain check" 'login_in_terminal; grep -q "Already logged in." "$OUT" && ! grep -q "^security" "$CALLS"'
+keychain_setup kc-none none
+check "no default keychain (a home folder without Library/Keychains): stops before the browser login" 'login_in_terminal; grep -q "no usable default keychain" "$OUT" && grep -q "security default-keychain -s ~/Library/Keychains/login.keychain-db" "$OUT" && ! grep -q "^claude auth login" "$CALLS" && ! grep -q "the installer continues" "$OUT"'
+check "no default keychain: the message warns about Reset To Defaults" 'grep -q "Never click \"Reset To Defaults\"" "$OUT"'
+keychain_setup kc-missing missing
+check "the default keychain file is missing: stops before the browser login" 'login_in_terminal; grep -q "no usable default keychain" "$OUT" && ! grep -q "^claude auth login" "$CALLS"'
+keychain_setup kc-locked locked
+check "a locked keychain: stops before the browser login with the unlock line" 'login_in_terminal; grep -q "keychain of this Mac is locked" "$OUT" && grep -q "security unlock-keychain ~/Library/Keychains/login.keychain-db" "$OUT" && ! grep -q "^claude auth login" "$CALLS"'
+check "a locked keychain: the installer never changes a keychain" '! grep "^security" "$CALLS" | grep -qE "unlock-keychain|create-keychain|delete-keychain|default-keychain -s|reset"'
+keychain_setup kc-nosave ok nosave
+check "\"Couldn't save your login\": shows the keychain fix, not only \"did not complete\"" 'login_in_terminal; grep -q "Couldn.t save your login" "$OUT" && grep -q "Stopped:" "$OUT" && grep -q "security unlock-keychain" "$OUT" && grep -q "Never click \"Reset To Defaults\"" "$OUT" && ! grep -q "The Claude login did not complete" "$OUT"'
+keychain_setup kc-other ok fail
+check "another login failure still says the login did not complete" 'login_in_terminal; grep -q "The Claude login did not complete." "$OUT" && ! grep -q "Reset To Defaults" "$OUT"'
 
 echo
 if [ "$FAILURES" -ne 0 ]; then echo "$FAILURES check(s) failed."; exit 1; fi

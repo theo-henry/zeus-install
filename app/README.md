@@ -308,6 +308,10 @@ Root-owned files in the npm cache stop step 8 with the `sudo chown` line for `~/
 The installer never runs `sudo`.
 The Claude login command gets the real terminal device as its input, not `/dev/tty`, because Claude Code stops with `EINVAL: invalid argument, kqueue` on `/dev/tty`.
 Without a terminal, the login step tells the user to run `claude` in the Terminal app, and an existing login is skipped.
+Before the browser login opens, step 13 reads the keychain with `security`.
+When the default keychain is missing or the login keychain is locked, it stops with the exact fix and the warning never to click Reset To Defaults.
+The same fix shows when Claude Code prints "Couldn't save your login".
+The installer never unlocks, creates, deletes, or resets a keychain.
 When the global folder of npm is not writable, content-cli goes to `~/.npm-global` and is linked into `~/.local/bin`.
 A root-owned folder in the test is a link to `/private/etc` in a temporary home folder, so no `sudo` and no real folder is used.
 A Mac with its own folders, a writable npm folder, or a finished login takes the same path as before, with no new output.

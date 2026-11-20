@@ -1087,6 +1087,36 @@ claude_logged_in() {
   claude auth status </dev/null 2>/dev/null | grep -q '"loggedIn": *true'
 }
 
+# Prints why the macOS keychain cannot store the Claude login: "none" (no default keychain), "missing" (the default
+# keychain file does not exist), or "locked" (it cannot be read). Prints nothing when it is usable. Only reads;
+# it never changes a keychain. Without the security command (not macOS) it prints nothing.
+keychain_problem() {
+  local default_keychain
+  command -v security >/dev/null 2>&1 || return 0
+  default_keychain="$(security default-keychain -d user 2>/dev/null </dev/null)" || { echo none; return 0; }
+  default_keychain="$(printf '%s' "$default_keychain" | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')"
+  [ -n "$default_keychain" ] || { echo none; return 0; }
+  [ -e "$default_keychain" ] || { echo missing; return 0; }
+  security show-keychain-info "$default_keychain" </dev/null >/dev/null 2>&1 || echo locked
+}
+
+# Stops with one plain message and the exact fix for the keychain problem. The installer never runs sudo and never
+# creates, deletes, or resets a keychain.
+# Argument: the problem from keychain_problem.
+fail_keychain() {
+  local login_keychain='~/Library/Keychains/login.keychain-db' reason
+  case "$1" in
+    locked) reason="The login keychain of this Mac is locked, so Claude cannot save your login." ;;
+    *) reason="This Mac has no usable default keychain, so Claude cannot save your login." ;;
+  esac
+  fail "$reason" \
+    "Do one of these, then go on:" \
+    "- Open the Keychain Access app, right-click \"login\", and choose Unlock Keychain." \
+    "- Or run: security unlock-keychain $login_keychain" \
+    "- If the Mac has no default keychain, run: security default-keychain -s $login_keychain" \
+    "If a macOS window says \"Keychain Not Found\", click Cancel. Never click \"Reset To Defaults\": it replaces your login keychain."
+}
+
 login_claude() {
   step 13 "Claude login"
   if claude_logged_in; then
@@ -1102,10 +1132,27 @@ login_claude() {
       "Then the setup finds the login and goes on."
   fi
   exec 3<&-
+  # The browser login can succeed and then fail when the keychain cannot store it: check before the browser opens.
+  local problem login_output status
+  problem="$(keychain_problem)"
+  if [ -n "$problem" ]; then fail_keychain "$problem"; fi
   info "Your browser opens. Log in to Claude there."
-  with_tty claude auth login ||
+  login_output="$(mktemp "${TMPDIR:-/tmp}/zeus-claude-login.XXXXXX")"
+  # The output goes to the screen and to a file. A failed login must not stop the script here (set -e, pipefail).
+  set +e
+  with_tty claude auth login 2>&1 | tee "$login_output"
+  status="${PIPESTATUS[0]}"
+  set -e
+  if [ "$status" -ne 0 ] || ! claude_logged_in; then
+    if grep -q "Couldn't save your login" "$login_output" 2>/dev/null; then
+      problem="$(keychain_problem)"
+      rm -f "$login_output"
+      fail_keychain "${problem:-locked}"
+    fi
+    rm -f "$login_output"
     fail "The Claude login did not complete."
-  claude_logged_in || fail "The Claude login did not complete."
+  fi
+  rm -f "$login_output"
   record "done" "Claude login"
 }
 

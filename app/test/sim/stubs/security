@@ -1,0 +1,20 @@
+#!/bin/bash
+# Simulated security command (macOS keychain): a usable default keychain, unless ZEUS_SIM_KEYCHAIN is "none" (no default
+# keychain) or "locked" (the default keychain cannot be read).
+case "${1:-}" in
+  default-keychain)
+    if [ "${ZEUS_SIM_KEYCHAIN:-ok}" = none ]; then
+      echo "security: SecKeychainCopyDefault: A default keychain could not be found." >&2
+      exit 1
+    fi
+    echo "    \"$HOME/Library/Keychains/login.keychain-db\""
+    ;;
+  show-keychain-info)
+    if [ "${ZEUS_SIM_KEYCHAIN:-ok}" = locked ]; then
+      echo "security: SecKeychainCopySettings $2: User canceled the operation." >&2
+      exit 128
+    fi
+    echo "Keychain \"$2\" lock-on-sleep timeout=300s"
+    ;;
+  *) echo "simulated security: unsupported arguments: $*" >&2; exit 1 ;;
+esac
