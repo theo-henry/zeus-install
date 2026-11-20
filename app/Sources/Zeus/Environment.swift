@@ -93,25 +93,52 @@ enum ShellEnvironment {
         pathLock.unlock()
         pythonLock.lock()
         cachedGcloudPython = nil
+        pythonSearch = nil
         pythonLock.unlock()
     }
 
     /// Starts the search for the Python of gcloud off the main queue (at app start), so that the first command that the
     /// app starts reads the result and does not wait for each candidate Python.
-    static func findGcloudPython() {
-        DispatchQueue.global(qos: .userInitiated).async { _ = gcloudPython() }
-    }
+    static func findGcloudPython() { startPythonSearch() }
 
     private static let pythonLock = NSLock()
     /// The Python of gcloud (`GcloudPython`), found once per PATH: "" when there is none.
     private static var cachedGcloudPython: String?
+    /// The search that runs now, if any.
+    private static var pythonSearch: DispatchGroup?
 
-    static func gcloudPython() -> String? {
+    /// The running search, or a new one off the main queue; nil when the result is known. No lock is held while it runs.
+    @discardableResult
+    private static func startPythonSearch() -> DispatchGroup? {
         pythonLock.lock()
         defer { pythonLock.unlock() }
-        if cachedGcloudPython == nil {
-            cachedGcloudPython = GcloudPython.find(folders: GcloudPython.folders(home: Paths.home), path: loginPath()) ?? ""
+        if cachedGcloudPython != nil { return nil }
+        if let pythonSearch { return pythonSearch }
+        let search = DispatchGroup()
+        search.enter()
+        pythonSearch = search
+        DispatchQueue.global(qos: .userInitiated).async {
+            let path = loginPath()
+            let found = GcloudPython.find(folders: GcloudPython.folders(home: Paths.home), path: path) ?? ""
+            pythonLock.lock()
+            if pythonSearch === search {
+                cachedGcloudPython = found
+                pythonSearch = nil
+            }
+            pythonLock.unlock()
+            search.leave()
         }
+        return search
+    }
+
+    /// The Python of gcloud. On the main thread it waits at most 2 seconds for a running search, then gives nil for this
+    /// one command; a later call reads the result.
+    private static func gcloudPython() -> String? {
+        if let search = startPythonSearch() {
+            _ = search.wait(timeout: Thread.isMainThread ? .now() + 2 : .distantFuture)
+        }
+        pythonLock.lock()
+        defer { pythonLock.unlock() }
         return cachedGcloudPython.flatMap { $0.isEmpty ? nil : $0 }
     }
 
