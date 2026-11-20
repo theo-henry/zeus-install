@@ -36,7 +36,7 @@
 #   --app-only   used by install-app.sh: steps 1 to 5 (GitHub login and access check), then the Zeus app.
 #                The app does the other steps in its setup window.
 #   --eu-status-line  used by the Zeus app before each EU session: EU gets the status line of Standard again
-#                (eu_mirror_status_line). Installs nothing else.
+#                (eu_mirror_status_line). Installs nothing else, and does nothing while the EU vault is locked.
 
 # ShellCheck 0.11 reports SC2218 for helpers that are defined before main runs (0.10 does not).
 # shellcheck disable=SC2218
@@ -1590,6 +1590,8 @@ main() {
     fail "Do not run this installer with sudo." "Run the install line without sudo."
   fi
   if [ "${1:-}" = "--eu-status-line" ]; then
+    # The EU Claude Code folder is in the EU vault: never write ~/.zeus/eu while no vault is mounted there.
+    eu_vault_open || return 0
     eu_mirror_status_line
     return
   fi

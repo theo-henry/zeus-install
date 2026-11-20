@@ -113,8 +113,12 @@ standard_line "node /x/1.1.0/line.cjs"
 run_install 1 eu_mirror_status_line >/dev/null 2>&1
 check "a new Standard status line path replaces the copied one in EU" '[ "$(eu_line)" = "node /x/1.1.0/line.cjs" ]'
 standard_line "node /x/1.2.0/line.cjs"
-bash "$REPO_DIR/install.sh" --eu-status-line >/dev/null 2>&1
+ZEUS_INSTALL_TEST_EU_VAULT_OPEN=1 bash "$REPO_DIR/install.sh" --eu-status-line >/dev/null 2>&1
 check "install.sh --eu-status-line (the app, before each EU session) also updates EU" '[ "$(eu_line)" = "node /x/1.2.0/line.cjs" ]'
+rm -rf "$HOME/.zeus/eu.locked-check" && mv "$HOME/.zeus/eu" "$HOME/.zeus/eu.locked-check"
+bash "$REPO_DIR/install.sh" --eu-status-line >/dev/null 2>&1
+check "install.sh --eu-status-line writes nothing in ~/.zeus/eu while the EU vault is locked" '[ ! -e "$HOME/.zeus/eu" ]'
+mv "$HOME/.zeus/eu.locked-check" "$HOME/.zeus/eu"
 printf '{"model": "opus"}\n' >"$STANDARD_SETTINGS"
 run_install 1 eu_mirror_status_line >/dev/null 2>&1
 check "a Standard status line that was removed is removed from EU" '[ "$(eu_line)" = "none" ]'
