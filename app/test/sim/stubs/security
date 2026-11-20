@@ -1,0 +1,7 @@
+#!/bin/bash
+# Simulated security command (macOS keychain): the login keychain of the simulated home folder is the usable default and the only keychain in the search list.
+case "${1:-}" in
+  default-keychain | list-keychains) echo "    \"$HOME/Library/Keychains/login.keychain-db\"" ;;
+  show-keychain-info) echo "Keychain \"$2\" lock-on-sleep timeout=300s" ;;
+  *) echo "simulated security: unsupported arguments: $*" >&2; exit 1 ;;
+esac
