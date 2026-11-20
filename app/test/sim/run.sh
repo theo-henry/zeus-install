@@ -916,8 +916,10 @@ act test-alert:1
 check "in Terminal use, a failed EU step is a warning, and the steps after it run" \
   'out="$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; install_eu; echo after-eu; printf \"%s\\n\" \"\${SUMMARY[@]}\"" _ "$REPO_DIR/install.sh" 2>&1)" && printf "%s" "$out" | grep -q "^after-eu$" && printf "%s" "$out" | grep -q "Warning:.*google-cloud-cli" && printf "%s" "$out" | grep -q "^warning   Google Cloud CLI (not set up; EU mode only)$" && ! printf "%s" "$out" | grep -q "Stopped:"'
 blocked="$WORK/eu-config-blocked"
-mkdir -p "$blocked/.zeus"
+mkdir -p "$blocked/.zeus" "$blocked/.claude/plugins/cache/zeus-editor/zeus-editor/sim/dist"
 : >"$blocked/.zeus/eu"
+: >"$blocked/.claude/plugins/cache/zeus-editor/zeus-editor/sim/dist/zeus.mjs"
+cp "$SIM_DIR/payload/eu-profile.json" "$blocked/.claude/plugins/cache/zeus-editor/zeus-editor/sim/eu-profile.json"
 check "an EU step that fails without its own message (an EU config folder that can not be made) is reported failed, and the setup goes on" \
   'out="$(env HOME="$blocked" PATH="$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_INSTALL_APP=1 ZEUS_INSTALL_TEST_EU_VAULT_OPEN=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; eu_step install_eu_plugins \"Zeus plugins of EU mode\"; echo after-eu; printf \"%s\\n\" \"\${SUMMARY[@]}\"" _ "$REPO_DIR/install.sh" 2>&1)" && [ "$(printf "%s\n" "$out" | grep -c "^@@zeus failed ")" = 1 ] && printf "%s" "$out" | grep -q "^@@zeus failed 15 Zeus plugins of EU mode could not be set up" && printf "%s" "$out" | grep -q "^after-eu$" && printf "%s" "$out" | grep -q "^warning   Zeus plugins of EU mode (not set up; EU mode only)$"'
 stop_app

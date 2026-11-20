@@ -37,8 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Before anything else: a EU vault that stayed open after a crash locks now, while no session runs.
         EUVault.shared.lockAtStart()
-        // Then, once: EU mode from before the shared workspace and the vault goes (LegacyEU), while no session runs.
-        LegacyEU.removeOnce()
+        ShellEnvironment.findGcloudPython()
         // The read block of Standard sessions on a Mac with an EU vault, from the EU folders of the installed Zeus Editor
         // (written again before each Standard start).
         if StandardJail.isOn {

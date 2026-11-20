@@ -8,9 +8,8 @@
 # shellcheck disable=SC2016,SC2034,SC2154
 
 # A Mac after the Zeus setup, with the EU step of install.sh outside the vault (the Google Cloud CLI) and Zeus Editor
-# with its EU profile. No EU vault and no sign-in yet. EU mode from before the shared workspace and the vault is still
-# there (test data, which the app removes once): the EU workspace ~/Code/zeus-eu, a copy of the zeus repo, and the plain
-# EU folders in ~/.zeus/eu.
+# with its EU profile. No EU vault and no sign-in yet. The EU workspace from before the shared workspace, ~/Code/zeus-eu
+# (a copy of the zeus repo), is still there: the app never uses or removes it.
 eu_sandbox() {
   SANDBOX="$WORK/eu/home"
   STATE="$WORK/eu/state"
@@ -46,16 +45,12 @@ print('{"projects": [], "findings": [], "clean": true}')
 sys.exit(0)
 PY
   printf '{"title": "ACME orders", "kpi": "PU_COUNT(orders)"}\n' >"$workspace/clients/acme/work/view/spec.json"
-  # EU mode from before: the old EU workspace (a copy of the zeus repo) and the plain EU folders.
+  # The old EU workspace (a copy of the zeus repo).
   local old="$SANDBOX/Code/zeus-eu"
   mkdir -p "$old/clients/acme/out"
   git -C "$old" init -q
   git -C "$old" remote add origin https://github.com/theo-henry/zeus.git
   printf 'id,customer\n1,ACME\n' >"$old/clients/acme/out/rows.csv"
-  mkdir -p "$SANDBOX/.zeus/eu/claude/projects" "$SANDBOX/.zeus/eu/editor/app" "$SANDBOX/.zeus/eu/data-access"
-  printf '{"old": true}\n' >"$SANDBOX/.zeus/eu/claude/settings.json"
-  printf '{"enabled": true}\n' >"$SANDBOX/.zeus/eu/data-access/acme.json"
-  printf 'salt\n' >"$SANDBOX/.zeus/eu/value-salt"
   # The summary that EU Zeus writes when the app asks for it (payload/zeus.mjs, the control "send").
   cat >"$STATE/eu-summary.md" <<'MD'
 # Handover summary
@@ -152,14 +147,13 @@ PAGE_LOAD_LIMIT=90
 
 eu_scenario() {
   echo
-  echo "Scenario EU: the old EU mode removed once, the EU vault at the first EU start, the Standard | EU switch of each tab"
+  echo "Scenario EU: the old EU workspace kept, the EU vault at the first EU start, the Standard | EU switch of each tab"
   echo "in one workspace, the EU start check and sign-in, the cost, the handover, the way back, Standard and EU tabs side"
   echo "by side on one project, and the restore of both after an app start"
   eu_sandbox
   VAULT="$SANDBOX/.zeus/eu"
   BUNDLE="$SANDBOX/Library/Application Support/Zeus/eu-vault.sparsebundle"
   VAULT_REAL="$(real_path "$VAULT")"
-  CLEANUP_LOG="$SANDBOX/Library/Logs/zeus-install/eu-cleanup.log"
   # A keychain file of the test for the key of the vault, which never locks while the test runs (vault_cleanup removes it).
   VAULT_KEYCHAIN="$WORK/eu/test.keychain-db"
   security create-keychain -p "$(uuidgen)" "$VAULT_KEYCHAIN"
@@ -172,17 +166,10 @@ eu_scenario() {
   launch_app eu "${vault_env[@]}" ZEUS_APP_EURO_RATE_URL="file://$STATE/euro-rate.xml" ZEUS_APP_INSTALLER="$REPO_DIR/install.sh"
   need "the app opens a Standard chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOAD_LIMIT && sleep 1'
 
-  # The old EU mode (test data only) goes once, at the app start, before any session: the old EU workspace and the plain
-  # EU folders. The shared workspace stays.
-  check "the app start removes the old EU workspace ~/Code/zeus-eu" '[ ! -e "$SANDBOX/Code/zeus-eu" ] && grep -q " removed ~/Code/zeus-eu$" "$CLEANUP_LOG"'
-  check "it removes the plain old EU state in ~/.zeus/eu and keeps the empty folder for the vault" \
-    '[ -d "$VAULT" ] && [ -z "$(ls -A "$VAULT")" ] && [ "$(grep -cE " removed ~/.zeus/eu/(claude|data-access|editor|value-salt)$" "$CLEANUP_LOG")" = 4 ] || { sed "s/^/    log: /" "$CLEANUP_LOG"; ls -A "$VAULT" | sed "s/^/    left: /"; false; }'
-  check "it writes what it removed in eu-cleanup.log, and the removal comes before the first session" \
-    '[ "$(grep -c " removed " "$CLEANUP_LOG")" = 5 ] && ! grep -q " kept \| failed " "$CLEANUP_LOG" && [ "$(grep -n "old eu: removed" "$TRACE" | tail -1 | cut -d: -f1)" -lt "$(grep -n "session [0-9]* started" "$TRACE" | head -1 | cut -d: -f1)" ]'
-  check "it never touches the shared workspace" \
-    '[ -f "$SANDBOX/Code/zeus/clients/acme/project.json" ] && [ -f "$SANDBOX/Code/zeus/scripts/zeus.py" ] && [ -d "$SANDBOX/Code/zeus/.git" ]'
+  check "the app start keeps the old EU workspace ~/Code/zeus-eu" \
+    '[ -f "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv" ] && [ -d "$SANDBOX/Code/zeus-eu/.git" ]'
 
-  check "the app starts with a Standard tab" 'grep -q "launched: .* mode=standard" "$TRACE" && mode_bar_has "mode=standard enabled=true access=- cost=- vault=- today=- tabs=standard"'
+  check "the app starts with a Standard tab" 'grep -q "launched: .* mode=standard" "$TRACE" && mode_bar_has "mode=standard enabled=true access=- cost=- vault=- tabs=standard"'
   check "zeus runs without --eu in ~/Code/zeus" 'grep -q "\"args\":\[\"--no-open\"\],\"cwd\":\"[^\"]*/Code/zeus\"" "$STATE/zeus-starts"'
   act test-store
   check "Standard pages use the default web data" 'wait_for "web data: standard persistent=true default=true" 10'
@@ -270,7 +257,6 @@ XML
   act test-send
   check "with the ECB rate of today, the title bar shows the EU session cost in euros" 'wait_for "euro rate: 1.085 of 2026-11-16" 20 && mode_bar_has "access=- cost=EU session cost (estimate): 0.08 EUR"'
   check "the rate is kept for the day" 'grep -q "\"loadedOn\":\"$(date +%Y-%m-%d)\"" "$SANDBOX/Library/Application Support/Zeus/euro-rate.json"'
-  check "the vault menu shows the EU cost of today" 'mode_bar_has "vault=open today=EU cost today (estimate): 0.08 EUR"'
   shot eu-5-cost
   # A Vertex error of the chat (the bridge message eu-error:<JSON>) shows the words of the EU start check.
   act 'test-post:"eu-error:{\"status\":429,\"model\":\"claude-sonnet-5-5\"}"'
@@ -470,19 +456,11 @@ XML
 
   # The mode of the tab used last stays across app starts. The quit locked the vault; an EU start opens it again with Touch ID.
   check "the quit locked the EU vault" '! vault_mounted'
-  # The old EU workspace that comes back after the removal ran stays: the removal runs once.
-  mkdir -p "$SANDBOX/Code/zeus-eu"
-  git -C "$SANDBOX/Code/zeus-eu" init -q
-  git -C "$SANDBOX/Code/zeus-eu" remote add origin https://github.com/theo-henry/zeus.git
-  cleanup_lines="$(wc -l <"$CLEANUP_LOG")"
   defaults write "$PREFS_DOMAIN" zeusMode -string eu
   # A cancelled Touch ID at an EU start with no chat open: the user can go on in Standard mode.
   launch_app eu-locked ZEUS_APP_TEST_VAULT_AUTH=cancel ZEUS_APP_TEST_KEYCHAIN="$VAULT_KEYCHAIN"
   check "an EU start with a cancelled Touch ID keeps the vault locked and starts no EU session" \
     'wait_for "launched: .* mode=eu" 10 && wait_for "mode: eu vault not opened: cancelled" 20 && ! vault_mounted && ! grep -q "started (eu)" "$TRACE"'
-  check "the removal of the old EU mode does not run again" \
-    '! grep -q "old eu: " "$TRACE" && [ -d "$SANDBOX/Code/zeus-eu/.git" ] && [ "$(wc -l <"$CLEANUP_LOG")" = "$cleanup_lines" ]'
-  rm -rf "$SANDBOX/Code/zeus-eu"
   check "then a Standard tab opens, so a window shows" 'wait_for "mode: standard instead of eu" 10 && wait_for "session [0-9]* started (standard)" 20'
   shot eu-17-vault-locked-at-start
   act test-alert:0

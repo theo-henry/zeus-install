@@ -267,54 +267,6 @@ struct EUCost: Equatable {
     }
 }
 
-/// The EU cost of today: the sum of the last session cost of each EU launch that sent a cost today, in USD. The vault menu
-/// of the title bar shows it. It holds no chat content, only launch IDs and amounts, in
-/// `~/Library/Application Support/Zeus/eu-cost-today.json`; a new day starts at zero.
-final class EUCostToday {
-    private struct Record: Codable {
-        var day: String
-        var launches: [String: Double]
-    }
-
-    static let shared = EUCostToday()
-    static let changed = Notification.Name("ZeusEUCostTodayChanged")
-
-    private var record: Record?
-    private var file: String { Paths.appSupport + "/eu-cost-today.json" }
-
-    private func current() -> Record {
-        let today = EuroRate.today()
-        if let record, record.day == today { return record }
-        if let data = FileManager.default.contents(atPath: file), let saved = try? JSONDecoder().decode(Record.self, from: data),
-           saved.day == today {
-            record = saved
-            return saved
-        }
-        let fresh = Record(day: today, launches: [:])
-        record = fresh
-        return fresh
-    }
-
-    /// The total of today in USD.
-    var total: Double { current().launches.values.reduce(0, +) }
-
-    /// Keeps the newest session cost of a launch (main queue).
-    func add(launchID: String, sessionTotal: Double) {
-        var today = current()
-        guard today.launches[launchID] != sessionTotal else { return }
-        today.launches[launchID] = sessionTotal
-        record = today
-        try? FileManager.default.createDirectory(atPath: Paths.appSupport, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(today) { try? data.write(to: URL(fileURLWithPath: file), options: .atomic) }
-        NotificationCenter.default.post(name: Self.changed, object: nil)
-    }
-
-    /// The words of the vault menu.
-    func label(rate: EuroRate.Rate?) -> String {
-        "EU cost today (estimate): \(EUCost.shown(total, rate: rate))" + (rate == nil ? " (no euro rate)" : "")
-    }
-}
-
 /// The daily euro reference rate of the European Central Bank (USD per EUR), for the EU cost label. The app loads it
 /// for EU tabs only, once a day, and keeps it for that day in `~/Library/Application Support/Zeus/euro-rate.json`
 /// (no user data). Without a rate of today, the label shows USD with a note.

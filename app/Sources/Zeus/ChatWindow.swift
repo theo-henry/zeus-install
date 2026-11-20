@@ -334,7 +334,6 @@ final class ChatTab: NSObject {
         if message.hasPrefix("cost:") {
             guard session.mode == .eu, let cost = EUCost(json: String(message.dropFirst(5))) else { return }
             self.cost = cost
-            if let launchID = session.launchID { EUCostToday.shared.add(launchID: launchID, sessionTotal: cost.sessionTotal) }
             EuroRate.shared.load()
             Trace.log("eu cost: \(session.pid) session=\(String(format: "%.6f", cost.sessionTotal)) chat=\(String(format: "%.6f", cost.chatTotal)) calls=\(cost.calls) unpriced=\(cost.unpricedCalls)")
             host?.tabCostChanged(self)

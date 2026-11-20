@@ -51,9 +51,7 @@ vault_scenario() {
   JAIL="$SANDBOX/Library/Application Support/Zeus/jail/standard.sb"
   HANDOVER="$SANDBOX/Library/Application Support/Zeus/handover"
   mkdir -p "$HANDOVER"
-  # The old EU workspace here is not a copy of the zeus repo: the one-time removal of the old EU mode keeps it, and the
-  # read block still denies it.
-  rm -rf "$SANDBOX/Code/zeus-eu/.git"
+  # The old EU workspace stays, and the read block denies it.
   VAULT_REAL="$(real_path "$VAULT")"
   # A keychain file of the test, which never locks while the test runs.
   VAULT_KEYCHAIN="$WORK/vault/test.keychain-db"
@@ -63,13 +61,11 @@ vault_scenario() {
 
   launch_app vault ZEUS_APP_TEST_VAULT_AUTH=allow ZEUS_APP_TEST_KEYCHAIN="$VAULT_KEYCHAIN"
   need "the app opens a Standard chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOAD_LIMIT && sleep 1'
-  check "the one-time removal keeps an old EU workspace that is not a copy of the zeus repo, and says why" \
-    '[ -f "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv" ] && grep -q " kept ~/Code/zeus-eu: not a copy of the zeus repo$" "$SANDBOX/Library/Logs/zeus-install/eu-cleanup.log"'
-  check "it removes the plain old EU state in ~/.zeus/eu" '[ -d "$VAULT" ] && [ -z "$(ls -A "$VAULT")" ]'
+  check "the app start keeps the old EU workspace" '[ -f "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv" ] && [ -d "$SANDBOX/Code/zeus-eu/.git" ]'
   check "without an EU vault, Standard starts as before, without the read block" \
     'grep -q "jail: off: no EU vault on this Mac" "$TRACE" && ! grep -q "jail: on" "$TRACE" && [ ! -e "$JAIL" ] && grep -qxF "session command: $SANDBOX/.local/bin/zeus --no-open" <(sed "s/^[^ ]* //" "$TRACE")'
 
-  # Create: refused over EU folders from before the vault (made again after the removal at the start), cancelled
+  # Create: refused over EU folders from before the vault, cancelled
   # Touch ID, then made.
   mkdir -p "$VAULT/claude"
   printf 'old EU state\n' >"$VAULT/claude/settings.json"

@@ -129,7 +129,7 @@ The installer skips each step that is already done.
 | 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. |
 | 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
 | 12 | Google Cloud CLI 593.0.0 in `~/google-cloud-sdk`, for the Google sign-in of EU mode. The installer checks the SHA-256 of the official macOS archive and does not change your shell profile. gcloud needs Python 3.10 or later: when the first Python on your `PATH` is older (the Python of macOS is 3.9), Zeus runs gcloud with a Python 3.10 or later of this Mac, such as Anaconda's (`CLOUDSDK_PYTHON`), and says so; the Zeus app does the same. When gcloud does not run, the step shows its error and the fix. | `gcloud` is already installed and runs (on your `PATH`, in `~/google-cloud-sdk`, or from Homebrew). |
-| 13 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, the first-start settings of that folder, and the status line of Standard Claude Code (see [EU mode](#eu-mode)). That folder is in the EU vault, so the step runs only while the vault is open. | The EU vault is not open (or not made yet). The Zeus app asks you to run the setup again after it opened the vault. Installed plugins are updated. |
+| 13 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, the first-start settings of that folder, and the status line of Standard Claude Code (see [EU mode](#eu-mode)). That folder is in the EU vault, so the step runs only while the vault is open. | Simple EU (the default): EU uses the plugins of Standard, so the step has nothing to do. With isolation: the EU vault is not open (or not made yet). The Zeus app asks you to run the setup again after it opened the vault. Installed plugins are updated. |
 | 14 | Google sign-in of EU mode: `gcloud auth application-default login` in the browser, a check of the access of your Google account to the EU project, and the EU project as the quota project of the sign-in. The installer asks first; answer `n` if you do not use EU mode. The access check costs nothing: it calls no model. Without access, the step shows the message for the two roles with your Google account (see [Set up EU mode](#set-up-eu-mode)). When gcloud does not run, the step says so and asks nothing. | You are already signed in with access to the EU project. While you are signed out, the installer asks on each run. |
 | 15 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
 
@@ -227,10 +227,7 @@ gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99
    After an app update, macOS asks once for your login password so that the new app can read the key of the vault: click **Always Allow**.
    The vault locks when you quit the app.
 
-The first start of this app version removes EU mode from before the shared workspace, one time: the old EU workspace `~/Code/zeus-eu` (only when it is a copy of the zeus repo) and the old files in `~/.zeus/eu`.
-These were test data only; they are not moved.
-The app never removes the vault, an open vault, or `~/Code/zeus`.
-The list of what it removed is in `~/Library/Logs/zeus-install/eu-cleanup.log`.
+The app does not use or remove the folders of EU mode from before the shared workspace: the old EU workspace `~/Code/zeus-eu` and the old files in `~/.zeus/eu`.
 
 ### Use EU mode in the app
 
@@ -250,8 +247,7 @@ The list of what it removed is in `~/Library/Logs/zeus-install/eu-cleanup.log`.
 - With isolation, an EU chat starts only when the EU vault is open.
   When Touch ID is cancelled, the tab stays Standard.
   When the app starts with an EU tab and Touch ID is cancelled, it opens a Standard tab and says why.
-- While the vault is open, a green lock shows at the right of the tab bar; in simple EU, an EU tab shows a green euro sign there.
-  Click it to see the EU cost of today, the sum of today's EU chats.
+- While the vault is open, a green lock shows at the right of the tab bar.
 - After an app update, each tab opens again in its own mode.
   With isolation, the EU tabs wait for Touch ID to open the vault; an EU chat never opens in a Standard tab.
 - Each mode has its own web data (cookies and storage) and its own terminal environment.

@@ -960,6 +960,23 @@ eu_vault_open() {
     python3 -c 'import os, sys; sys.exit(0 if os.path.ismount(sys.argv[1]) else 1)' "$EU_STATE_DIR" 2>/dev/null
 }
 
+# The EU launch profile of the newest installed Zeus Editor (eu-profile.json next to dist/, the same choice as the zeus
+# command) says "isolation": true. Without it (simple EU, the default), EU uses the Standard Claude Code folder.
+eu_isolated() {
+  local candidate newest=""
+  for candidate in "$HOME"/.claude/plugins/cache/*/zeus-editor/*/dist/zeus.mjs; do
+    [ -f "$candidate" ] || continue
+    if [ -z "$newest" ] || [ "$candidate" -nt "$newest" ]; then newest="$candidate"; fi
+  done
+  [ -n "$newest" ] || return 1
+  python3 -c 'import json, sys
+try:
+    profile = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    sys.exit(1)
+sys.exit(0 if isinstance(profile, dict) and profile.get("isolation") is True else 1)' "${newest%/dist/zeus.mjs}/eu-profile.json" 2>/dev/null
+}
+
 # Runs claude with the EU Claude Code folder.
 eu_claude() {
   CLAUDE_CONFIG_DIR="$EU_CONFIG_DIR" claude "$@" </dev/null
@@ -1068,8 +1085,14 @@ PY
 # Step 13/15 - The Zeus plugins in the EU Claude Code folder, in the EU vault. EU Claude Code reads its plugins, settings,
 # and chats there only, never from ~/.claude. Each run updates them, as step 10 does for Standard. While the vault is
 # locked (or not made yet), the step waits: the Zeus app asks for the setup again after it opened the vault.
+# Simple EU (no isolation) uses the Standard Claude Code folder and its plugins: the step has nothing to do.
 install_eu_plugins() {
   step $((EU_FIRST_STEP + 1)) "Zeus plugins of EU mode"
+  if ! eu_isolated; then
+    info "Not needed: EU mode uses the Zeus plugins of Standard (step 10 and 12)."
+    record "skipped" "Zeus plugins of EU mode (not needed)"
+    return
+  fi
   if ! eu_vault_open; then
     info "The EU vault is not open, so they can not be installed now."
     info "Switch to EU mode in the Zeus app: it opens the vault with Touch ID and asks you to run this setup again."
@@ -1437,8 +1460,11 @@ check_steps() {
   if command -v claude >/dev/null 2>&1 && claude_logged_in; then state 13 ok; else state 13 todo; fi
   local gcloud
   if gcloud="$(find_gcloud)" && gcloud_runs "$gcloud"; then state 14 ok; else state 14 todo; fi
-  # The EU plugins are in the EU vault: while it is not open, the step runs at each setup and waits for the vault.
-  if ! eu_vault_open; then
+  # Simple EU needs no EU plugins. With isolation, the EU plugins are in the EU vault: while it is not open, the step runs
+  # at each setup and waits for the vault.
+  if ! eu_isolated; then
+    state 15 ok
+  elif ! eu_vault_open; then
     state 15 always
   elif command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state 15 ok; else state 15 todo; fi
   # No network here: a sign-in with the EU quota project. The step itself checks the access.

@@ -704,16 +704,15 @@ final class ModeBadge: NSView {
 }
 
 /// The right side of the title bar of a chat window, for the selected tab: for an EU tab the EU data access switch of the
-/// tab's project and the EU session cost of the tab (an estimate); the EU vault menu while the vault is open (its lock
-/// state and the EU cost of today); then the `Standard | EU` control, which switches the selected tab only.
+/// tab's project and the EU session cost of the tab (an estimate); the EU vault lock while the vault is open; then the
+/// `Standard | EU` control, which switches the selected tab only.
 /// A Standard tab shows no cost and no data access switch.
 final class ModeBarView: NSView {
     static let euGreen = NSColor(srgbRed: 31/255, green: 122/255, blue: 77/255, alpha: 1)
     private let costLabel = NSTextField(labelWithString: "")
     /// EU data access of the selected tab's project (zeus `eu-access`): only the user turns it on or off, here.
     private let accessSwitch = NSButton(checkboxWithTitle: "EU data access", target: nil, action: nil)
-    /// The EU vault (with isolation): a lock that shows that the vault is open, with a menu. In simple EU, for an EU tab: a
-    /// euro sign with the same menu, without the vault.
+    /// The EU vault (with isolation): a lock that shows that the vault is open, with a menu.
     private let vaultButton = NSButton()
     private let control = NSSegmentedControl(labels: ZeusMode.allCases.map(\.title), trackingMode: .selectOne,
                                              target: nil, action: nil)
@@ -738,8 +737,11 @@ final class ModeBarView: NSView {
         vaultButton.target = self
         vaultButton.action = #selector(showVaultMenu)
         vaultButton.translatesAutoresizingMaskIntoConstraints = false
-        setVaultLook(lock: true)
-        for name in [EUDataAccess.changed, EuroRate.changed, EUCostToday.changed] {
+        vaultButton.image = NSImage(systemSymbolName: "lock.open.fill", accessibilityDescription: "EU vault unlocked")?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+        vaultButton.setAccessibilityLabel("EU vault unlocked")
+        vaultButton.toolTip = "EU vault unlocked. It locks when Zeus quits."
+        for name in [EUDataAccess.changed, EuroRate.changed] {
             NotificationCenter.default.addObserver(self, selector: #selector(accessChanged), name: name, object: nil)
         }
         control.segmentStyle = .rounded
@@ -809,9 +811,7 @@ final class ModeBarView: NSView {
         costLabel.toolTip = cost?.detail(rate: rate)
         costLabel.setAccessibilityLabel(cost.map { "\($0.label(rate: rate)). \($0.detail(rate: rate))" })
         let isolated = EUProfile.isolated
-        let mounted = EUVault.shared.isMounted
-        vaultButton.isHidden = !(mounted || (eu && !isolated))
-        if mounted != showsLock { setVaultLook(lock: mounted) }
+        vaultButton.isHidden = !EUVault.shared.isMounted
         let access = project.flatMap { EUDataAccess.shared.state[$0] }
         // EU data access is a limit of EU with isolation only.
         accessSwitch.isHidden = !eu || project == nil || !isolated
@@ -824,30 +824,11 @@ final class ModeBarView: NSView {
         }
     }
 
-    private var showsLock = true
-
-    /// The lock of the open vault, or (simple EU) a euro sign for the EU cost of today.
-    private func setVaultLook(lock: Bool) {
-        showsLock = lock
-        let symbol = lock ? "lock.open.fill" : "eurosign.circle.fill"
-        let label = lock ? "EU vault unlocked" : "EU cost of today"
-        vaultButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
-        vaultButton.setAccessibilityLabel(label)
-        vaultButton.toolTip = lock ? "EU vault unlocked. It locks when Zeus quits. Click for the EU cost of today."
-            : "Click for the EU cost of today."
-    }
-
-    /// The vault menu: the lock state (with isolation) and the EU cost of today.
+    /// The vault menu: the lock state.
     private var vaultMenu: NSMenu {
         let menu = NSMenu()
-        if showsLock {
-            let state = menu.addItem(withTitle: "EU vault unlocked: it locks when Zeus quits", action: nil, keyEquivalent: "")
-            state.isEnabled = false
-        }
-        let rate = EuroRate.shared.current
-        let cost = menu.addItem(withTitle: EUCostToday.shared.label(rate: rate), action: nil, keyEquivalent: "")
-        cost.isEnabled = false
+        let state = menu.addItem(withTitle: "EU vault unlocked: it locks when Zeus quits", action: nil, keyEquivalent: "")
+        state.isEnabled = false
         return menu
     }
 
@@ -858,8 +839,8 @@ final class ModeBarView: NSView {
 
     #if DEBUG
     var state: String {
-        let vault = vaultButton.isHidden ? "-" : showsLock ? "open" : "cost"
-        return "mode=\(ZeusMode.allCases[max(0, control.selectedSegment)].rawValue) enabled=\(control.isEnabled) access=\(accessSwitch.isHidden ? "-" : (accessSwitch.state == .on ? "on" : "off") + (accessSwitch.isEnabled ? "" : "(loading)")) cost=\(costLabel.isHidden ? "-" : costLabel.stringValue) vault=\(vault) today=\(vaultButton.isHidden ? "-" : EUCostToday.shared.label(rate: EuroRate.shared.current))"
+        let vault = vaultButton.isHidden ? "-" : "open"
+        return "mode=\(ZeusMode.allCases[max(0, control.selectedSegment)].rawValue) enabled=\(control.isEnabled) access=\(accessSwitch.isHidden ? "-" : (accessSwitch.state == .on ? "on" : "off") + (accessSwitch.isEnabled ? "" : "(loading)")) cost=\(costLabel.isHidden ? "-" : costLabel.stringValue) vault=\(vault)"
     }
     #endif
 

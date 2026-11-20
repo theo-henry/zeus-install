@@ -32,7 +32,7 @@ enum Paths {
     /// The Zeus workspace of both modes: Standard and EU chats work in the same `~/Code/zeus`. EU client data goes into
     /// the EU vault (`EUVault`), never into this folder (zeus routes it there).
     static var workspace: String { zeusDir }
-    /// The EU workspace from before the shared workspace (a second clone of zeus), which the app removes once (`LegacyEU`).
+    /// The EU workspace from before the shared workspace (a second clone of zeus). The app never uses or removes it.
     static let oldEUWorkspace = home + "/Code/zeus-eu"
 
     /// The Zeus Editor state folder of a mode. Standard: `~/.zeus-editor` (zeus-editor src/paths.js); EU: the EU editor
@@ -62,9 +62,12 @@ enum Paths {
 /// The environment for the commands that the app starts. An app that opens from the Dock gets only
 /// the system PATH, so the app reads the PATH of the user's login shell once, as Terminal would.
 enum ShellEnvironment {
+    private static let pathLock = NSLock()
     private static var cachedPath: String?
 
     static func loginPath() -> String {
+        pathLock.lock()
+        defer { pathLock.unlock() }
         if let cachedPath { return cachedPath }
         let fallback = [
             Paths.home + "/.local/node/bin", Paths.home + "/.local/bin",
@@ -85,14 +88,27 @@ enum ShellEnvironment {
 
     /// Forgets the PATH, so that the next command sees tools that the installer just added.
     static func reset() {
+        pathLock.lock()
         cachedPath = nil
+        pathLock.unlock()
+        pythonLock.lock()
         cachedGcloudPython = nil
+        pythonLock.unlock()
     }
 
+    /// Starts the search for the Python of gcloud off the main queue (at app start), so that the first command that the
+    /// app starts reads the result and does not wait for each candidate Python.
+    static func findGcloudPython() {
+        DispatchQueue.global(qos: .userInitiated).async { _ = gcloudPython() }
+    }
+
+    private static let pythonLock = NSLock()
     /// The Python of gcloud (`GcloudPython`), found once per PATH: "" when there is none.
     private static var cachedGcloudPython: String?
 
     static func gcloudPython() -> String? {
+        pythonLock.lock()
+        defer { pythonLock.unlock() }
         if cachedGcloudPython == nil {
             cachedGcloudPython = GcloudPython.find(folders: GcloudPython.folders(home: Paths.home), path: loginPath()) ?? ""
         }

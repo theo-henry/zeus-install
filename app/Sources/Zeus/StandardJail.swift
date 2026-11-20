@@ -33,7 +33,7 @@ enum StandardJail {
 
     /// The folders that Standard sessions may not read or write. The app always denies its own EU folders: the EU vault
     /// (its mount folder and its disk image), the default EU folders (Claude Code folder, editor state, temporary folder),
-    /// the old EU workspace `~/Code/zeus-eu` (until `LegacyEU` removed it, and when it kept it), and the app's handover
+    /// the old EU workspace `~/Code/zeus-eu`, and the app's handover
     /// folder. The shared workspace `~/Code/zeus` stays open: EU data is in the vault, not there. The EU profile can only
     /// add folders to them; an added folder that holds the home folder, the shared workspace, or the app folder is left
     /// out, because Standard could not run without them.

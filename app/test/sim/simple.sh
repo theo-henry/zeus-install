@@ -9,7 +9,8 @@
 eu_simple_scenario() {
   echo
   echo "Scenario simple EU: an EU tab like a Standard tab with the EU account, no EU vault and no read block, the switch"
-  echo "of a tab and back, Standard and EU tabs side by side, the EU cost of today, and the restore after an app start"
+  echo "of a tab and back, Standard and EU tabs side by side, the EU cost, the old EU folders kept, and the restore after"
+  echo "an app start"
   eu_sandbox
   local plugin="$SANDBOX/.claude/plugins/cache/zeus-editor/zeus-editor/sim"
   python3 - "$plugin/eu-profile.json" <<'PY'
@@ -18,6 +19,14 @@ profile = json.load(open(sys.argv[1]))
 profile["isolation"] = False
 json.dump(profile, open(sys.argv[1], "w"))
 PY
+  # EU folders from before the shared workspace (the old EU Claude Code folder in a plain ~/.zeus/eu, and ~/Code/zeus-eu of
+  # eu_sandbox): simple EU does not use them, and the app never removes them.
+  mkdir -p "$SANDBOX/.zeus/eu/claude"
+  printf '{"old": true}\n' >"$SANDBOX/.zeus/eu/claude/settings.json"
+  check "in simple EU, install.sh --check finds the EU plugins step done: EU uses the plugins of Standard" \
+    'env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check >"$WORK/eu/simple-check.out" 2>&1; grep -q "@@zeus state 15 ok" "$WORK/eu/simple-check.out"'
+  check "in simple EU, the EU plugins step installs nothing and asks for no vault" \
+    'env HOME="$SANDBOX" PATH="$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_INSTALL_APP=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; install_eu_plugins" _ "$REPO_DIR/install.sh" >"$WORK/eu/simple-plugins.out" 2>&1 && grep -q "^@@zeus skipped 15 Zeus plugins of EU mode (not needed)$" "$WORK/eu/simple-plugins.out" && ! grep -qi "vault" "$WORK/eu/simple-plugins.out" && [ "$(cat "$SANDBOX/.zeus/eu/claude/settings.json")" = "{\"old\": true}" ]'
   # An EU vault disk image from earlier tests of EU with isolation: simple EU does not use it.
   BUNDLE="$SANDBOX/Library/Application Support/Zeus/eu-vault.sparsebundle"
   mkdir -p "$BUNDLE"
@@ -26,7 +35,7 @@ PY
   need "the app opens a Standard chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOAD_LIMIT && sleep 1'
   check "Standard runs without the read block, though an EU vault disk image is on this Mac" \
     'wait_for "jail: off: simple EU (no isolation)" 10 && ! grep -q "jail: on" "$TRACE" && [ ! -e "$SANDBOX/Library/Application Support/Zeus/jail/standard.sb" ]'
-  check "the title bar shows the Standard tab, with no vault" 'mode_bar_has "mode=standard enabled=true access=- cost=- vault=- today=- tabs=standard"'
+  check "the title bar shows the Standard tab, with no vault" 'mode_bar_has "mode=standard enabled=true access=- cost=- vault=- tabs=standard"'
   shot simple-1-standard
 
   # New EU Chat: an EU tab starts at once, as a Standard tab does, with no vault and no Touch ID.
@@ -40,12 +49,12 @@ PY
     '! grep -q "vault: \|mode: eu vault" "$TRACE" && ! mount | grep -qF "$SANDBOX/.zeus/eu" && [ ! -e "$SANDBOX/.zeus/eu/.zeus-vault" ]'
   check "the EU tab is not refused for a missing vault" '! grep -q " no-vault" "$STATE/sessions"'
   check "the EU status line step of the installer does not run (EU uses the Claude Code folder of Standard)" '! grep -q "eu status line: " "$TRACE"'
-  check "the window has a Standard tab and an EU tab, and the title bar shows the EU tab with the EU cost menu" \
-    'mode_bar_has "tabs=standard,eu" && mode_bar_has "mode=eu enabled=true access=- cost=- vault=cost"'
+  check "the window has a Standard tab and an EU tab, and the title bar shows the EU tab with no vault" \
+    'mode_bar_has "tabs=standard,eu" && mode_bar_has "mode=eu enabled=true access=- cost=- vault=-"'
   act test-store
   check "the EU chat page has the EU web data" 'wait_for "web data: eu persistent=.* default=false" 10'
 
-  # The EU cost after a reply, and the EU cost of today in its menu.
+  # The EU cost after a reply.
   cat >"$STATE/euro-rate.xml" <<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">
@@ -56,8 +65,8 @@ XML
   sleep 0.3
   act test-send
   check "the EU page sends the session cost after the reply" 'wait_for "eu cost: $eu_pid session=0.045255" 20'
-  check "the title bar shows the EU session cost and the EU cost of today, with no EU data access switch" \
-    'wait_for "euro rate: 1.085 of 2026-11-16" 20 && sleep 0.5 && mode_bar_has "access=- cost=EU session cost (estimate): 0.04 EUR vault=cost today=EU cost today (estimate): 0.04 EUR"'
+  check "the title bar shows the EU session cost, with no EU data access switch and no vault" \
+    'wait_for "euro rate: 1.085 of 2026-11-16" 20 && sleep 0.5 && mode_bar_has "access=- cost=EU session cost (estimate): 0.04 EUR vault=-"'
   shot simple-2-eu-tab
 
   # The same project in both tabs at the same time.
@@ -112,4 +121,6 @@ XML
   stop_app
   check "the app made no vault: the disk image from before is untouched, and nothing is mounted" \
     '[ -d "$BUNDLE" ] && [ -z "$(ls -A "$BUNDLE")" ] && ! mount | grep -qF "$SANDBOX/.zeus/eu"'
+  check "the old EU folders stay: ~/Code/zeus-eu and the plain ~/.zeus/eu" \
+    '[ -f "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv" ] && [ -d "$SANDBOX/Code/zeus-eu/.git" ] && [ "$(cat "$SANDBOX/.zeus/eu/claude/settings.json")" = "{\"old\": true}" ]'
 }
