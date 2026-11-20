@@ -1133,26 +1133,15 @@ login_claude() {
   fi
   exec 3<&-
   # The browser login can succeed and then fail when the keychain cannot store it: check before the browser opens.
-  local problem login_output status
+  local problem
   problem="$(keychain_problem)"
   if [ -n "$problem" ]; then fail_keychain "$problem"; fi
   info "Your browser opens. Log in to Claude there."
-  login_output="$(mktemp "${TMPDIR:-/tmp}/zeus-claude-login.XXXXXX")"
-  # The output goes to the screen and to a file. A failed login must not stop the script here (set -e, pipefail).
-  set +e
-  with_tty claude auth login 2>&1 | tee "$login_output"
-  status="${PIPESTATUS[0]}"
-  set -e
-  if [ "$status" -ne 0 ] || ! claude_logged_in; then
-    if grep -q "Couldn't save your login" "$login_output" 2>/dev/null; then
-      problem="$(keychain_problem)"
-      rm -f "$login_output"
-      fail_keychain "${problem:-locked}"
-    fi
-    rm -f "$login_output"
+  if ! with_tty claude auth login || ! claude_logged_in; then
+    problem="$(keychain_problem)"
+    if [ -n "$problem" ]; then fail_keychain "$problem"; fi
     fail "The Claude login did not complete."
   fi
-  rm -f "$login_output"
   record "done" "Claude login"
 }
 

@@ -190,8 +190,9 @@ start_app() {
   local name="$1"
   SANDBOX="$WORK/$name/home"
   STATE="$WORK/$name/state"
-  mkdir -p "$SANDBOX" "$STATE"
-  # A new Mac: no tools in the home folder, and the simulated tools before the system ones.
+  mkdir -p "$SANDBOX/Library/Keychains" "$STATE"
+  : >"$SANDBOX/Library/Keychains/login.keychain-db"
+  # A new Mac: no tools in the home folder, a login keychain, and the simulated tools before the system ones.
   printf 'export PATH="%s:/usr/bin:/bin:/usr/sbin:/sbin"\n' "$SIM_DIR/stubs" >"$SANDBOX/.zprofile"
   defaults delete "$PREFS_DOMAIN" >/dev/null 2>&1 || true
   launch_app "$@"

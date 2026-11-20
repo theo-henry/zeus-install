@@ -7,7 +7,7 @@
 #      with "EINVAL: invalid argument, kqueue" on /dev/tty). Without a terminal, the installer prints how to log
 #      in with the Terminal app, and the login that is already done is skipped.
 #   4. The Claude login and the macOS keychain: no default keychain, a missing keychain file, or a locked keychain stops
-#      step 13 before the browser opens with the exact fix; "Couldn't save your login" shows the same fix.
+#      step 13 before the browser opens with the exact fix; a failed login with an unusable keychain shows the same fix.
 #   3. content-cli: when the global folder of npm is not writable, it goes to ~/.npm-global, and the command is
 #      linked into ~/.local/bin and found in the same run and on the next run.
 #      Root-owned files in the npm cache stop the step with the exact "sudo chown" line for ~/.npm.
@@ -213,7 +213,8 @@ case "${1:-}" in
 esac
 TOOL
 chmod +x "$WORK/tools/security"
-# keychain_setup <name> <mode> <claude mode>: claude mode "ok" logs in; "nosave" prints the Claude Code keychain error, "fail" fails with another error.
+# keychain_setup <name> <mode> <claude mode>: claude mode "ok" logs in; "nosave" locks the keychain and prints the Claude Code
+# keychain error, "fail" fails with another error.
 keychain_setup() {
   setup "$1" ok
   cp "$WORK/tools/security" "$HOME/../bin/security"
@@ -228,6 +229,7 @@ if [ "$1 $2" = "auth status" ]; then
   exit 0
 fi
 if [ "$(cat "$STATE/claude")" = nosave ]; then
+  echo locked >"$STATE/keychain"
   echo "Couldn't log in: Couldn't save your login. If your Mac's keychain is locked, unlock it and log in again."
   exit 1
 fi
@@ -258,7 +260,7 @@ keychain_setup kc-locked locked
 check "a locked keychain: stops before the browser login with the unlock line" 'login_in_terminal; grep -q "keychain of this Mac is locked" "$OUT" && grep -q "security unlock-keychain ~/Library/Keychains/login.keychain-db" "$OUT" && ! grep -q "^claude auth login" "$CALLS"'
 check "a locked keychain: the installer never changes a keychain" '! grep "^security" "$CALLS" | grep -qE "unlock-keychain|create-keychain|delete-keychain|default-keychain -s|reset"'
 keychain_setup kc-nosave ok nosave
-check "\"Couldn't save your login\": shows the keychain fix, not only \"did not complete\"" 'login_in_terminal; grep -q "Couldn.t save your login" "$OUT" && grep -q "Stopped:" "$OUT" && grep -q "security unlock-keychain" "$OUT" && grep -q "Never click \"Reset To Defaults\"" "$OUT" && ! grep -q "The Claude login did not complete" "$OUT"'
+check "the keychain locks during the login: shows the keychain fix, not only \"did not complete\"" 'login_in_terminal; grep -q "Couldn.t save your login" "$OUT" && grep -q "keychain of this Mac is locked" "$OUT" && grep -q "security unlock-keychain" "$OUT" && grep -q "Never click \"Reset To Defaults\"" "$OUT" && ! grep -q "The Claude login did not complete" "$OUT"'
 keychain_setup kc-other ok fail
 check "another login failure still says the login did not complete" 'login_in_terminal; grep -q "The Claude login did not complete." "$OUT" && ! grep -q "Reset To Defaults" "$OUT"'
 
