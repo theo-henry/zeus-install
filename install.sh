@@ -17,15 +17,21 @@
 #                                             installer opens (for tests). ZEUS_APP_TEST_BACKGROUND=1 opens it behind
 #                                             the other apps.
 #   ZEUS_INSTALL_CLAUDE_UPDATE_TIMEOUT=300    stops the update of an installed Claude Code after this many seconds.
+#   ZEUS_INSTALL_TEST_EU_VAULT_OPEN=1         treats ~/.zeus/eu as the open EU vault, also when no vault is mounted
+#                                             there (for tests).
 #   ZEUS_INSTALL_APP=1                        app mode, used by Zeus.app. It adds two steps (the Zeus skill plugins and
 #                                             the Claude login) and prints machine-readable lines that start with
 #                                             "@@zeus " so that the app can show a checklist. Terminal use is unchanged.
 #
 # EU mode (Claude on Google Vertex AI in the EU) gets the same three steps on every Mac: the Google Cloud CLI in
-# ~/google-cloud-sdk, the EU workspace ~/Code/zeus-eu, and the Zeus plugins in the EU Claude Code folder ~/.zeus/eu/claude.
-# No shell profile changes for EU mode. Each user then signs in to Google once (the Zeus app shows the button), and the
-# Zeus maintainer gives the user's Google account two roles on the EU project: Vertex AI User (roles/aiplatform.user) and
-# Service Usage Consumer (roles/serviceusage.serviceUsageConsumer), which the quota project of the sign-in needs.
+# ~/google-cloud-sdk, the Zeus plugins in the EU Claude Code folder ~/.zeus/eu/claude, and the Google sign-in with the
+# EU project as its quota project. EU mode works in the same workspace as Standard (~/Code/zeus). The EU Claude Code
+# folder is in the EU vault, an encrypted disk image that the Zeus app mounts at ~/.zeus/eu: the plugins install only
+# while the vault is open, and the Zeus app asks for this setup after it opened the vault the first time. No shell
+# profile changes for EU mode. The user can skip the sign-in; while the user is signed out, the installer asks again on
+# each run. The Zeus maintainer gives the user's Google account two roles on the EU project:
+# Vertex AI User (roles/aiplatform.user) and Service Usage Consumer (roles/serviceusage.serviceUsageConsumer), which the
+# quota project of the sign-in needs. Without them, the sign-in step gives the message, and the setup goes on.
 #
 # Options:
 #   --check      app mode only: report which steps are already done, then stop. Installs nothing.
@@ -62,8 +68,13 @@ ANACONDA_LICENSE_URL="https://www.anaconda.com/legal/terms/terms-of-service"
 PYTHON_MIN_VERSION="3.10"
 
 # EU mode. The values of the EU launch profile of Zeus Editor (eu-profile.json): `zeus --eu` uses these folders.
-EU_WORKSPACE="$HOME/Code/zeus-eu"
-EU_CONFIG_DIR="$HOME/.zeus/eu/claude"
+EU_STATE_DIR="$HOME/.zeus/eu"
+EU_CONFIG_DIR="$EU_STATE_DIR/claude"
+EU_VERTEX_PROJECT="project-4bf0bacd-fec4-406b-a99"
+# The Google sign-in of EU mode: the application default credentials file that EU Claude Code and the EU start check of
+# Zeus Editor read (src/eu/preflight.js), and one permission of each of the two roles, which the access check tests.
+ADC_FILE="$HOME/.config/gcloud/application_default_credentials.json"
+EU_PERMISSIONS='["aiplatform.endpoints.predict", "serviceusage.services.use"]'
 # The Google Cloud CLI for the EU sign-in: the official macOS archive, pinned by version and checksum. gcloud updates
 # itself later (gcloud components update) when the user wants.
 GCLOUD_VERSION="593.0.0"
@@ -104,6 +115,9 @@ TOTAL_STEPS=15
 EU_FIRST_STEP=12
 if [ -n "$APP_MODE" ]; then TOTAL_STEPS=16; EU_FIRST_STEP=14; fi
 if [ -n "$APP_ONLY" ]; then TOTAL_STEPS=6; fi
+# The Google sign-in is the last EU step: the last step in app mode, and the step before the Zeus app in Terminal use.
+EU_SIGN_IN_STEP=$((TOTAL_STEPS - 1))
+if [ -n "$APP_MODE" ]; then EU_SIGN_IN_STEP=$TOTAL_STEPS; fi
 CURRENT_STEP=0
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -835,12 +849,80 @@ find_gcloud() {
   return 1
 }
 
+# gcloud 593 has no Python of its own: it uses CLOUDSDK_PYTHON, else the first python3.14 ... python3 on the PATH. The
+# Python of macOS (3.9) is too old, so on a Mac where that one comes first gcloud stops at once ("gcloud failed to load
+# ... Python 3.9"). Zeus then gives gcloud a Python 3.10 or later that this Mac has, through CLOUDSDK_PYTHON: the
+# installer for its own gcloud commands, and the Zeus app for the commands that it starts (ShellEnvironment.make).
+# No shell profile changes. Debug and tests: ZEUS_INSTALL_SYSTEM_PYTHON_DIRS replaces the system folders.
+gcloud_python_ok() {
+  [ -x "$1" ] && "$1" -c "import sys; sys.exit(0 if sys.version_info >= (${PYTHON_MIN_VERSION/./, }) else 1)" </dev/null >/dev/null 2>&1
+}
+
+# Prints a Python 3.10 or later for gcloud: Anaconda (or Miniconda, Miniforge) of the home folder, the system folders,
+# then python3.14 ... python3 on the PATH. The Zeus app looks in the same places (GcloudPython).
+find_gcloud_python() {
+  local candidate dir version
+  local system_dirs="${ZEUS_INSTALL_SYSTEM_PYTHON_DIRS-/opt/anaconda3/bin /opt/miniconda3/bin /opt/homebrew/bin /usr/local/bin}"
+  # shellcheck disable=SC2086 # system_dirs is a space-separated list.
+  for dir in "$HOME/anaconda3/bin" "$HOME/miniconda3/bin" "$HOME/miniforge3/bin" $system_dirs; do
+    if gcloud_python_ok "$dir/python3"; then printf '%s' "$dir/python3"; return 0; fi
+  done
+  for version in 3.14 3.13 3.12 3.11 3.10 3; do
+    if candidate="$(command -v "python$version" 2>/dev/null)" && gcloud_python_ok "$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# gcloud_runs <gcloud>: `gcloud --version` runs. When it stops because of its Python, the function gives it a Python
+# 3.10 or later through CLOUDSDK_PYTHON (exported for the later gcloud commands of this step) and tries again.
+# Sets GCLOUD_PYTHON_FIXED to that Python when it did, and GCLOUD_ERROR to the first error line when gcloud does not run.
+GCLOUD_ERROR=""
+GCLOUD_PYTHON_FIXED=""
+gcloud_runs() {
+  local gcloud="$1" output python
+  GCLOUD_ERROR=""
+  GCLOUD_PYTHON_FIXED=""
+  if output="$(run_with_timeout 60 "$gcloud" --version </dev/null 2>&1)"; then return 0; fi
+  printf '%s\n' "$output" >>"$LOG_DIR/gcloud.log"
+  if printf '%s' "$output" | grep -qi "python" && python="$(find_gcloud_python)" &&
+    output="$(CLOUDSDK_PYTHON="$python" run_with_timeout 60 "$gcloud" --version </dev/null 2>&1)"; then
+    export CLOUDSDK_PYTHON="$python"
+    GCLOUD_PYTHON_FIXED="$python"
+    return 0
+  fi
+  GCLOUD_ERROR="$(printf '%s\n' "$output" | grep -m 1 -i "error" || printf '%s\n' "$output" | grep -m 1 .)"
+  [ -n "$GCLOUD_ERROR" ] || GCLOUD_ERROR="gcloud --version stopped without a message."
+  return 1
+}
+
+# Stops the step when gcloud does not run, with its first error line and the fix.
+gcloud_must_run() {
+  gcloud_runs "$1" && return 0
+  local fix="Run the setup again; it installs Python 3.10 or later (Anaconda, step 2)."
+  printf '%s' "$GCLOUD_ERROR" | grep -qi "python" ||
+    fix="Remove the Google Cloud CLI ($1), then run the setup again: it installs a new one."
+  fail "The Google Cloud CLI does not run: $GCLOUD_ERROR" "$fix" "See the log: $LOG_DIR/gcloud.log"
+}
+
+# Says that Zeus gave gcloud another Python, when it did.
+gcloud_python_note() {
+  [ -n "$GCLOUD_PYTHON_FIXED" ] || return 0
+  info "gcloud did not run with the first Python on your PATH (too old). Zeus runs it with $GCLOUD_PYTHON_FIXED (CLOUDSDK_PYTHON); the Zeus app does the same."
+  info "To use gcloud in Terminal, add this line to your shell profile: export CLOUDSDK_PYTHON=$GCLOUD_PYTHON_FIXED"
+}
+
 # Step 12/14 - The Google Cloud CLI, for the Google sign-in of EU mode. Claude Code itself reads the sign-in file.
+# A gcloud that is there must also run (gcloud_must_run).
 install_gcloud() {
   step "$EU_FIRST_STEP" "Google Cloud CLI (EU mode)"
   local found
   if found="$(find_gcloud)"; then
+    gcloud_must_run "$found"
     info "Already installed ($found)."
+    gcloud_python_note
     record "skipped" "Google Cloud CLI"
     return
   fi
@@ -863,19 +945,19 @@ install_gcloud() {
     fail "The Google Cloud CLI could not be moved to ~/google-cloud-sdk."
   # No usage reports to Google, for this install only (not the user's own gcloud settings).
   "$GCLOUD_DIR/bin/gcloud" config set core/disable_usage_reporting true --installation </dev/null >/dev/null 2>&1 || true
-  if ! "$GCLOUD_DIR/bin/gcloud" --version </dev/null >"$LOG_DIR/gcloud.log" 2>&1; then
-    fail "The Google Cloud CLI was installed in ~/google-cloud-sdk, but it does not run." \
-      "It needs Python 3.10 or later, which step 2 installs." "See the log: $LOG_DIR/gcloud.log"
-  fi
+  gcloud_must_run "$GCLOUD_DIR/bin/gcloud"
   info "Installed in ~/google-cloud-sdk. Your shell profile does not change: Zeus finds gcloud there."
+  gcloud_python_note
   record "done" "Google Cloud CLI"
 }
 
-# Step 13/15 - The EU workspace: a second clone of the zeus repo, for EU mode only.
-clone_eu_workspace() {
-  step $((EU_FIRST_STEP + 1)) "EU workspace"
-  # shellcheck disable=SC2088 # A name for the user, not a path.
-  clone_workspace "$EU_WORKSPACE" "~/Code/zeus-eu"
+# The EU vault is open: a volume is mounted at ~/.zeus/eu, with the marker file of the Zeus vault. The EU Claude Code
+# folder is in it. The installer never writes ~/.zeus/eu while no vault is mounted there: the vault would hide those files,
+# and the Zeus app does not open the vault over a folder that holds files.
+eu_vault_open() {
+  if [ "${ZEUS_INSTALL_TEST_EU_VAULT_OPEN:-}" = 1 ]; then return 0; fi
+  [ -f "$EU_STATE_DIR/.zeus-vault" ] && [ ! -L "$EU_STATE_DIR/.zeus-vault" ] &&
+    python3 -c 'import os, sys; sys.exit(0 if os.path.ismount(sys.argv[1]) else 1)' "$EU_STATE_DIR" 2>/dev/null
 }
 
 # Runs claude with the EU Claude Code folder.
@@ -898,11 +980,11 @@ eu_plugins_installed() {
   done < <(eu_plugin_entries)
 }
 
-# The first start of Claude Code in the EU folder asks for a theme and for trust in the EU workspace, which the Zeus app
+# The first start of Claude Code in the EU folder asks for a theme and for trust in the workspace, which the Zeus app
 # can not answer. The installer answers them as the Standard Claude Code of this Mac did: the same theme, and trust for
-# the EU workspace, which is the same zeus repo as ~/Code/zeus. Imports of files outside the workspace stay off.
+# the workspace ~/Code/zeus, which EU and Standard share. Imports of files outside the workspace stay off.
 eu_first_start_settings() {
-  python3 - "$EU_CONFIG_DIR/.claude.json" "$HOME/.claude.json" "$EU_WORKSPACE" <<'PY'
+  python3 - "$EU_CONFIG_DIR/.claude.json" "$HOME/.claude.json" "$ZEUS_DIR" <<'PY'
 import json, os, sys, tempfile
 target, standard, workspace = sys.argv[1], sys.argv[2], os.path.realpath(sys.argv[3])
 def read(path):
@@ -930,7 +1012,7 @@ PY
 }
 
 eu_first_start_done() {
-  python3 - "$EU_CONFIG_DIR/.claude.json" "$EU_WORKSPACE" <<'PY' 2>/dev/null
+  python3 - "$EU_CONFIG_DIR/.claude.json" "$ZEUS_DIR" <<'PY' 2>/dev/null
 import json, os, sys
 try:
     config = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -983,12 +1065,19 @@ if os.path.exists(record):
 PY
 }
 
-# Step 14/16 - The Zeus plugins in the EU Claude Code folder. EU Claude Code reads its plugins, settings, and chats there
-# only, never from ~/.claude. Each run updates them, as step 10 does for Standard.
+# Step 13/15 - The Zeus plugins in the EU Claude Code folder, in the EU vault. EU Claude Code reads its plugins, settings,
+# and chats there only, never from ~/.claude. Each run updates them, as step 10 does for Standard. While the vault is
+# locked (or not made yet), the step waits: the Zeus app asks for the setup again after it opened the vault.
 install_eu_plugins() {
-  step $((EU_FIRST_STEP + 2)) "Zeus plugins of EU mode"
+  step $((EU_FIRST_STEP + 1)) "Zeus plugins of EU mode"
+  if ! eu_vault_open; then
+    info "The EU vault is not open, so they can not be installed now."
+    info "Switch to EU mode in the Zeus app: it opens the vault with Touch ID and asks you to run this setup again."
+    record "skipped" "Zeus plugins of EU mode (EU vault not open)"
+    return
+  fi
   mkdir -p "$EU_CONFIG_DIR"
-  chmod 700 "$HOME/.zeus/eu" "$EU_CONFIG_DIR" 2>/dev/null || true
+  chmod 700 "$EU_CONFIG_DIR" 2>/dev/null || true
   local entry plugin repo marketplace log="$LOG_DIR/eu-plugins.log"
   : >"$log"
   while IFS= read -r entry; do
@@ -1010,9 +1099,159 @@ install_eu_plugins() {
   done < <(eu_plugin_entries)
   eu_first_start_settings || fail "The first-start settings of EU mode could not be written in ~/.zeus/eu/claude."
   eu_mirror_status_line || fail "The status line of EU mode could not be written in ~/.zeus/eu/claude."
-  info "Installed in ~/.zeus/eu/claude."
-  info "For EU mode, sign in to Google once in the Zeus app, and ask $ZEUS_OWNER for access to the EU project."
+  info "Installed in ~/.zeus/eu/claude, in the EU vault."
   record "done" "Zeus plugins of EU mode"
+}
+
+# The gcloud of the Google sign-in (sign_in_google). It runs with the user's own Google sign-in, as the EU start check
+# of Zeus Editor runs it: no credentials file from outside.
+EU_GCLOUD=""
+eu_gcloud() {
+  env -u GOOGLE_APPLICATION_CREDENTIALS "$EU_GCLOUD" "$@"
+}
+
+# Prints the quota project of the application default credentials, or nothing.
+adc_quota_project() {
+  python3 - "$ADC_FILE" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8")).get("quota_project_id")
+except Exception:
+    value = None
+print(value if isinstance(value, str) else "")
+PY
+}
+
+# Prints an access token of the application default credentials. Fails without a sign-in, or when it expired.
+adc_token() {
+  [ -f "$ADC_FILE" ] || return 1
+  local token
+  token="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 run_with_timeout 30 eu_gcloud auth application-default print-access-token \
+    </dev/null 2>>"$LOG_DIR/google-sign-in.log" | tail -n 1)" || return 1
+  [ -n "$token" ] || return 1
+  printf '%s' "$token"
+}
+
+# Checks the access of the signed-in Google account to the EU project, without a model call and without cost:
+# testIamPermissions of Cloud Resource Manager answers which of the permissions the account has on the project.
+# The token goes to curl in files, never on a command line. Sets EU_ACCOUNT (the Google account, or empty) and
+# EU_ACCESS: ok, none (a role is missing), signed-out (no sign-in, or it expired), no-gcloud (gcloud does not run, so the
+# sign-in can not be read; GCLOUD_ERROR says why), or error (no answer).
+EU_ACCESS=""
+EU_ACCOUNT=""
+eu_access_check() {
+  local token dir="$WORK_DIR/google-access" answer log="$LOG_DIR/google-sign-in.log"
+  EU_ACCESS=error
+  EU_ACCOUNT=""
+  if ! gcloud_runs "$EU_GCLOUD"; then
+    EU_ACCESS=no-gcloud
+    return 0
+  fi
+  if ! token="$(adc_token)"; then
+    EU_ACCESS=signed-out
+    return 0
+  fi
+  rm -rf "$dir"
+  (umask 077 && mkdir -p "$dir" && printf 'Authorization: Bearer %s\n' "$token" >"$dir/header" &&
+    printf 'access_token=%s' "$token" >"$dir/tokeninfo") || return 0
+  EU_ACCOUNT="$(curl -fsS -m 20 --data @"$dir/tokeninfo" https://oauth2.googleapis.com/tokeninfo 2>>"$log" |
+    python3 -c 'import json, sys; v = json.load(sys.stdin).get("email"); print(v if isinstance(v, str) else "")' 2>/dev/null || true)"
+  answer="$(curl -sS -m 20 -w '\n%{http_code}' -X POST -H @"$dir/header" -H 'Content-Type: application/json' \
+    --data "{\"permissions\": $EU_PERMISSIONS}" \
+    "https://cloudresourcemanager.googleapis.com/v1/projects/$EU_VERTEX_PROJECT:testIamPermissions" 2>>"$log")" || answer=""
+  rm -rf "$dir"
+  EU_ACCESS="$(printf '%s' "$answer" | python3 -c '
+import json, sys
+body, _, status = sys.stdin.read().rpartition("\n")
+if status == "401":
+    print("signed-out")
+elif status == "403":
+    print("none")
+elif status == "200":
+    try:
+        granted = json.loads(body or "{}").get("permissions") or []
+    except ValueError:
+        print("error")
+    else:
+        print("ok" if set(json.loads(sys.argv[1])) <= set(granted) else "none")
+else:
+    print("error")
+' "$EU_PERMISSIONS" 2>/dev/null || echo error)"
+}
+
+# Returns success when the user wants the Google sign-in now. The installer asks on each setup run while the user is
+# signed out.
+eu_sign_in_wanted() {
+  local answer
+  if ! { exec 3</dev/tty; } 2>/dev/null; then
+    info "No keyboard is connected, so the Google sign-in cannot run. Run the install line in the Terminal app."
+    return 1
+  fi
+  exec 3<&-
+  info "EU mode runs Claude on Google Cloud in the EU. It needs a Google sign-in with your work email."
+  info "If you do not use EU mode, answer n."
+  answer="$(ask "Sign in to Google for EU mode now? (y/n)")"
+  case "$answer" in
+    y | Y | yes | YES | Yes) return 0 ;;
+  esac
+  return 1
+}
+
+# The Google account has no access to the EU project: the words of the EU start check (VertexError in the app,
+# vertexErrorMessage in Zeus Editor), with the account.
+eu_no_access() {
+  fail "Your Google account${EU_ACCOUNT:+ $EU_ACCOUNT} has no access to the EU project of Zeus. Ask the Zeus maintainer for the Vertex AI User and Service Usage Consumer roles." \
+    "When you have the roles, run the setup again. You do not need to sign in again." \
+    "To use another Google account, run: gcloud auth application-default login"
+}
+
+# Step 15/17 - The Google sign-in of EU mode: `gcloud auth application-default login` (the browser opens), the access
+# check, and the EU project as the quota project, as the sign-in button of the Zeus app does. A Mac that is already signed
+# in gets no question. Without access, the step gives the message for the roles; the setup goes on.
+sign_in_google() {
+  step "$EU_SIGN_IN_STEP" "Google sign-in (EU mode)"
+  EU_GCLOUD="$(find_gcloud)" ||
+    fail "The Google Cloud CLI is not installed, so the Google sign-in of EU mode cannot run."
+  local signed_in="" status=0
+  # A gcloud that does not run can not sign in: the step says why, and asks nothing.
+  gcloud_must_run "$EU_GCLOUD"
+  eu_access_check
+  [ "$EU_ACCESS" != no-gcloud ] || gcloud_must_run "$EU_GCLOUD"
+  if [ "$EU_ACCESS" = signed-out ]; then
+    if ! eu_sign_in_wanted; then
+      info "Skipped. To use EU mode later, sign in to Google in the Zeus app."
+      record "skipped" "Google sign-in (EU mode, skipped)"
+      return 0
+    fi
+    info "Your browser opens. Sign in to Google with your work email, then allow the access."
+    run_with_timeout 600 with_tty env -u CLOUDSDK_CORE_DISABLE_PROMPTS -u GOOGLE_APPLICATION_CREDENTIALS \
+      "$EU_GCLOUD" auth application-default login || status=$?
+    if [ "$status" -eq 124 ]; then fail "The Google sign-in did not complete in 10 minutes."; fi
+    [ "$status" -eq 0 ] || fail "The Google sign-in did not complete."
+    signed_in=1
+    eu_access_check
+    [ "$EU_ACCESS" != signed-out ] || fail "The Google sign-in did not complete."
+  fi
+  case "$EU_ACCESS" in
+    none) eu_no_access ;;
+    error)
+      fail "Zeus could not check the access of your Google account${EU_ACCOUNT:+ $EU_ACCOUNT} to the EU project." \
+        "Check your internet connection, then run the setup again. You do not need to sign in again."
+      ;;
+  esac
+  if [ "$(adc_quota_project)" != "$EU_VERTEX_PROJECT" ]; then
+    eu_gcloud auth application-default set-quota-project "$EU_VERTEX_PROJECT" </dev/null >>"$LOG_DIR/google-sign-in.log" 2>&1 ||
+      fail "The EU project could not be set as the quota project of your Google sign-in." \
+        "See the log: $LOG_DIR/google-sign-in.log"
+    signed_in=1
+  fi
+  if [ -n "$signed_in" ]; then
+    info "Signed in${EU_ACCOUNT:+ as $EU_ACCOUNT}, with access to the EU project. EU mode is ready."
+    record "done" "Google sign-in (EU mode${EU_ACCOUNT:+, $EU_ACCOUNT})"
+  else
+    info "Already signed in${EU_ACCOUNT:+ as $EU_ACCOUNT}, with access to the EU project."
+    record "skipped" "Google sign-in (EU mode${EU_ACCOUNT:+, $EU_ACCOUNT})"
+  fi
 }
 
 # eu_step <function> <name>: runs one EU step in a subshell, so that its failure stops only that step. EU mode is for
@@ -1047,8 +1286,8 @@ eu_step_exit() {
 
 install_eu() {
   eu_step install_gcloud "Google Cloud CLI"
-  eu_step clone_eu_workspace "EU workspace"
   eu_step install_eu_plugins "Zeus plugins of EU mode"
+  eu_step sign_in_google "Google sign-in of EU mode"
 }
 
 # Step 12 (app mode) - The Zeus skill plugins, for the current user, like the Zeus Editor plugin.
@@ -1196,9 +1435,18 @@ check_steps() {
   fi
   state 12 "$all"
   if command -v claude >/dev/null 2>&1 && claude_logged_in; then state 13 ok; else state 13 todo; fi
-  if find_gcloud >/dev/null; then state 14 ok; else state 14 todo; fi
-  if [ -d "$EU_WORKSPACE/.git" ]; then state 15 ok; else state 15 todo; fi
-  if command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state 16 ok; else state 16 todo; fi
+  local gcloud
+  if gcloud="$(find_gcloud)" && gcloud_runs "$gcloud"; then state 14 ok; else state 14 todo; fi
+  # The EU plugins are in the EU vault: while it is not open, the step runs at each setup and waits for the vault.
+  if ! eu_vault_open; then
+    state 15 always
+  elif command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state 15 ok; else state 15 todo; fi
+  # No network here: a sign-in with the EU quota project. The step itself checks the access.
+  if [ -f "$ADC_FILE" ] && [ "$(adc_quota_project)" = "$EU_VERTEX_PROJECT" ]; then
+    state "$EU_SIGN_IN_STEP" ok
+  else
+    state "$EU_SIGN_IN_STEP" todo
+  fi
   emit "checked"
 }
 

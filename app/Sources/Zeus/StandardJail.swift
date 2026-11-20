@@ -32,16 +32,17 @@ enum StandardJail {
     }
 
     /// The folders that Standard sessions may not read or write. The app always denies its own EU folders: the EU vault
-    /// (its mount folder and its disk image), the default EU folders (Claude Code folder, editor state, workspace,
-    /// temporary folder), and the app's handover folder. The EU profile can only add folders to them; an added folder
-    /// that holds the home folder, the Standard workspace, or the app folder is left out, because Standard could not run
-    /// without them.
+    /// (its mount folder and its disk image), the default EU folders (Claude Code folder, editor state, temporary folder),
+    /// the old EU workspace `~/Code/zeus-eu` (until `LegacyEU` removed it, and when it kept it), and the app's handover
+    /// folder. The shared workspace `~/Code/zeus` stays open: EU data is in the vault, not there. The EU profile can only
+    /// add folders to them; an added folder that holds the home folder, the shared workspace, or the app folder is left
+    /// out, because Standard could not run without them.
     static func deniedFolders(profile: EUProfile = .load()) -> [String] {
         let defaults = EUProfile.defaults
-        let fixed = [EUVault.mountPoint, EUVault.bundlePath, defaults.configDir, defaults.editorStateDir, defaults.workspace,
+        let fixed = [EUVault.mountPoint, EUVault.bundlePath, defaults.configDir, defaults.editorStateDir, Paths.oldEUWorkspace,
                      defaults.tmpDir, Handover.root].flatMap(forms)
         let needed = [Paths.home, Paths.zeusDir, Paths.appSupport].flatMap(forms)
-        let added = [profile.configDir, profile.editorStateDir, profile.workspace, profile.tmpDir].flatMap(forms)
+        let added = [profile.configDir, profile.editorStateDir, profile.tmpDir].flatMap(forms)
             .filter { folder in !needed.contains(where: { contains(folder, $0) }) }
         var result: [String] = []
         for folder in fixed + added where !result.contains(folder) { result.append(folder) }
@@ -101,7 +102,7 @@ enum StandardJail {
     /// The command of a Standard `zeus`. On a Mac with an EU vault it throws when the session can not run in the jail:
     /// a Standard session then does not start.
     static func launch(command: String, arguments: [String]) throws -> Launch {
-        guard vaultExists else { return Launch(executable: command, arguments: arguments, jailed: false) }
+        guard isOn else { return Launch(executable: command, arguments: arguments, jailed: false) }
         guard FileManager.default.isExecutableFile(atPath: sandboxExec) else {
             throw failure("macOS has no \(sandboxExec), so Standard can not start while an EU vault exists on this Mac.")
         }
@@ -129,6 +130,15 @@ enum StandardJail {
         }
         sandboxCheck = (root, changed, result)
         return result
+    }
+
+    /// Standard runs in the read block: EU runs apart from Standard (`EUProfile.isolation`) and this Mac has an EU vault.
+    /// Simple EU has no vault to protect, so Standard runs without the read block there.
+    static var isOn: Bool {
+        #if DEBUG
+        if DebugEnvironment.value("ZEUS_APP_TEST_JAIL") == "1" { return true }
+        #endif
+        return vaultExists && EUProfile.isolated
     }
 
     /// This Mac has an EU vault: its disk image, or a mounted Zeus vault.

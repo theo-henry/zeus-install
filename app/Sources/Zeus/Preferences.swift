@@ -23,16 +23,22 @@ enum Preferences {
         set { defaults.set(newValue, forKey: "showMenuBar") }
     }
 
-    /// The mode of the app, "standard" or "eu" (`ZeusMode.current`).
+    /// The mode of the tab that the user used last, "standard" or "eu" (`ZeusMode.lastUsed`).
     static var zeusMode: String? {
         get { defaults.string(forKey: "zeusMode") }
         set { defaults.set(newValue, forKey: "zeusMode") }
     }
 
-    /// The first switch to EU mode showed the note about the shared clipboard.
+    /// The first switch of a tab to EU showed the note about the shared clipboard.
     static var euClipboardNoteShown: Bool {
         get { defaults.bool(forKey: "euClipboardNoteShown") }
         set { defaults.set(newValue, forKey: "euClipboardNoteShown") }
+    }
+
+    /// The one-time removal of EU mode from before the shared workspace and the EU vault ran to the end (`LegacyEU`).
+    static var oldEURemoved: Bool {
+        get { defaults.bool(forKey: "oldEURemoved") }
+        set { defaults.set(newValue, forKey: "oldEURemoved") }
     }
 
     /// The dictation settings (see `DictationSettings`).

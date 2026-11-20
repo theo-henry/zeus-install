@@ -29,10 +29,11 @@ enum Paths {
     }()
     static let logDir = home + "/Library/Logs/zeus-install"
 
-    /// The Zeus workspace of a mode: `~/Code/zeus`, or the EU workspace of the EU profile.
-    static func workspace(for mode: ZeusMode, profile: EUProfile? = nil) -> String {
-        mode == .eu ? (profile ?? .load()).workspace : zeusDir
-    }
+    /// The Zeus workspace of both modes: Standard and EU chats work in the same `~/Code/zeus`. EU client data goes into
+    /// the EU vault (`EUVault`), never into this folder (zeus routes it there).
+    static var workspace: String { zeusDir }
+    /// The EU workspace from before the shared workspace (a second clone of zeus), which the app removes once (`LegacyEU`).
+    static let oldEUWorkspace = home + "/Code/zeus-eu"
 
     /// The Zeus Editor state folder of a mode. Standard: `~/.zeus-editor` (zeus-editor src/paths.js); EU: the EU editor
     /// state of the EU profile, which `zeus --eu` uses (it ignores ZEUS_EDITOR_STATE_DIR from outside).
@@ -83,7 +84,20 @@ enum ShellEnvironment {
     }
 
     /// Forgets the PATH, so that the next command sees tools that the installer just added.
-    static func reset() { cachedPath = nil }
+    static func reset() {
+        cachedPath = nil
+        cachedGcloudPython = nil
+    }
+
+    /// The Python of gcloud (`GcloudPython`), found once per PATH: "" when there is none.
+    private static var cachedGcloudPython: String?
+
+    static func gcloudPython() -> String? {
+        if cachedGcloudPython == nil {
+            cachedGcloudPython = GcloudPython.find(folders: GcloudPython.folders(home: Paths.home), path: loginPath()) ?? ""
+        }
+        return cachedGcloudPython.flatMap { $0.isEmpty ? nil : $0 }
+    }
 
     private static func readLoginPath() -> String? {
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
@@ -106,6 +120,9 @@ enum ShellEnvironment {
         return path.isEmpty ? nil : path
     }
 
+    /// The ID of this app run (`ZEUS_APP_RUN` of the commands that the app starts).
+    static let runID = UUID().uuidString.lowercased()
+
     static func make(extra: [String: String] = [:]) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         // Variables of a Claude Code session, if the app was started from one.
@@ -113,10 +130,14 @@ enum ShellEnvironment {
         // A release build uses the default editor state (`Paths.editorStateDir`); the commands that it starts use the same.
         if DebugEnvironment.value("ZEUS_EDITOR_STATE_DIR") == nil { env.removeValue(forKey: "ZEUS_EDITOR_STATE_DIR") }
         env["PATH"] = loginPath()
+        // gcloud (the Google sign-in and the EU start check) gets a Python that it supports, also without the login PATH.
+        if (env["CLOUDSDK_PYTHON"] ?? "").isEmpty, let python = gcloudPython() { env["CLOUDSDK_PYTHON"] = python }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         env["ZEUS_APP"] = "1"
+        // A new value at each app start: Zeus Editor keeps a passed EU start check (its preflight) for one app run.
+        env["ZEUS_APP_RUN"] = runID
         for (key, value) in extra { env[key] = value }
         return env
     }

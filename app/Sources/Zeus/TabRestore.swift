@@ -3,11 +3,10 @@ import Darwin
 import Foundation
 
 /// The chat tabs of the app, kept across an update from the settings: the old copy writes them before it ends its
-/// sessions, and the new copy (or the old copy after a roll back) opens the same tabs again.
+/// sessions, and the new copy (or the old copy after a roll back) opens the same tabs again, each in its own mode.
 /// Each tab gets a new `zeus` session that resumes the Claude Code session of the tab (`LaunchControl`),
 /// its project, its name, its open terminal, and the unsent text of its message box and of its terminal.
-/// The same record keeps the tabs of a mode while the app runs in the other mode (`ModeTabs`).
-/// Each tab has its mode: a tab opens again only in the same mode, so an EU chat never resumes in Standard.
+/// An EU chat never resumes in Standard: an EU tab opens again only as an EU tab, after the EU vault is open.
 struct TabRestore: Codable {
     struct Tab: Codable {
         /// The mode of the tab. Nil in a file from before EU mode: a Standard tab.
@@ -37,6 +36,9 @@ struct TabRestore: Codable {
         }
 
         var tabMode: ZeusMode { mode ?? .standard }
+
+        /// The place of an EU tab in the Standard record: its mode and place only, never its chat, project, name, or text.
+        var placeholder: Tab { Tab(mode: tabMode, terminalVisible: terminalVisible, selected: selected) }
     }
 
     struct Window: Codable {
@@ -49,53 +51,118 @@ struct TabRestore: Codable {
     var version: String
     var createdAt: Date
     var windows: [Window]
+    /// The same in the Standard record and in the EU record of one write: an EU record of another write is not used.
+    var id: UUID?
+
+    init(version: String, createdAt: Date, windows: [Window], id: UUID? = UUID()) {
+        self.version = version
+        self.createdAt = createdAt
+        self.windows = windows
+        self.id = id
+    }
 
     var tabCount: Int { windows.reduce(0) { $0 + $1.tabs.count } }
 
-    /// Only the tabs of this mode, and only the windows that keep a tab.
-    func only(_ mode: ZeusMode) -> TabRestore {
+    /// The record has EU tabs (or their places).
+    var hasEU: Bool { windows.contains { $0.tabs.contains { $0.tabMode == .eu } } }
+
+    /// Without the EU tabs, and only the windows that keep a tab.
+    var withoutEU: TabRestore {
         var copy = self
-        copy.windows = windows.map { Window(frame: $0.frame, tabs: $0.tabs.filter { $0.tabMode == mode }) }.filter { !$0.tabs.isEmpty }
+        copy.windows = windows.map { Window(frame: $0.frame, tabs: $0.tabs.filter { $0.tabMode != .eu }) }.filter { !$0.tabs.isEmpty }
         return copy
     }
 
-    /// The folder of the tab records of a mode (`TabFiles.folder`).
-    private static func url(_ mode: ZeusMode) -> URL { URL(fileURLWithPath: TabFiles.folder(mode) + "/restore.json") }
+    /// The record of each mode. The Standard record keeps every window and the place of each EU tab
+    /// (`Tab.placeholder`), so that the tabs open again in their order; the EU record has the EU tabs, window by window.
+    func split() -> (standard: TabRestore, eu: TabRestore) {
+        var standard = self
+        var eu = self
+        standard.windows = windows.map { Window(frame: $0.frame, tabs: $0.tabs.map { $0.tabMode == .eu ? $0.placeholder : $0 }) }
+        eu.windows = windows.map { Window(frame: $0.frame, tabs: $0.tabs.filter { $0.tabMode == .eu }) }
+        return (standard, eu)
+    }
+
+    /// The Standard record with each EU place filled from the EU record of the same write, in order. A place without an
+    /// EU tab (no EU record, or one of another write) is left out.
+    func merged(with eu: TabRestore?) -> TabRestore {
+        let usable = eu.flatMap { $0.id != nil && $0.id == id ? $0 : nil }
+        var copy = self
+        copy.windows = windows.enumerated().map { index, window in
+            var euTabs = (usable?.windows.indices.contains(index) ?? false) ? usable!.windows[index].tabs[...] : []
+            let tabs: [Tab] = window.tabs.compactMap { tab in
+                guard tab.tabMode == .eu else { return tab }
+                guard let full = euTabs.popFirst(), full.tabMode == .eu else { return nil }
+                return full
+            }
+            return Window(frame: window.frame, tabs: tabs)
+        }.filter { !$0.tabs.isEmpty }
+        return copy
+    }
+
+    /// The file of the tab records of a mode (`TabFiles.folder`). In simple EU both are in the app folder, so EU has a name
+    /// of its own.
+    private static func url(_ mode: ZeusMode) -> URL {
+        let name = mode == .eu && TabFiles.folder(.eu) == TabFiles.folder(.standard) ? "restore-eu.json" : "restore.json"
+        return URL(fileURLWithPath: TabFiles.folder(mode) + "/" + name)
+    }
     /// A file older than this is left from an update that did not finish, and is not used.
     private static let maximumAge: TimeInterval = 15 * 60
 
-    /// Each mode's tabs go into the folder of that mode, so the unsent text of an EU tab stays in an EU folder.
+    /// Each mode's tabs go into the folder of that mode, so the unsent text of an EU tab stays in the EU vault.
     func write() throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        for mode in ZeusMode.allCases {
-            let kept = only(mode)
-            guard kept.tabCount > 0 else { try? FileManager.default.removeItem(at: Self.url(mode)); continue }
-            try TabFiles.prepare(mode)
-            try encoder.encode(kept).write(to: Self.url(mode), options: .atomic)
+        let records = split()
+        if records.eu.tabCount > 0 {
+            try TabFiles.prepare(.eu)
+            try encoder.encode(records.eu).write(to: Self.url(.eu), options: .atomic)
+        } else {
+            try? FileManager.default.removeItem(at: Self.url(.eu))
         }
+        try TabFiles.prepare(.standard)
+        try encoder.encode(records.standard).write(to: Self.url(.standard), options: .atomic)
     }
 
     static func remove() {
         for mode in ZeusMode.allCases { try? FileManager.default.removeItem(at: url(mode)) }
         try? FileManager.default.removeItem(at: TabFiles.legacy("restore.json"))
+        removeOldModeTabs()
     }
 
-    /// The tabs for this version of the app and this mode, read once: the files are removed.
-    /// A tab of the other mode does not open.
-    static func take(mode: ZeusMode) -> TabRestore? {
-        defer { remove() }
-        let data = (try? Data(contentsOf: url(mode))) ?? (try? Data(contentsOf: TabFiles.legacy("restore.json")))
+    /// The tabs for this version of the app, read once: the Standard record is removed. Its EU tabs are only places
+    /// until `takeEU` fills them, which needs the open EU vault.
+    static func take() -> TabRestore? {
+        defer {
+            try? FileManager.default.removeItem(at: url(.standard))
+            try? FileManager.default.removeItem(at: TabFiles.legacy("restore.json"))
+        }
+        let data = (try? Data(contentsOf: url(.standard))) ?? (try? Data(contentsOf: TabFiles.legacy("restore.json")))
         guard let data, let restore = decode(data) else { return nil }
         guard restore.version == Updater.currentVersion, Date().timeIntervalSince(restore.createdAt) < maximumAge else {
             Trace.log("restore: not used (for \(restore.version), written \(restore.createdAt))")
             return nil
         }
-        let kept = restore.only(mode)
-        if kept.tabCount < restore.tabCount {
-            Trace.log("restore: \(restore.tabCount - kept.tabCount) tabs of another mode not opened in \(mode.rawValue)")
+        return restore
+    }
+
+    /// The EU record, read once (main queue): the file is removed. With isolation it is in the EU vault, which must be open.
+    static func takeEU() -> TabRestore? {
+        defer { try? FileManager.default.removeItem(at: url(.eu)) }
+        removeOldModeTabs()
+        guard EUProfile.sessionsCanStart, let data = try? Data(contentsOf: url(.eu)) else { return nil }
+        return decode(data)
+    }
+
+    /// The tabs that an app from before the per-tab mode kept for a switch back of the whole app (`tabs-<mode>.json`).
+    /// The per-tab mode has no app switch, so they are not used.
+    static func removeOldModeTabs() {
+        for mode in ZeusMode.allCases {
+            try? FileManager.default.removeItem(at: TabFiles.legacy("tabs-\(mode.rawValue).json"))
+            if mode == .standard || EUProfile.sessionsCanStart {
+                try? FileManager.default.removeItem(atPath: TabFiles.folder(mode) + "/tabs-\(mode.rawValue).json")
+            }
         }
-        return kept
     }
 
     fileprivate static func decode(_ data: Data) -> TabRestore? {
@@ -105,12 +172,13 @@ struct TabRestore: Codable {
     }
 }
 
-/// Where the app keeps the tab records of a mode. They hold the unsent text of each tab, so an EU tab's text, which can
-/// name client data, stays in an EU folder: the EU Zeus Editor state of the EU profile (`<EU editor state>/app`), which
-/// Standard sessions can not read (zeus-editor src/eu/profile.js). Standard tabs stay in `~/Library/Application Support/Zeus`.
+/// Where the app keeps the tab records of a mode. With isolation, they hold the unsent text of each tab, so an EU tab's
+/// text, which can name client data, stays in an EU folder: the EU Zeus Editor state of the EU profile
+/// (`<EU editor state>/app`), in the EU vault, which Standard sessions can not read. Standard tabs, and the EU tabs of
+/// simple EU, stay in `~/Library/Application Support/Zeus`.
 enum TabFiles {
     static func folder(_ mode: ZeusMode) -> String {
-        mode == .eu ? Paths.editorStateDir(for: .eu) + "/app" : Paths.appSupport
+        mode == .eu && EUProfile.isolated ? Paths.editorStateDir(for: .eu) + "/app" : Paths.appSupport
     }
 
     /// Makes the folder, owner only for EU.
@@ -121,39 +189,6 @@ enum TabFiles {
 
     /// A file of an app from before this change, in `~/Library/Application Support/Zeus`: read once, then removed.
     static func legacy(_ name: String) -> URL { URL(fileURLWithPath: Paths.appSupport + "/" + name) }
-}
-
-/// The tabs of the mode that the app left at a mode switch, so that a switch back opens them again with their chats.
-/// One file per mode, `tabs-<mode>.json` in the folder of the mode (`TabFiles`). Only tabs of that mode go in it.
-enum ModeTabs {
-    private static func url(_ mode: ZeusMode) -> URL { URL(fileURLWithPath: TabFiles.folder(mode) + "/tabs-\(mode.rawValue).json") }
-
-    static func save(_ restore: TabRestore, mode: ZeusMode) {
-        let kept = restore.only(mode)
-        try? FileManager.default.removeItem(at: TabFiles.legacy("tabs-\(mode.rawValue).json"))
-        guard kept.tabCount > 0 else { try? FileManager.default.removeItem(at: url(mode)); return }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        do {
-            try TabFiles.prepare(mode)
-            try encoder.encode(kept).write(to: url(mode), options: .atomic)
-        } catch {
-            Trace.log("mode tabs: not written: \(error.localizedDescription)")
-        }
-    }
-
-    /// The kept tabs of this mode, read once: the file is removed.
-    static func take(_ mode: ZeusMode) -> TabRestore? {
-        let legacy = TabFiles.legacy("tabs-\(mode.rawValue).json")
-        defer {
-            try? FileManager.default.removeItem(at: url(mode))
-            try? FileManager.default.removeItem(at: legacy)
-        }
-        let data = (try? Data(contentsOf: url(mode))) ?? (try? Data(contentsOf: legacy))
-        guard let data, let restore = TabRestore.decode(data) else { return nil }
-        let kept = restore.only(mode)
-        return kept.tabCount > 0 ? kept : nil
-    }
 }
 
 /// The control socket of a `zeus` launch (zeus-editor packages/launcher/control.js): one JSON object per line.
@@ -167,11 +202,15 @@ enum LaunchControl {
     }
 
     /// Off the main queue: the endpoint of the session's launch, or nil when the session has no chat URL or record.
-    /// The launch record is in the Zeus Editor state folder of the session's mode.
+    /// The launch record is in the Zeus Editor state folder of the session's mode; in simple EU, Zeus Editor can keep EU
+    /// launches in the Standard state folder, so the other folder is the second place. The token of the chat URL still
+    /// has to open the socket.
     static func endpoint(launchID: String?, chatURL: URL?, mode: ZeusMode) -> Endpoint? {
         guard let launchID, !launchID.contains("/"), let fragment = chatURL?.fragment,
-              let token = URLComponents(string: "x:?" + fragment)?.queryItems?.first(where: { $0.name == "k" })?.value,
-              let data = try? Data(contentsOf: URL(fileURLWithPath: Paths.launchesDir(for: mode) + "/\(launchID).json")),
+              let token = URLComponents(string: "x:?" + fragment)?.queryItems?.first(where: { $0.name == "k" })?.value else { return nil }
+        let other: ZeusMode = mode == .eu ? .standard : .eu
+        let folders = [mode] + (mode == .eu && !EUProfile.isolated ? [other] : [])
+        guard let data = folders.lazy.compactMap({ try? Data(contentsOf: URL(fileURLWithPath: Paths.launchesDir(for: $0) + "/\(launchID).json")) }).first,
               let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let socket = record["socket"] as? String else { return nil }
         return Endpoint(socket: socket, token: token)

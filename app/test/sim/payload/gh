@@ -25,9 +25,13 @@ case "${1:-} ${2:-}" in
   "auth setup-git") exit 0 ;;
   "api user") echo "sim-user" ;;
   "repo clone")
+    # The remote is an empty local repo with the name of the GitHub repo, so that a later setup can fetch it
+    # (update_workspace in install.sh) without the network and without a GitHub password question.
+    remote="$S/remotes/$3.git"
+    [ -d "$remote" ] || git init -q --bare "$remote"
     mkdir -p "$4"
     git -C "$4" init -q
-    git -C "$4" remote add origin "https://github.com/$3.git"
+    git -C "$4" remote add origin "$remote"
     echo "Cloning into '$4'... (simulated)"
     ;;
   api\ repos/*/releases*)

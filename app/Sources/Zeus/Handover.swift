@@ -5,12 +5,12 @@ import SwiftUI
 
 /// The EU to Standard handover (zeus references/eu-mode.md, "Handover"). EU Claude writes a summary of its work on a fixed
 /// template. The app then builds the handover into a folder that only the app writes (`Handover.root`), scans it for data
-/// values, masks the values that the user chooses to mask, and copies the released files into the Standard workspace,
-/// all with the Zeus commands of the Standard workspace, outside Claude and out of reach of EU Claude. The EU sandbox can
-/// write the EU workspace, but not the app folder: so the files that the scan reads, the files that the user sees, and
-/// the files that cross are the same bytes. EU Claude can not write into the Standard workspace, so it can not make a
-/// release. The user decides each finding group here, never Claude: Keep (not a data value) or Mask. E-mail and IBAN
-/// groups can only be masked. EU chats and EU work files never open in Standard: only the released files cross.
+/// values, masks the values that the user chooses to mask, and copies the released files into
+/// `clients/<project>/handoff/from-eu/<id>/` of the workspace, all with the Zeus commands of the workspace, outside Claude
+/// and out of reach of EU Claude. EU and Standard share the workspace (`~/Code/zeus`); EU client data is in the EU vault.
+/// The EU sandbox can not write the app folder: so the files that the scan reads, the files that the user sees, and the
+/// files that cross are the same bytes. The user decides each finding group here, never Claude: Keep (not a data value)
+/// or Mask. E-mail and IBAN groups can only be masked. EU chats never open in Standard: only the released files cross.
 enum Handover {
     /// The handover id of `handoff build` (`\d{8}T\d{6}Z-[0-9a-f]{6}`).
     static func validID(_ id: String) -> Bool { id.range(of: #"^\d{8}T\d{6}Z-[0-9a-f]{6}$"#, options: .regularExpression) != nil }
@@ -149,33 +149,37 @@ enum Handover {
     }
 }
 
-/// The Zeus commands that the app runs in the EU workspace (zeus references/eu-mode.md, "App contract"):
-/// `python3 -E -s <Standard workspace>/scripts/zeus.py --workspace <EU workspace> <command> ... --json`.
+/// The Zeus commands that the app runs for EU mode (zeus references/eu-mode.md, "App contract"):
+/// `python3 -E -s <workspace>/scripts/zeus.py --workspace <workspace> <command> ... --json`, in the shared workspace.
 /// Exit codes: 0 ok, 2 user error, 3 findings (scan), 4 internal error; every answer is one JSON object.
-/// The script is the one of the Standard workspace, which EU Claude can not write: EU Claude can change the scripts of
-/// the EU workspace, and so the scan. `-E -s` keep PYTHONPATH and the user site folder out, and a script run puts only the
-/// folder of its script on the import path, not the working folder: no module of the EU workspace loads.
+/// EU Claude may write the shared workspace, but not its `scripts` folder (zeus-editor denies the control folders
+/// `.claude`, `scripts`, and `.git` to EU), so it can not change the scan. `-E -s` keep PYTHONPATH and the user site
+/// folder out, and a script run puts only the folder of its script on the import path, not the working folder: no
+/// module that EU Claude wrote in the workspace loads.
 struct HandoffCLI {
     let workspace: String
     let profile: EUProfile
-    /// The Standard workspace, whose `scripts/zeus.py` runs.
-    let scriptsWorkspace: String
+
+    init(profile: EUProfile, workspace: String = Paths.workspace) {
+        self.profile = profile
+        self.workspace = workspace
+    }
 
     struct Failure: Error, LocalizedError {
         let message: String
         var errorDescription: String? { message }
     }
 
-    /// Off the main queue. `arguments` follow `zeus.py --workspace <EU workspace>`, such as `["handoff", "pending"]`.
+    /// Off the main queue. `arguments` follow `zeus.py --workspace <workspace>`, such as `["handoff", "pending"]`.
     func run(_ arguments: [String]) throws -> (code: Int32, json: [String: Any]) {
         let name = arguments.prefix(2).joined(separator: " ")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        let script = (scriptsWorkspace as NSString).appendingPathComponent("scripts/zeus.py")
+        let script = (workspace as NSString).appendingPathComponent("scripts/zeus.py")
         process.arguments = ["python3", "-E", "-s", script, "--workspace", workspace] + arguments + ["--json"]
         process.currentDirectoryURL = URL(fileURLWithPath: workspace)
         var env = ShellEnvironment.make()
-        // The app's calls have no Claude session; the EU workspace and the profile decide.
+        // The app's calls have no Claude session; the profile decides.
         for key in env.keys where key.hasPrefix("CLAUDE_") || key.hasPrefix("ANTHROPIC_") || key == "ZEUS_MODE" || key == "CLOUD_ML_REGION" {
             env.removeValue(forKey: key)
         }
@@ -309,7 +313,8 @@ final class HandoverModel: ObservableObject {
     @Published private(set) var masking: Set<String> = []
 
     let profile: EUProfile
-    let standardWorkspace: String
+    /// The shared workspace of both modes.
+    let workspace: String
     private let cli: HandoffCLI
     private let queue = DispatchQueue(label: "zeus.handover")
     private var pollTimer: Timer?
@@ -322,10 +327,10 @@ final class HandoverModel: ObservableObject {
     /// After a release, the user can go on to Standard mode.
     var onSwitchToStandard: (() -> Void)?
 
-    init(profile: EUProfile = .load(), standardWorkspace: String = Paths.zeusDir) {
+    init(profile: EUProfile = .load(), workspace: String = Paths.workspace) {
         self.profile = profile
-        self.standardWorkspace = standardWorkspace
-        cli = HandoffCLI(workspace: profile.workspace, profile: profile, scriptsWorkspace: standardWorkspace)
+        self.workspace = workspace
+        cli = HandoffCLI(profile: profile, workspace: workspace)
     }
 
     deinit { pollTimer?.invalidate() }
@@ -360,7 +365,7 @@ final class HandoverModel: ObservableObject {
                     }
                     self.openBefore = open
                     self.projects = all.filter { $0.open || $0.lastActivity != nil }
-                    self.nothingReason = self.projects.isEmpty ? Self.nothingReason(all: all, workspace: self.profile.workspace) : nil
+                    self.nothingReason = self.projects.isEmpty ? Self.nothingReason(all: all, workspace: self.workspace) : nil
                     if self.phase == .loading || quiet && self.phase == .list { self.phase = .list }
                 }
             } catch {
@@ -372,7 +377,7 @@ final class HandoverModel: ObservableObject {
     /// Why the list is empty, in the user's words.
     static func nothingReason(all: [Project], workspace: String) -> String {
         if all.isEmpty {
-            return "The EU workspace (\(EUSetup.display(workspace))) has no project. Make the project in an EU chat first; only work "
+            return "The workspace (\(EUSetup.display(workspace))) has no project. Make the project in a chat first; only work "
                 + "of an EU project can be handed over."
         }
         let names = all.map(\.project).sorted().joined(separator: ", ")
@@ -414,7 +419,7 @@ final class HandoverModel: ObservableObject {
         let root = try Handover.prepareRoot()
         // `--dir` is the handover's own folder, so the app needs the handover ID first: the latest summary of the project,
         // as `handoff build` takes it. The build must answer with the same ID and folder.
-        let expected = try Self.latestHandover(workspace: profile.workspace, project: project)
+        let expected = try Self.latestHandover(workspace: workspace, project: project)
         let projectFolder = root + "/" + project
         try FileManager.default.createDirectory(atPath: projectFolder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         guard Handover.isDirectory(projectFolder) else { throw HandoffCLI.Failure(message: "The handover folder of the app is not a plain folder.") }
@@ -687,13 +692,14 @@ final class HandoverModel: ObservableObject {
         }
     }
 
-    /// Off the main queue. Copies the included files of the app's copy, with the hashes of its manifest, into the Standard
-    /// workspace, and writes released.json there and in the EU handover folder. Returns the folder in the Standard workspace.
+    /// Off the main queue. Copies the included files of the app's copy, with the hashes of its manifest, into
+    /// `clients/<project>/handoff/from-eu/<id>/`, and writes released.json there and in the EU handover folder. Returns the
+    /// released folder.
     private func copy(_ review: Review, keptKeys: Set<String>) throws -> String {
         let fail = { (message: String) in HandoffCLI.Failure(message: message) }
         let manager = FileManager.default
         guard Handover.validID(review.id), Handover.validProject(review.project) else { throw fail("The handover id is not valid.") }
-        let projectDir = (standardWorkspace as NSString).appendingPathComponent("clients/\(review.project)")
+        let projectDir = (workspace as NSString).appendingPathComponent("clients/\(review.project)")
         guard manager.fileExists(atPath: projectDir + "/project.json") else {
             throw fail("Standard mode has no project \(review.project). Make the project in Standard mode with the same project ID, then release again.")
         }
@@ -757,12 +763,12 @@ final class HandoverModel: ObservableObject {
             try? manager.removeItem(atPath: staging)
             throw error
         }
-        // The EU handover folder gets the same record with the removed paths, so that `handoff pending` shows the handover
-        // as closed. EU Claude can write that folder, so no part of the path may be a link, and only a new file is written.
+        // The EU handover folder gets the same record, so that `handoff pending` shows the handover as closed. It is in the
+        // shared workspace, which Standard reads, so it names no removed path (a file name can name client data): only
+        // their count. EU Claude can write that folder, so no part of the path may be a link, and only a new file is written.
         do {
-            let euRecord = record.merging(["removed": removed]) { _, new in new }
-            let euJSON = try JSONSerialization.data(withJSONObject: euRecord, options: [.prettyPrinted, .sortedKeys])
-            try Handover.writeNew(euJSON, "clients/\(review.project)/handoff/\(review.id)/released.json", under: profile.workspace)
+            let euJSON = try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
+            try Handover.writeNew(euJSON, "clients/\(review.project)/handoff/\(review.id)/released.json", under: workspace)
         } catch {
             Trace.log("handover: EU record not written: \(error.localizedDescription)")
         }

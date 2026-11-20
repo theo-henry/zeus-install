@@ -22,10 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The update check at launch runs, or an update from the settings installs; only its loading screen shows,
     /// and no Zeus session opens until it ends.
     private var updating = false
-    /// A mode switch runs: it asks, ends the sessions of the old mode, then starts the new mode. No session starts meanwhile.
-    private(set) var isSwitchingMode = false
     private var handoverWindow: HandoverWindowController?
-    /// The question that shows now (a mode switch), which the debug test actions can answer.
+    /// The EU tab from which the user opened the handover: "Switch to Standard" after a release switches it.
+    private weak var handoverTab: ChatTab?
+    /// The EU vault opens for EU mode (Touch ID, then the EU setup check in the vault): no other EU start begins meanwhile.
+    private var openingEU = false
+    /// The question that shows now (a tab mode switch), which the debug test actions can answer.
     private var openAlert: NSAlert?
     #if DEBUG
     /// The user's pasteboard before the paste test actions, given back by "test-pasteboard-restore".
@@ -35,9 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Before anything else: a EU vault that stayed open after a crash locks now, while no session runs.
         EUVault.shared.lockAtStart()
+        // Then, once: EU mode from before the shared workspace and the vault goes (LegacyEU), while no session runs.
+        LegacyEU.removeOnce()
         // The read block of Standard sessions on a Mac with an EU vault, from the EU folders of the installed Zeus Editor
         // (written again before each Standard start).
-        if StandardJail.vaultExists {
+        if StandardJail.isOn {
             do { _ = try StandardJail.prepare() } catch { Trace.log("jail: profile not written: \(error.localizedDescription)") }
         }
         Brand.registerFonts()
@@ -55,7 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             self.approveQuit()
         }
 
-        Trace.log("launched: version=\(Updater.currentVersion) setupNeeded=\(setupNeeded) mode=\(ZeusMode.current.rawValue)")
+        Trace.log("launched: version=\(Updater.currentVersion) setupNeeded=\(setupNeeded) mode=\(ZeusMode.lastUsed.rawValue)")
+        #if DEBUG
+        // Test only: the app opens the tabs that "test-keep-tabs-and-quit" kept, as the new copy of an update does.
+        if DebugEnvironment.value("ZEUS_APP_TEST_RESTORE") == "1" {
+            startZeus(restoring: true)
+            return
+        }
+        #endif
         // The new copy of an updated app tells the old copy that it runs, does not check again, and opens the tabs
         // of an update from the settings again.
         switch Updater.confirmPendingUpdate() {
@@ -90,10 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let firstSetup = setupNeeded
         if firstSetup {
             showSetup(nil)
-        } else if restoring, let restore = TabRestore.take(mode: ZeusMode.current), restore.tabCount > 0 {
-            reopenTabs(restore)
+        } else if restoring, let restore = TabRestore.take(), restore.tabCount > 0 {
+            reopen(restore)
         } else {
-            newChat(nil)
+            // The first tab has the mode of the tab that the user used last. An EU tab opens the EU vault first.
+            newChat(mode: ZeusMode.lastUsed)
         }
         Front.activate()
         // The dictation model downloads and loads in the background, after the first window opens, so that Zeus opens
@@ -135,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         } else if setupNeeded {
             showSetup(nil)
         } else {
-            newChat(nil)
+            newChat(mode: ZeusMode.lastUsed)
         }
         return true
     }
@@ -250,10 +262,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     // MARK: Windows
 
+    /// New Tab and New Chat: a new tab in the mode of the selected tab of the front chat window, so that a user who works
+    /// in EU tabs gets an EU tab, as a Standard user gets a Standard tab. Without a chat window in front: the mode of the
+    /// tab that the user used last.
     @objc func newChat(_ sender: Any?) {
-        guard !updating, !isSwitchingMode else { return }
+        newChat(mode: keyChatTab?.mode ?? ZeusMode.lastUsed)
+    }
+
+    @objc func newStandardChat(_ sender: Any?) { newChat(mode: .standard) }
+    @objc func newEUChat(_ sender: Any?) { newChat(mode: .eu) }
+
+    /// A new tab of this mode. An EU tab starts only while the EU vault is open: Touch ID opens it first.
+    func newChat(mode: ZeusMode) {
+        guard !updating, !openingEU else { return }
+        if mode == .eu {
+            let missing = EUSetup.missing()
+            if !missing.isEmpty { askForEUSetup(missing, standardFallback: chatTabs.isEmpty); return }
+            if !EUProfile.sessionsCanStart {
+                openEU(standardFallback: chatTabs.isEmpty) { [weak self] ready in if ready { self?.newChat(mode: .eu) } }
+                return
+            }
+        }
         do {
-            let session = try SessionManager.shared.start()
+            let session = try SessionManager.shared.start(mode: mode)
             Trace.log("session \(session.pid) started (\(session.mode.rawValue))")
             show(session)
         } catch {
@@ -288,14 +319,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let tab = ChatTab(session: session, restore: restore)
         tab.onClosed = { [weak self] closed in self?.chatTabs.removeAll { $0 === closed } }
         tab.onRetry = { [weak self, weak tab] in
+            let mode = tab?.mode ?? .standard
             tab?.requestClose()
-            self?.newChat(nil)
+            self?.newChat(mode: mode)
         }
         tab.onRunSetup = { [weak self, weak tab] in
             tab?.requestClose()
             self?.showSetup(nil)
         }
-        tab.onSwitchToStandard = { [weak self] in self?.requestMode(.standard) }
+        tab.onSwitchToStandard = { [weak self, weak tab] in
+            guard let self, let tab else { return }
+            self.switchTab(tab, to: .standard)
+        }
         tab.onEUError = { [weak self] tab, words in self?.showEUError(words, in: tab) }
         chatTabs.append(tab)
         return tab
@@ -315,8 +350,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     /// The number of tabs where Zeus works, a message is on its way, or Zeus starts: the update waits for them.
     func busyTabCount(completion: @escaping (Int) -> Void) {
-        // A mode switch ends and starts tabs: the update waits until it is done.
-        if isSwitchingMode { completion(1); return }
+        // A tab that switches its mode ends and starts a session: the update waits until it is done.
+        if chatTabs.contains(where: \.isSwitching) { completion(1); return }
         let tabs = chatTabs
         guard !tabs.isEmpty else { completion(0); return }
         var busy = 0
@@ -359,6 +394,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private func keepAndEndTabs(_ windows: [ChatWindowController], version: String, completion: @escaping (TabRestore?) -> Void) {
         setupWindow?.window?.close()
         setupWindow = nil
+        keepTabs(windows, version: version) { [weak self] restore in
+            guard let self else { return }
+            Trace.log("update: ending \(restore.tabCount) tabs for \(version)")
+            SpeechService.shared.cancelAll(reason: "app updates")
+            for tab in self.chatTabs { tab.closeForUpdate() }
+            SessionManager.shared.waitUntilEnded(timeout: 12) {
+                UpdateWindow.shared.setStatus("Starting Zeus \(version)…")
+                completion(restore)
+            }
+        }
+    }
+
+    /// Writes the tabs of these windows, each with its mode, for the app that opens them again (`TabRestore`).
+    private func keepTabs(_ windows: [ChatWindowController], version: String, completion: @escaping (TabRestore) -> Void) {
         var kept = windows.map { TabRestore.Window(frame: NSStringFromRect($0.window?.frame ?? .zero), tabs: []) }
         let group = DispatchGroup()
         for (index, window) in windows.enumerated() {
@@ -371,21 +420,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 }
             }
         }
-        group.notify(queue: .main) { [weak self] in
-            guard let self else { return }
+        group.notify(queue: .main) {
             let restore = TabRestore(version: version, createdAt: Date(), windows: kept.filter { !$0.tabs.isEmpty })
             do {
                 try restore.write()
             } catch {
                 Trace.log("restore: not written: \(error.localizedDescription)")
             }
-            Trace.log("update: ending \(restore.tabCount) tabs for \(version)")
-            SpeechService.shared.cancelAll(reason: "app updates")
-            for tab in self.chatTabs { tab.closeForUpdate() }
-            SessionManager.shared.waitUntilEnded(timeout: 12) {
-                UpdateWindow.shared.setStatus("Starting Zeus \(version)…")
-                completion(restore)
-            }
+            completion(restore)
         }
     }
 
@@ -401,7 +443,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         Trace.log("update: tabs open again after the failed update to \(version)")
     }
 
-    /// Opens the kept tabs in their windows, with their sessions resumed.
+    /// Opens the kept tabs of an app start, each in its own mode. EU tabs need the EU vault: it opens first (Touch ID),
+    /// and its EU record fills the places of the EU tabs. When the vault stays locked, only the Standard tabs open, and the
+    /// user sees why; a record without a Standard tab then opens a new Standard tab.
+    private func reopen(_ restore: TabRestore) {
+        guard restore.hasEU else { reopenTabs(restore); return }
+        let euReady = { [weak self] in
+            guard let self else { return }
+            let full = restore.merged(with: TabRestore.takeEU())
+            Trace.log("restore: \(full.windows.flatMap(\.tabs).filter { $0.tabMode == .eu }.count) EU tabs ready")
+            self.reopenTabs(full)
+        }
+        if EUProfile.sessionsCanStart, EUSetup.missing().isEmpty { euReady(); return }
+        let standardOnly = restore.withoutEU
+        openEU(standardFallback: standardOnly.tabCount == 0) { [weak self] ready in
+            if ready { euReady(); return }
+            Trace.log("restore: EU tabs not opened: the EU vault stays locked")
+            if standardOnly.tabCount > 0 { self?.reopenTabs(standardOnly) }
+        }
+    }
+
+    /// Opens the kept tabs in their windows, each in its own mode, with their sessions resumed. An EU tab opens only
+    /// while the EU vault is open.
     private func reopenTabs(_ restore: TabRestore) {
         Trace.log("restore: \(restore.tabCount) tabs in \(restore.windows.count) windows")
         for saved in restore.windows.reversed() {
@@ -410,8 +473,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             if frame.width > 0, frame.height > 0 { host.window?.setFrame(frame, display: false) }
             var selected: ChatTab?
             for state in saved.tabs {
-                // Only tabs of the mode of the app come here (TabRestore.take, ModeTabs.take); a tab never changes mode.
-                guard state.tabMode == ZeusMode.current else { continue }
+                // An EU chat resumes only in an EU tab, and only with the EU vault open (`reopen`).
+                guard state.tabMode == .standard || EUProfile.sessionsCanStart else { continue }
                 do {
                     let session = try SessionManager.shared.start(mode: state.tabMode)
                     Trace.log("session \(session.pid) started (restore, \(session.mode.rawValue))")
@@ -425,7 +488,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             if let selected { host.select(selected) }
             if host.tabs.isEmpty { host.window?.close() } else { Front.show(host.window) }
         }
-        if chatTabs.isEmpty { newChat(nil) }
+        if chatTabs.isEmpty { newChat(mode: .standard) }
     }
 
     /// The key window, or the front window of the app while another app is active.
@@ -457,140 +520,179 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     // MARK: Mode
 
-    /// The `Standard | EU` switch of the title bar. A switch asks first; from EU it
-    /// offers the handover first. Then it ends every session of the old mode, keeps its tabs for a switch back, and
-    /// starts the new mode with the tabs that it had (or one new tab). EU needs its setup on this Mac first.
+    /// The `Standard | EU` control of the title bar, for the selected tab. A switch asks first (a new chat of the
+    /// other mode in this tab; from EU it offers the handover first), opens the EU vault for EU (Touch ID), checks the tab
+    /// as a close does, then ends the tab's session and starts a new chat of the other mode in the same tab
+    /// (`ChatTab.switchSession`). The other tabs keep running, in their own modes. EU needs its setup on this Mac first.
     /// `afterRelease`: the user clicked Switch to Standard after a release in the handover window; the switch does not
-    /// offer the handover again.
-    func requestMode(_ target: ZeusMode, afterRelease: Bool = false) {
-        guard target != ZeusMode.current, !isSwitchingMode, !updating else { refreshModeViews(); return }
+    /// ask again.
+    func switchTab(_ tab: ChatTab, to target: ZeusMode, afterRelease: Bool = false) {
+        guard target != tab.mode, !tab.isSwitching, !updating, !openingEU, chatTabs.contains(where: { $0 === tab }) else {
+            refreshModeViews()
+            return
+        }
         if target == .eu {
             let missing = EUSetup.missing()
             if !missing.isEmpty { askForEUSetup(missing); return }
         }
-        isSwitchingMode = true
+        tab.isSwitching = true
         refreshModeViews()
         if afterRelease, target == .standard {
-            Trace.log("mode: switch to standard after a release")
-            checkTabsBeforeSwitch(to: target)
+            Trace.log("tab mode: \(tab.session.pid) switch to standard after a release")
+            checkTabBeforeSwitch(tab, to: target)
             return
         }
-        Trace.log("mode: switch to \(target.rawValue) asked")
+        Trace.log("tab mode: \(tab.session.pid) switch to \(target.rawValue) asked")
         let alert = NSAlert()
+        let isolated = EUProfile.isolated
         if target == .eu {
-            alert.messageText = "Switch to EU mode?"
-            var text = "Zeus closes the Standard tabs and starts EU mode: Claude on Google Vertex AI in the EU, with its own chats, "
-                + "workspace (\(EUSetup.display(EUProfile.load().workspace))), and settings. In EU mode, Zeus can read client data "
-                + "after you turn on EU data access for a project. The Standard tabs open again when you switch back."
-            if !Preferences.euClipboardNoteShown {
-                text += "\n\nThe clipboard is shared by both modes. Do not paste EU data into Standard mode."
+            alert.messageText = "Start a new EU chat in this tab?"
+            var text = "The Standard chat of this tab ends and stays in your Standard history. The new chat runs Claude on Google "
+                + (isolated ? "Vertex AI in the EU. Its chats and EU data stay in the EU vault, which Touch ID opens. Your other tabs keep running."
+                    : "Vertex AI in the EU, with your Google Cloud account. Your other tabs keep running.")
+            if isolated, !Preferences.euClipboardNoteShown {
+                text += "\n\nThe clipboard is shared by Standard and EU tabs. Do not paste EU data into a Standard tab."
             }
             alert.informativeText = text
-            alert.addButton(withTitle: "Switch to EU")
+            alert.addButton(withTitle: "Start EU Chat")
+            alert.addButton(withTitle: "Cancel")
+        } else if isolated {
+            alert.messageText = "Start a new Standard chat in this tab?"
+            alert.informativeText = "The EU chat of this tab ends and stays in your EU history; Standard tabs can not read it. "
+                + "To give EU work to Standard, hand it over first: you check a summary and its files, and you release them."
+            alert.addButton(withTitle: "Start Standard Chat")
+            alert.addButton(withTitle: "Hand Over First…")
             alert.addButton(withTitle: "Cancel")
         } else {
-            alert.messageText = "Switch to Standard mode?"
-            alert.informativeText = "Zeus closes the EU tabs. EU chats and EU files stay in EU mode. To give EU work to Standard "
-                + "mode, hand it over first: you check a summary and its files, and you release them."
-            alert.addButton(withTitle: "Hand Over First…")
-            alert.addButton(withTitle: "Switch Without Handover")
+            alert.messageText = "Start a new Standard chat in this tab?"
+            alert.informativeText = "The EU chat of this tab ends and stays in your chat history. The new chat runs Claude on your "
+                + "Claude account. Your other tabs keep running."
+            alert.addButton(withTitle: "Start Standard Chat")
             alert.addButton(withTitle: "Cancel")
         }
-        ask(alert) { [weak self] response in
-            guard let self else { return }
-            let switching = response == .alertFirstButtonReturn && target == .eu
-                || response == .alertSecondButtonReturn && target == .standard
-            if target == .standard, response == .alertFirstButtonReturn {
-                self.endSwitch("handover first")
-                self.showHandover()
+        ask(alert, on: tab.host?.window) { [weak self, weak tab] response in
+            guard let self, let tab else { return }
+            if isolated, target == .standard, response == .alertSecondButtonReturn {
+                self.endSwitch(tab, "handover first")
+                self.showHandover(from: tab)
                 return
             }
-            guard switching else { self.endSwitch("cancelled"); return }
-            self.checkTabsBeforeSwitch(to: target)
+            guard response == .alertFirstButtonReturn else { self.endSwitch(tab, "cancelled"); return }
+            guard target == .eu else { self.checkTabBeforeSwitch(tab, to: target); return }
+            // The vault opens before the Standard chat ends: without it, the tab stays Standard.
+            self.openEU(standardFallback: false) { ready in
+                if ready { self.checkTabBeforeSwitch(tab, to: target) } else { self.endSwitch(tab, "eu vault not opened") }
+            }
         }
     }
 
-    /// Like the quit: tabs where Zeus works or that have unsent text ask once for all.
-    private func checkTabsBeforeSwitch(to target: ZeusMode) {
-        let tabs = chatTabs
-        guard !tabs.isEmpty else { performSwitch(to: target); return }
-        var unsafe: [(ChatTab, String)] = []
-        var remaining = tabs.count
-        for tab in tabs {
-            tab.closeState { [weak self] reason in
-                if let reason { unsafe.append((tab, reason)) }
-                remaining -= 1
-                guard remaining == 0 else { return }
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    guard !unsafe.isEmpty else { self.performSwitch(to: target); return }
-                    Trace.log("mode: switch deferred: \(unsafe.map(\.1).joined(separator: " "))")
-                    let alert = NSAlert()
-                    alert.messageText = unsafe.count == 1 ? "A Zeus tab is not safe to close" : "\(unsafe.count) Zeus tabs are not safe to close"
-                    alert.informativeText = unsafe.map { "\($0.0.tabName.title): \(ChatTab.closeSummary(for: $0.1))" }
-                        .joined(separator: "\n") + "\n\nIf you switch now, Zeus stops in every tab."
-                    alert.addButton(withTitle: "Switch Anyway")
-                    alert.addButton(withTitle: "Cancel")
-                    self.ask(alert) { response in
-                        if response == .alertFirstButtonReturn { self.performSwitch(to: target) } else { self.endSwitch("cancelled") }
+    /// EU sessions start only while the EU vault is open (`EUVault`): the EU Claude Code folder, the EU chats, and EU data
+    /// are in it. This opens it after Touch ID, and makes it on the first use of EU mode; then it checks the EU setup in
+    /// it (the Zeus plugins of EU mode). `completion(true)`: EU sessions can start. Otherwise the user sees why. With
+    /// `standardFallback` (no chat window is open, as at an app start in EU mode), the app starts Standard mode first and
+    /// shows why on its window, so that the user is never left without a window.
+    private func openEU(standardFallback: Bool, completion: @escaping (Bool) -> Void) {
+        let missing = EUSetup.missing()
+        if !missing.isEmpty { askForEUSetup(missing, standardFallback: standardFallback); completion(false); return }
+        // Simple EU (no isolation): EU tabs start like Standard tabs, with no EU vault.
+        guard EUProfile.isolated else { completion(true); return }
+        guard !openingEU else { completion(false); return }
+        openingEU = true
+        let creating = !EUVault.shared.exists && !EUVault.shared.isMounted
+        Trace.log("mode: eu vault \(creating ? "create" : "unlock") asked")
+        EUVault.shared.open { [weak self] result in
+            guard let self else { return }
+            self.openingEU = false
+            switch result {
+            case .success:
+                let inVault = EUSetup.missingInVault()
+                if inVault.isEmpty { completion(true); return }
+                self.askForEUSetup(inVault, standardFallback: standardFallback)
+                completion(false)
+            case let .failure(failure):
+                Trace.log("mode: eu vault not opened: \(failure.traceName)")
+                let alert = NSAlert()
+                alert.messageText = creating ? "Zeus could not make the EU vault" : "EU mode can not start"
+                var text = failure.localizedDescription
+                if failure == .folderNotEmpty { text += " Move those files out of ~/.zeus/eu, then try again." }
+                text += "\n\nEU mode needs the vault: it keeps the EU chats and EU data encrypted on this Mac."
+                if standardFallback {
+                    // No window: Standard starts, and the message shows on its window. The mode switch tries EU again.
+                    self.useStandardInstead()
+                    alert.informativeText = text + " Zeus opened a Standard tab; switch it to EU to try again."
+                    alert.addButton(withTitle: "OK")
+                    self.ask(alert) { _ in }
+                    completion(false)
+                    return
+                }
+                alert.informativeText = text
+                alert.addButton(withTitle: "Try Again")
+                alert.addButton(withTitle: "Cancel")
+                self.ask(alert) { response in
+                    if response == .alertFirstButtonReturn {
+                        self.openEU(standardFallback: standardFallback, completion: completion)
+                        return
                     }
+                    completion(false)
                 }
             }
         }
     }
 
-    private func performSwitch(to target: ZeusMode) {
-        let old = ZeusMode.current
-        Trace.log("mode: switching from \(old.rawValue) to \(target.rawValue), ending \(chatTabs.count) tabs")
-        handoverWindow?.window?.close()
-        let windows = chatWindows
-        var kept = windows.map { TabRestore.Window(frame: NSStringFromRect($0.window?.frame ?? .zero), tabs: []) }
-        let group = DispatchGroup()
-        for (index, window) in windows.enumerated() {
-            kept[index].tabs = Array(repeating: TabRestore.Tab(mode: old, terminalVisible: false, selected: false), count: window.tabs.count)
-            for (position, tab) in window.tabs.enumerated() {
-                group.enter()
-                tab.snapshot { snapshot in
-                    kept[index].tabs[position] = snapshot
-                    group.leave()
+    /// No chat window is open and an EU tab can not start: a Standard tab opens, so a window shows.
+    private func useStandardInstead() {
+        Trace.log("mode: standard instead of eu")
+        ZeusMode.lastUsed = .standard
+        newChat(mode: .standard)
+    }
+
+    /// Like a close: a tab where Zeus works or that has unsent text asks once more.
+    private func checkTabBeforeSwitch(_ tab: ChatTab, to target: ZeusMode) {
+        tab.closeState { [weak self, weak tab] reason in
+            DispatchQueue.main.async {
+                guard let self, let tab else { return }
+                guard let reason else { self.performSwitch(tab, to: target); return }
+                Trace.log("tab mode: switch deferred: \(reason)")
+                let alert = NSAlert()
+                alert.messageText = "This tab is not safe to switch"
+                alert.informativeText = "\(tab.tabName.title): \(ChatTab.closeSummary(for: reason)).\n\nIf you switch now, Zeus stops in this tab."
+                alert.addButton(withTitle: "Switch Anyway")
+                alert.addButton(withTitle: "Cancel")
+                self.ask(alert, on: tab.host?.window) { response in
+                    if response == .alertFirstButtonReturn { self.performSwitch(tab, to: target) } else { self.endSwitch(tab, "cancelled") }
                 }
             }
         }
-        group.notify(queue: .main) { [weak self] in
-            guard let self else { return }
-            // The tabs of the old mode, for a switch back. Tabs that had not started keep only their names.
-            ModeTabs.save(TabRestore(version: Updater.currentVersion, createdAt: Date(), windows: kept.filter { !$0.tabs.isEmpty }), mode: old)
-            SpeechService.shared.cancelAll(reason: "mode switch")
-            for tab in self.chatTabs { tab.closeForUpdate() }
-            // Zeus Editor pages of the old mode close too: they hold the web data of that mode.
-            EditorWindowController.closeAll()
-            self.waitForNoSession {
-                ZeusMode.current = target
-                if target == .eu { Preferences.euClipboardNoteShown = true }
-                self.isSwitchingMode = false
-                Trace.log("mode: now \(target.rawValue)")
-                if let saved = ModeTabs.take(target) { self.reopenTabs(saved) } else { self.newChat(nil) }
-                self.refreshModeViews()
-            }
+    }
+
+    /// Starts the session of the other mode and gives it to the tab; the tab ends its old session.
+    private func performSwitch(_ tab: ChatTab, to target: ZeusMode) {
+        guard chatTabs.contains(where: { $0 === tab }) else { endSwitch(tab, "tab closed"); return }
+        guard target == .standard || EUProfile.sessionsCanStart else { endSwitch(tab, "eu vault locked"); return }
+        do {
+            let session = try SessionManager.shared.start(mode: target)
+            Trace.log("session \(session.pid) started (\(session.mode.rawValue))")
+            if target == .eu { Preferences.euClipboardNoteShown = true }
+            if handoverTab === tab, target == .standard { handoverWindow?.window?.close() }
+            let oldPID = tab.session.pid
+            tab.switchSession(to: session)
+            if tab.host?.selectedTab === tab { ZeusMode.lastUsed = target }
+            // The trace names the tab by the session that it had when the switch was asked.
+            endSwitch(tab, "now \(target.rawValue)", pid: oldPID)
+        } catch {
+            endSwitch(tab, "not started")
+            Trace.log("session not started: \(error.localizedDescription)")
+            let alert = NSAlert()
+            alert.messageText = "Zeus cannot start"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "OK")
+            ask(alert, on: tab.host?.window) { _ in }
         }
     }
 
-    /// The new mode starts only when no session of the old mode runs: each gets SIGTERM, and SIGKILL after 10 s.
-    private func waitForNoSession(_ completion: @escaping () -> Void) {
-        SessionManager.shared.waitUntilEnded(timeout: 15) { [weak self] in
-            if SessionManager.shared.sessions.contains(where: \.isAlive) {
-                Trace.log("mode: sessions still run; waiting")
-                SessionManager.shared.sessions.filter(\.isAlive).forEach { $0.stop() }
-                self?.waitForNoSession(completion)
-                return
-            }
-            completion()
-        }
-    }
-
-    private func endSwitch(_ reason: String) {
-        Trace.log("mode: switch \(reason)")
-        isSwitchingMode = false
+    private func endSwitch(_ tab: ChatTab, _ reason: String, pid: pid_t? = nil) {
+        Trace.log("tab mode: \(pid ?? tab.session.pid) switch \(reason)")
+        tab.isSwitching = false
         refreshModeViews()
     }
 
@@ -598,12 +700,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         chatWindows.forEach { $0.modeChanged() }
     }
 
-    private func askForEUSetup(_ missing: [String]) {
+    /// `standardFallback`: no chat window is open; Standard starts first, and the question shows on its window.
+    private func askForEUSetup(_ missing: [String], standardFallback: Bool = false) {
         Trace.log("mode: EU setup missing: \(missing.joined(separator: ", "))")
+        if standardFallback { useStandardInstead() }
         let alert = NSAlert()
         alert.messageText = "EU mode needs a one-time setup on this Mac"
         alert.informativeText = "Missing: \(missing.joined(separator: ", ")).\n\nThe Zeus setup installs them, the same on every Mac. "
-            + "Then switch to EU mode again."
+            + "Then start the EU chat again."
         alert.addButton(withTitle: "Run the Zeus Setup")
         alert.addButton(withTitle: "Cancel")
         ask(alert) { [weak self] response in
@@ -619,7 +723,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return
         }
         let alert = NSAlert()
-        alert.messageText = "EU mode: Google Cloud refused the request"
+        alert.messageText = "EU chat: Google Cloud refused the request"
         alert.informativeText = words
         alert.addButton(withTitle: "OK")
         Trace.log("eu error shown: \(words)")
@@ -649,7 +753,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The EU data access switch of the title bar: only the user turns it on, after this question, and the app (not Claude)
     /// runs Zeus. Off needs no question.
     func setEUDataAccess(project: String, on: Bool) {
-        guard ZeusMode.current == .eu, !isSwitchingMode else { refreshModeViews(); return }
+        guard EUProfile.isolated, chatTabs.contains(where: { $0.mode == .eu && !$0.isSwitching }) else { refreshModeViews(); return }
         let apply = { [weak self] in
             Trace.log("eu access: \(project) \(on ? "on" : "off") asked")
             EUDataAccess.shared.set(project, on: on) { error in
@@ -675,9 +779,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
     }
 
-    /// The handover window (EU mode only), from the "Hand Over First…" choice of the switch to Standard.
-    func showHandover() {
-        guard ZeusMode.current == .eu else { return }
+    /// The handover window (with an EU tab only), from the "Hand Over First…" choice of a tab's switch to Standard.
+    func showHandover(from tab: ChatTab? = nil) {
+        guard EUProfile.isolated, chatTabs.contains(where: { $0.mode == .eu }) else { return }
+        if let tab, tab.mode == .eu { handoverTab = tab }
         if let handoverWindow {
             Front.show(handoverWindow.window)
             Front.activate()
@@ -693,8 +798,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             tab.askForHandoverSummary(completion: completion)
         }
         model.onSwitchToStandard = { [weak self] in
-            self?.handoverWindow?.window?.close()
-            self?.requestMode(.standard, afterRelease: true)
+            guard let self else { return }
+            self.handoverWindow?.window?.close()
+            let tab = self.handoverTab.flatMap { $0.mode == .eu ? $0 : nil }
+                ?? self.keyChatTab.flatMap { $0.mode == .eu ? $0 : nil } ?? self.chatTabs.last { $0.mode == .eu }
+            guard let tab else { return }
+            self.switchTab(tab, to: .standard, afterRelease: true)
         }
         let controller = HandoverWindowController(model: model)
         controller.onClosed = { [weak self] in self?.handoverWindow = nil }
@@ -736,6 +845,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 model?.onFinished?()
             case "setup-menubar-on": model?.showMenuBar = true
             case "setup-answer-yes": model?.answerQuestion(true)
+            case "setup-answer-no": model?.answerQuestion(false)
             case "setup-enter": model?.send("")
             case "setup-show": self.showSetup(nil)
             case "test-cmd-t", "test-cmd-j":
@@ -821,14 +931,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 NSPasteboard.general.writeObjects(self.savedPasteboard ?? [])
                 self.savedPasteboard = nil
             case "test-next-tab": self.chatTabs.last?.host?.selectTab(offset: 1)
+            // "test-select-tab:<n>" shows tab n (0 is the first) of the last tab's window, as a click does.
+            case "test-select-tab":
+                guard let host = self.chatTabs.last?.host, let index = Int(argument), host.tabs.indices.contains(index) else { break }
+                host.select(host.tabs[index])
             case "test-keyboard":
                 guard let tab = self.chatTabs.last?.host?.selectedTab else { break }
                 tab.webView.evaluateJavaScript("JSON.stringify(document.querySelector('textarea')?.value ?? null)") { result, _ in
                     Trace.log("test keyboard: \(tab.session.pid) \(tab.keyboardOwner) message=\(result ?? "-")")
                 }
-            // Picks a project in the project menu of the chat page, as a click does.
+            // Picks a project in the project menu of the chat page of the selected tab (of the last tab's window), as a click does.
             case "test-pick-project":
-                self.chatTabs.last?.webView.callAsyncJavaScript(
+                self.chatTabs.last?.host?.selectedTab?.webView.callAsyncJavaScript(
                     "[...document.querySelectorAll('.project-menu [role=\"option\"]')].find((option) => option.querySelector('.menu-item-label')?.textContent.trim() === name)?.click()",
                     arguments: ["name": argument], in: nil, in: .page)
             // The chat page of the first tab posts "chat-focus", as after "Go to the chat" in Zeus Editor.
@@ -857,7 +971,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 EditorWindowController.newestWebView?.window?.performClose(nil)
             // Mode: "test-mode:eu" asks for a switch as the title bar does; "test-alert:<n>" presses button n (0 is the first)
             // of the question that shows; "test-mode-bar" writes what the title bar of the last tab's window shows.
-            case "test-mode": ZeusMode(rawValue: argument).map { self.requestMode($0) }
+            // "test-mode:eu" switches the selected tab of the last tab's window, as the title bar does.
+            case "test-mode":
+                guard let mode = ZeusMode(rawValue: argument), let tab = self.chatTabs.last?.host?.selectedTab else { break }
+                self.switchTab(tab, to: mode)
+            case "test-new-eu-chat": self.newEUChat(nil)
+            case "test-new-standard-chat": self.newStandardChat(nil)
+            // Keeps the tabs as an update does, then quits; an app start with ZEUS_APP_TEST_RESTORE=1 opens them again.
+            case "test-keep-tabs-and-quit":
+                let ordered = NSApp.orderedWindows.compactMap { $0.windowController as? ChatWindowController }
+                let windows = ordered + self.chatWindows.filter { window in !ordered.contains { $0 === window } }
+                self.keepTabs(windows, version: Updater.currentVersion) { restore in
+                    Trace.log("restore: kept \(restore.tabCount) tabs")
+                    self.quitApproved = true
+                    NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+                }
             case "test-alert":
                 guard let alert = self.openAlert, let index = Int(argument) else { Trace.log("test alert: none"); break }
                 Trace.log("test alert: \(alert.messageText) -> \(index)")
@@ -865,9 +993,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     parent.endSheet(alert.window, returnCode: NSApplication.ModalResponse(rawValue: 1000 + index))
                 } else {
                     NSApp.stopModal(withCode: NSApplication.ModalResponse(rawValue: 1000 + index))
+                    // stopModal from outside an event ends the modal loop only at the next event: the test sends one.
+                    if let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0,
+                                                      windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0) {
+                        NSApp.postEvent(event, atStart: false)
+                    }
                 }
             case "test-mode-bar":
-                Trace.log("mode bar: \(self.chatTabs.last?.host?.modeBarState ?? "none") tabs=\(self.chatTabs.map { $0.mode.rawValue }.joined(separator: ","))")
+                let host = self.chatTabs.last?.host
+                Trace.log("mode bar: \(host?.modeBarState ?? "none") tabs=\((host?.tabs ?? []).map { $0.mode.rawValue }.joined(separator: ","))")
             case "test-store":
                 guard let tab = self.chatTabs.last else { break }
                 let store = tab.webView.configuration.websiteDataStore
@@ -1052,6 +1186,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let file = NSMenu(title: "File")
         actionItems[.newTab] = file.addItem(withTitle: "New Tab", action: #selector(newChat(_:)), keyEquivalent: "t")
         actionItems[.newChat] = file.addItem(withTitle: "New Chat", action: #selector(newChat(_:)), keyEquivalent: "n")
+        file.addItem(withTitle: "New Standard Chat", action: #selector(newStandardChat(_:)), keyEquivalent: "")
+        let newEU = file.addItem(withTitle: "New EU Chat", action: #selector(newEUChat(_:)), keyEquivalent: "t")
+        newEU.keyEquivalentModifierMask = [.command, .shift]
         file.addItem(.separator())
         actionItems[.closeTab] = file.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         file.delegate = self

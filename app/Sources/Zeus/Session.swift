@@ -20,7 +20,8 @@ final class ZeusSession: TerminalSource {
     }
 
     let id = UUID()
-    /// The mode of the session: `zeus` (Standard) or `zeus --eu` (EU). It never changes.
+    /// The mode of the session: `zeus` (Standard) or `zeus --eu` (EU). It never changes: a tab that switches its mode
+    /// gets a new session.
     let mode: ZeusMode
     let pid: pid_t
     let startedAt: Date
@@ -69,10 +70,12 @@ final class ZeusSession: TerminalSource {
 
     var terminalPID: pid_t { pid }
 
-    /// Starts `zeus` in ~/Code/zeus, or `zeus --eu` in the EU workspace. `--no-open` stops it from opening the browser;
+    /// Starts `zeus` or `zeus --eu` in the shared workspace ~/Code/zeus. `--no-open` stops it from opening the browser;
     /// the app shows the page. A Standard `zeus` runs in the read block of `StandardJail` (`sandbox-exec` execs it, so
     /// the process ID is the one of `zeus`). `zeus --eu` builds the environment of EU Claude Code from the EU profile only and checks
     /// the Google Cloud access first (zeus-editor src/eu/preflight.js); a failed check stops it with exit code 3.
+    /// An EU session starts only while the EU vault is open: its Claude Code folder and its data are in the vault, and
+    /// zeus refuses EU mode without the vault marker. The app opens the vault before it starts EU sessions.
     init(mode: ZeusMode = .standard) throws {
         self.mode = mode
         startedAt = Date()
@@ -81,14 +84,18 @@ final class ZeusSession: TerminalSource {
             throw NSError(domain: "Zeus", code: 1, userInfo: [NSLocalizedDescriptionKey:
                 "The zeus command is not installed (\(Paths.zeusCommand)). Run the Zeus setup."])
         }
-        let workspace = Paths.workspace(for: mode)
+        let workspace = Paths.workspace
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: workspace, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw NSError(domain: "Zeus", code: 2, userInfo: [NSLocalizedDescriptionKey: mode == .eu
-                ? "The EU workspace is not in \(EUSetup.display(workspace)). Run the Zeus setup."
-                : "The Zeus workspace is not in ~/Code/zeus. Run the Zeus setup."])
+            throw NSError(domain: "Zeus", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                "The Zeus workspace is not in ~/Code/zeus. Run the Zeus setup."])
         }
-        if mode == .eu { EUStatusLine.sync() }
+        let isolated = mode == .eu && EUProfile.isolated
+        if isolated, !EUVault.isOpen {
+            throw NSError(domain: "Zeus", code: 5, userInfo: [NSLocalizedDescriptionKey:
+                "The EU vault is locked. Start the EU chat again to unlock it with Touch ID."])
+        }
+        if isolated { EUStatusLine.sync() }
         let arguments = (mode == .eu ? ["--eu"] : []) + ["--no-open"]
         var executable = Paths.zeusCommand
         var launchArguments = arguments
@@ -97,7 +104,7 @@ final class ZeusSession: TerminalSource {
             let launch = try StandardJail.launch(command: Paths.zeusCommand, arguments: arguments)
             executable = launch.executable
             launchArguments = launch.arguments
-            Trace.log(launch.jailed ? "jail: on" : "jail: off: no EU vault on this Mac")
+            Trace.log(launch.jailed ? "jail: on" : StandardJail.vaultExists ? "jail: off: simple EU (no isolation)" : "jail: off: no EU vault on this Mac")
         }
         Trace.log("session command: \(([executable] + launchArguments).joined(separator: " "))")
         let process = try PTYProcess(executable: executable, arguments: launchArguments, environment: env, directory: workspace)
@@ -166,7 +173,7 @@ final class SessionManager {
     var onChange: (() -> Void)?
 
     @discardableResult
-    func start(mode: ZeusMode = ZeusMode.current) throws -> ZeusSession {
+    func start(mode: ZeusMode) throws -> ZeusSession {
         let session = try ZeusSession(mode: mode)
         add(session)
         return session
