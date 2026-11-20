@@ -265,15 +265,12 @@ final class EUVault {
 
     private func lockNow(force: Bool) -> Result<Void, Failure> {
         guard isMounted else { return .success(()) }
-        let plain = Self.run("/usr/bin/hdiutil", ["detach", Self.mountPoint], timeout: 30)
-        if plain.status == 0, !isMounted { return .success(()) }
-        guard force else {
-            return plain.status == 16 || plain.errors.localizedCaseInsensitiveContains("busy")
-                ? .failure(.busy) : .failure(.failed("hdiutil could not close the EU vault (exit \(plain.status)): \(plain.lastLine)"))
-        }
-        let forced = Self.run("/usr/bin/hdiutil", ["detach", "-force", Self.mountPoint], timeout: 30)
-        if forced.status == 0, !isMounted { return .success(()) }
-        return .failure(.failed("hdiutil could not close the EU vault (exit \(forced.status)): \(forced.lastLine)"))
+        // A forced lock comes only when no session uses the vault, so it detaches with -force at once: a plain detach
+        // first would only add the time of a refused unmount (a quit has 4 s for the lock).
+        let result = Self.run("/usr/bin/hdiutil", force ? ["detach", "-force", Self.mountPoint] : ["detach", Self.mountPoint], timeout: 30)
+        if result.status == 0, !isMounted { return .success(()) }
+        if !force, result.status == 16 || result.errors.localizedCaseInsensitiveContains("busy") { return .failure(.busy) }
+        return .failure(.failed("hdiutil could not close the EU vault (exit \(result.status)): \(result.lastLine)"))
     }
 
     private func finish(_ outcome: Result<Void, Failure>, _ action: String, _ completion: (Result<Void, Failure>) -> Void) {
