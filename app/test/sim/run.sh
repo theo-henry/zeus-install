@@ -6,11 +6,12 @@
 # home folder, Claude Code, and GitHub login are not used. The test presses the app's buttons through
 # its debug test actions (active only with ZEUS_APP_TRACE) and checks the trace.
 #
-# Usage: app/test/sim/run.sh [--eu | --eu-simple | --vault | --signin] [screenshot-folder]
+# Usage: app/test/sim/run.sh [--eu | --eu-simple | --vault | --signin | --quit] [screenshot-folder]
 # With a folder, it saves a screenshot of each app window state there (the app's windows only).
 # --eu runs only the EU mode scenario with isolation (the EU vault), --eu-simple only the simple EU scenario (no
-# isolation), --vault only the EU vault and Standard read block scenario, and --signin only the Google sign-in step of
-# the setup (app/test/run-all.sh runs each part with its own time limit).
+# isolation), --vault only the EU vault and Standard read block scenario, --signin only the Google sign-in step of
+# the setup, and --quit only the quit question whose window closes (app/test/run-all.sh runs each part with its own
+# time limit).
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
 # shellcheck disable=SC2016,SC2034
@@ -24,6 +25,7 @@ if [ "${1:-}" = "--eu" ]; then PART=eu; shift; fi
 if [ "${1:-}" = "--eu-simple" ]; then PART=eu-simple; shift; fi
 if [ "${1:-}" = "--vault" ]; then PART=vault; shift; fi
 if [ "${1:-}" = "--signin" ]; then PART=signin; shift; fi
+if [ "${1:-}" = "--quit" ]; then PART=quit; shift; fi
 SHOTS="${1:-}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
@@ -232,12 +234,15 @@ source "$SIM_DIR/simple.sh"
 source "$SIM_DIR/vault.sh"
 # shellcheck source=app/test/sim/signin.sh
 source "$SIM_DIR/signin.sh"
+# shellcheck source=app/test/sim/quit.sh
+source "$SIM_DIR/quit.sh"
 if [ "$PART" != main ]; then
   case "$PART" in
     eu) eu_scenario ;;
     eu-simple) eu_simple_scenario ;;
     vault) vault_scenario ;;
     signin) signin_scenario ;;
+    quit) quit_scenario ;;
   esac
   echo
   if [ "$FAILURES" -eq 0 ]; then

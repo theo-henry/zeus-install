@@ -49,6 +49,7 @@ run_test "eu sign-in" 120 "$TEST_DIR/eu-sign-in/run.sh"
 run_test "gcloud python" 120 "$TEST_DIR/gcloud-python/run.sh"
 run_test "update handoff" 120 "$TEST_DIR/update-handoff/run.sh"
 run_test "tab lifecycle" 120 "$TEST_DIR/tab-lifecycle/run.sh"
+run_test "app lifecycle" 120 "$TEST_DIR/lifecycle/run.sh"
 # A release build and a debug build of the app (swift build -c release takes minutes on a busy Mac).
 run_test "release env" 900 "$TEST_DIR/release-env/run.sh"
 run_test "plugin-scope" 300 "$TEST_DIR/plugin-scope/run.sh"
@@ -62,3 +63,4 @@ run_test "sim eu" 600 "$TEST_DIR/sim/run.sh" --eu
 run_test "sim eu simple" 600 "$TEST_DIR/sim/run.sh" --eu-simple
 run_test "sim vault" 600 "$TEST_DIR/sim/run.sh" --vault
 run_test "sim sign-in" 600 "$TEST_DIR/sim/run.sh" --signin
+run_test "sim quit" 300 "$TEST_DIR/sim/run.sh" --quit

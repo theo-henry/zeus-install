@@ -159,6 +159,8 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
 - **No hidden sessions.** Quitting the app stops every session.
   When tabs are not safe to close, one question lists them all: **Quit Anyway** or **Cancel**.
   When macOS logs out, restarts, or shuts down, the app asks nothing and closes an open quit question; without a question, the quit ends within 12 s.
+  When the window of the quit question closes (its last tab's session ended), the quit ends with it, and a later quit asks again.
+  `AppLifecycle.swift` keeps the phase of the app (its start and its updates) and of its quit in one value, with the table of legal transitions.
   If the app crashes, its hidden terminal closes and `zeus` stops as after a closed Terminal window.
 - **Theme.** The setup window, the loading screen, and the status pages use the Zeus chat theme.
   While `zeus` starts, the loading screen shows the Zeus globe with one line of status text, such as "Checking for updates…".
@@ -258,6 +260,14 @@ app/test/eu-sign-in/run.sh
 ```
 
 It checks which gcloud output of the EU sign-in is a quota project refused for a missing permission (`Sources/Zeus/EUSignInFailure.swift`), and that other errors, a failed login, and a completed sign-in are not.
+
+## Test the app and quit phases
+
+```bash
+app/test/lifecycle/run.sh
+```
+
+It compiles `Sources/Zeus/AppLifecycle.swift` alone and checks each legal transition of the app phase (the start, the update at launch, and the steps of an update from the settings) and of the quit phase, and that each phase refuses every other event.
 
 ## Test gcloud with an old Python
 
@@ -378,6 +388,7 @@ app/test/sim/run.sh [screenshot-folder]
 app/test/sim/run.sh --eu [screenshot-folder]   # EU mode only
 app/test/sim/run.sh --vault [screenshot-folder]   # EU vault and Standard read block only
 app/test/sim/run.sh --signin [screenshot-folder]   # Google sign-in step of the setup only
+app/test/sim/run.sh --quit [screenshot-folder]   # quit question whose window closes only
 ```
 
 The test runs the app (behind the other apps) and the bundled installer with `HOME` set to an empty temporary folder, and with
@@ -450,6 +461,9 @@ Last, a tab where Zeus starts, and a tab that resumes its kept chat, are not saf
 **Skip** completes the setup without a sign-in and writes no marker file, and the setup again asks while the user is signed out; an account without the two roles gets the message for the roles with the account, and the setup completes;
 after the roles, the setup again sets the EU quota project without a question or a second sign-in; a Mac that is signed in gets no question;
 in Terminal use, the same results are warnings that do not stop the setup, and without a keyboard an expired sign-in is skipped with a note.
+
+`--quit` runs the quit scenario (`app/test/sim/quit.sh`): a quit asks about unsent text; the tab's session ends while the question shows,
+so the tab and its window close; the quit ends with that window (AppKit does not call the completion of a sheet whose window closes), and a later quit of a new chat quits the app.
 
 `--vault` runs the EU vault and Standard read block scenario (`app/test/sim/vault.sh`) with a real encrypted disk image in the temporary home folder,
 a keychain file of the test (`ZEUS_APP_TEST_KEYCHAIN`) instead of the login keychain, and test answers instead of Touch ID (`ZEUS_APP_TEST_VAULT_AUTH`), so no macOS window opens:
