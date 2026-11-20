@@ -156,9 +156,10 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         for other in tabs { other.view.isHidden = other !== tab }
         window?.title = tab.tabName.title
         strip.reload()
-        strip.modeBar.update(cost: tab.cost, project: tab.tabName.project)
+        strip.modeBar.update(tab: tab)
         WebViewHandler.matchTitleBar(of: window, to: tab.webView)
         if changed {
+            ZeusMode.lastUsed = tab.mode
             window?.makeFirstResponder(tab.focusView)
             Trace.log("tab selected: \(tab.session.pid) \(tab.tabName.title)")
         }
@@ -206,14 +207,23 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// EU mode: a tab has a new session cost. The title bar shows the cost of the selected tab.
+    /// An EU tab has a new session cost. The title bar shows the cost of the selected tab.
     func tabCostChanged(_ tab: ChatTab) {
         guard tab === selectedTab else { return }
-        strip.modeBar.update(cost: tab.cost, project: tab.tabName.project)
+        strip.modeBar.update(tab: tab)
     }
 
-    /// The app changed its mode, or a switch started or ended.
-    func modeChanged() { strip.modeBar.update(cost: selectedTab?.cost, project: selectedTab?.tabName.project) }
+    /// A tab switched its mode: its label shows its new mode, and the title bar the mode of the selected tab.
+    func tabModeChanged(_ tab: ChatTab) {
+        strip.reload()
+        if tab === selectedTab {
+            strip.modeBar.update(tab: tab)
+            WebViewHandler.matchTitleBar(of: window, to: tab.webView)
+        }
+    }
+
+    /// A tab switch started or ended, or the EU vault opened or locked.
+    func modeChanged() { strip.modeBar.update(tab: selectedTab) }
 
     #if DEBUG
     /// Test action: what the mode bar of this window shows.
@@ -230,7 +240,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate {
         guard tabs.contains(where: { $0.tabName === notification.object as AnyObject }) else { return }
         if let selectedTab {
             window?.title = selectedTab.tabName.title
-            strip.modeBar.update(cost: selectedTab.cost, project: selectedTab.tabName.project)
+            strip.modeBar.update(tab: selectedTab)
         }
         strip.reload()
     }
@@ -298,7 +308,7 @@ final class TabStripView: NSView {
     private weak var controller: ChatWindowController?
     private let stack = NSStackView()
     private let addButton = HoverButton(symbol: "plus", label: "New Tab")
-    /// The mode of the app (`Standard | EU`), the EU pill, and the EU session cost.
+    /// The mode of the selected tab (`Standard | EU`), its EU data access and EU session cost, and the EU vault menu.
     let modeBar = ModeBarView()
     private var leadingConstraint: NSLayoutConstraint!
 
@@ -457,7 +467,7 @@ private final class HoverButton: NSButton {
     override func mouseExited(with event: NSEvent) { hovering = false }
 }
 
-/// One tab: its name, and a close button on the selected tab and under the pointer.
+/// One tab: the green EU badge of an EU tab, its name, and a close button on the selected tab and under the pointer.
 private final class TabItemView: NSView, NSTextFieldDelegate {
     private static let font = NSFont(name: "ObjectSans-Regular", size: 13) ?? .systemFont(ofSize: 13)
     private static let selectedFont = NSFont(name: "PPObjectSans-Semibold", size: 13) ?? .boldSystemFont(ofSize: 13)
@@ -466,6 +476,9 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private(set) weak var tab: ChatTab?
     private weak var strip: TabStripView?
     private let label = NSTextField(labelWithString: "")
+    private let badge = ModeBadge()
+    private var labelAfterBadge: NSLayoutConstraint!
+    private var labelAtStart: NSLayoutConstraint!
     private let closeButton = HoverButton(symbol: "xmark", label: "Close Tab")
     private var field: NSTextField?
     private var selected = false
@@ -487,6 +500,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         label.translatesAutoresizingMaskIntoConstraints = false
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(label)
+        addSubview(badge)
         closeButton.target = self
         closeButton.action = #selector(closeTab)
         addSubview(closeButton)
@@ -498,12 +512,15 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             widthAnchor.constraint(greaterThanOrEqualToConstant: Self.width.min),
             widthAnchor.constraint(lessThanOrEqualToConstant: Self.width.max),
             preferred,
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            badge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            badge.centerYAnchor.constraint(equalTo: centerYAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 4),
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -3),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+        labelAfterBadge = label.leadingAnchor.constraint(equalTo: badge.trailingAnchor, constant: 6)
+        labelAtStart = label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12)
     }
 
     @available(*, unavailable)
@@ -512,12 +529,17 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     override var mouseDownCanMoveWindow: Bool { false }
 
     private var name: String { tab?.tabName.title ?? "" }
+    private var isEU: Bool { tab?.mode == .eu }
 
     func update(selected: Bool) {
         self.selected = selected
         label.stringValue = name
-        toolTip = name
-        setAccessibilityLabel(name)
+        let eu = isEU
+        badge.isHidden = !eu
+        labelAtStart.isActive = !eu
+        labelAfterBadge.isActive = eu
+        toolTip = eu ? "\(name) (EU chat)" : name
+        setAccessibilityLabel(eu ? "\(name), EU" : name)
         setAccessibilityValue(selected)
         updateAppearance()
     }
@@ -529,6 +551,7 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         label.font = selected ? Self.selectedFont : Self.font
         label.textColor = selected ? TabColors.text : TabColors.dimText
         label.isHidden = renaming
+        badge.isHidden = renaming || !isEU
         closeButton.isHidden = renaming || !(selected || hovering)
     }
 
@@ -550,6 +573,12 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
         menu.addItem(withTitle: "Rename Tab…", action: #selector(startRename), keyEquivalent: "").target = self
+        if let tab {
+            let other: ZeusMode = tab.mode == .eu ? .standard : .eu
+            let item = menu.addItem(withTitle: "Switch Tab to \(other.title)…", action: #selector(switchMode), keyEquivalent: "")
+            item.target = self
+            item.isEnabled = !tab.isSwitching
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Close Tab", action: #selector(closeTab), keyEquivalent: "").target = self
         return menu
@@ -564,6 +593,12 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     @objc private func closeTab() {
         guard let tab else { return }
         strip?.close(tab)
+    }
+
+    @objc private func switchMode() {
+        guard let tab else { return }
+        strip?.select(tab)
+        (NSApp.delegate as? AppDelegate)?.switchTab(tab, to: tab.mode == .eu ? .standard : .eu)
     }
 
     // MARK: Rename
@@ -640,33 +675,50 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     }
 }
 
-/// The right side of the title bar of a chat window: in EU mode the green EU pill, the EU data access switch of the selected
-/// tab's project, and the EU session cost of the selected tab (an estimate), then the `Standard | EU` switch of the whole
-/// app. Standard shows no cost and no data access switch.
+/// The small green "EU" badge of an EU tab in the tab strip.
+final class ModeBadge: NSView {
+    private let label = NSTextField(labelWithString: "EU")
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = ModeBarView.euGreen.cgColor
+        layer?.cornerRadius = 4
+        label.font = NSFont(name: "PPObjectSans-Semibold", size: 10) ?? .boldSystemFont(ofSize: 10)
+        label.textColor = .white
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        translatesAutoresizingMaskIntoConstraints = false
+        setAccessibilityElement(false)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 22),
+            heightAnchor.constraint(equalToConstant: 15),
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 0.5),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+/// The right side of the title bar of a chat window, for the selected tab: for an EU tab the EU data access switch of the
+/// tab's project and the EU session cost of the tab (an estimate); the EU vault lock while the vault is open; then the
+/// `Standard | EU` control, which switches the selected tab only.
+/// A Standard tab shows no cost and no data access switch.
 final class ModeBarView: NSView {
     static let euGreen = NSColor(srgbRed: 31/255, green: 122/255, blue: 77/255, alpha: 1)
-    private let pill = NSView()
-    private let pillLabel = NSTextField(labelWithString: "EU")
     private let costLabel = NSTextField(labelWithString: "")
     /// EU data access of the selected tab's project (zeus `eu-access`): only the user turns it on or off, here.
     private let accessSwitch = NSButton(checkboxWithTitle: "EU data access", target: nil, action: nil)
+    /// The EU vault (with isolation): a lock that shows that the vault is open, with a menu.
+    private let vaultButton = NSButton()
     private let control = NSSegmentedControl(labels: ZeusMode.allCases.map(\.title), trackingMode: .selectOne,
                                              target: nil, action: nil)
 
     init() {
         super.init(frame: .zero)
-        pillLabel.font = NSFont(name: "PPObjectSans-Semibold", size: 11) ?? .boldSystemFont(ofSize: 11)
-        pillLabel.textColor = .white
-        pillLabel.alignment = .center
-        pillLabel.translatesAutoresizingMaskIntoConstraints = false
-        pill.addSubview(pillLabel)
-        pill.wantsLayer = true
-        pill.layer?.backgroundColor = Self.euGreen.cgColor
-        pill.layer?.cornerRadius = 9
-        pill.setAccessibilityElement(true)
-        pill.setAccessibilityRole(.staticText)
-        pill.setAccessibilityLabel("EU mode")
-        pill.toolTip = "EU mode: Claude on Google Vertex AI in the EU, with its own chats and workspace."
         costLabel.font = NSFont(name: "ObjectSans-Regular", size: 12) ?? .systemFont(ofSize: 12)
         costLabel.textColor = TabColors.dimText
         costLabel.lineBreakMode = .byTruncatingTail
@@ -679,15 +731,27 @@ final class ModeBarView: NSView {
         accessSwitch.target = self
         accessSwitch.action = #selector(toggleAccess)
         accessSwitch.setAccessibilityLabel("EU data access")
-        NotificationCenter.default.addObserver(self, selector: #selector(accessChanged), name: EUDataAccess.changed, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(accessChanged), name: EuroRate.changed, object: nil)
+        vaultButton.isBordered = false
+        vaultButton.imagePosition = .imageOnly
+        vaultButton.contentTintColor = Self.euGreen
+        vaultButton.target = self
+        vaultButton.action = #selector(showVaultMenu)
+        vaultButton.translatesAutoresizingMaskIntoConstraints = false
+        vaultButton.image = NSImage(systemSymbolName: "lock.open.fill", accessibilityDescription: "EU vault unlocked")?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+        vaultButton.setAccessibilityLabel("EU vault unlocked")
+        vaultButton.toolTip = "EU vault unlocked. It locks when Zeus quits."
+        for name in [EUDataAccess.changed, EuroRate.changed] {
+            NotificationCenter.default.addObserver(self, selector: #selector(accessChanged), name: name, object: nil)
+        }
         control.segmentStyle = .rounded
         control.controlSize = .small
         control.target = self
         control.action = #selector(choose)
-        control.setAccessibilityLabel("Zeus mode")
-        control.toolTip = "Standard: Claude on the Claude Team plan. EU: Claude on Google Vertex AI in the EU, for client data work."
-        let stack = NSStackView(views: [pill, accessSwitch, costLabel, control])
+        control.setAccessibilityLabel("Mode of this tab")
+        control.toolTip = "The mode of this tab. Standard: Claude on the Claude Team plan. EU: Claude on Google Vertex AI in the EU, "
+            + "for client data work. A switch starts a new chat in this tab; your other tabs keep their mode."
+        let stack = NSStackView(views: [accessSwitch, costLabel, vaultButton, control])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
@@ -698,13 +762,11 @@ final class ModeBarView: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            pill.widthAnchor.constraint(equalToConstant: 30),
-            pill.heightAnchor.constraint(equalToConstant: 18),
-            pillLabel.centerXAnchor.constraint(equalTo: pill.centerXAnchor),
-            pillLabel.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
             costLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280),
+            vaultButton.widthAnchor.constraint(equalToConstant: 20),
+            vaultButton.heightAnchor.constraint(equalToConstant: 20),
         ])
-        update(cost: nil)
+        update(tab: nil)
     }
 
     @available(*, unavailable)
@@ -712,16 +774,16 @@ final class ModeBarView: NSView {
 
     override var mouseDownCanMoveWindow: Bool { false }
 
-    /// The cost of the selected tab, which the bar shows in EU mode.
-    private var cost: EUCost?
+    /// The selected tab, whose mode, cost, and project the bar shows.
+    private weak var tab: ChatTab?
     /// The project of the selected tab.
     private var project: String?
 
-    func update(cost: EUCost?, project: String? = nil) {
-        self.cost = cost
-        let changed = self.project != project
-        self.project = project.flatMap { Handover.validProject($0) ? $0 : nil }
-        if ZeusMode.current == .eu, let project = self.project, changed || EUDataAccess.shared.state[project] == nil {
+    func update(tab: ChatTab?) {
+        let changed = self.tab !== tab || self.project != tab?.tabName.project
+        self.tab = tab
+        project = tab?.tabName.project.flatMap { Handover.validProject($0) ? $0 : nil }
+        if tab?.mode == .eu, let project, changed || EUDataAccess.shared.state[project] == nil {
             EUDataAccess.shared.load(project)
         }
         refresh()
@@ -737,38 +799,56 @@ final class ModeBarView: NSView {
     }
 
     func refresh() {
-        let mode = ZeusMode.current
-        let app = NSApp.delegate as? AppDelegate
+        let mode = tab?.mode ?? .standard
+        let eu = mode == .eu
+        let switching = tab?.isSwitching ?? false
+        let cost = eu ? tab?.cost : nil
         control.selectedSegment = ZeusMode.allCases.firstIndex(of: mode) ?? 0
-        control.isEnabled = !(app?.isSwitchingMode ?? false)
-        pill.isHidden = mode != .eu
-        costLabel.isHidden = mode != .eu || cost == nil
+        control.isEnabled = tab != nil && !switching
+        costLabel.isHidden = cost == nil
         let rate = EuroRate.shared.current
         costLabel.stringValue = cost?.label(rate: rate) ?? ""
         costLabel.toolTip = cost?.detail(rate: rate)
         costLabel.setAccessibilityLabel(cost.map { "\($0.label(rate: rate)). \($0.detail(rate: rate))" })
+        let isolated = EUProfile.isolated
+        vaultButton.isHidden = !EUVault.shared.isMounted
         let access = project.flatMap { EUDataAccess.shared.state[$0] }
-        accessSwitch.isHidden = mode != .eu || project == nil
+        // EU data access is a limit of EU with isolation only.
+        accessSwitch.isHidden = !eu || project == nil || !isolated
         accessSwitch.state = access?.enabled == true ? .on : .off
-        accessSwitch.isEnabled = access != nil && !(app?.isSwitchingMode ?? false)
+        accessSwitch.isEnabled = access != nil && !switching
         accessSwitch.toolTip = project.map { project in
             access?.enabled == true
-                ? "On: Zeus may read client data rows of \(project) in EU mode. Click to turn it off."
+                ? "On: Zeus may read client data rows of \(project) in EU chats. Click to turn it off."
                 : "Off: Zeus shows no client data rows of \(project). Only you can turn it on, here; Zeus can not."
         }
     }
 
+    /// The vault menu: the lock state.
+    private var vaultMenu: NSMenu {
+        let menu = NSMenu()
+        let state = menu.addItem(withTitle: "EU vault unlocked: it locks when Zeus quits", action: nil, keyEquivalent: "")
+        state.isEnabled = false
+        return menu
+    }
+
+    @objc private func showVaultMenu() {
+        let below = vaultButton.isFlipped ? vaultButton.bounds.height + 4 : -4
+        vaultMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: below), in: vaultButton)
+    }
+
     #if DEBUG
     var state: String {
-        "mode=\(ZeusMode.allCases[max(0, control.selectedSegment)].rawValue) enabled=\(control.isEnabled) pill=\(!pill.isHidden) access=\(accessSwitch.isHidden ? "-" : (accessSwitch.state == .on ? "on" : "off") + (accessSwitch.isEnabled ? "" : "(loading)")) cost=\(costLabel.isHidden ? "-" : costLabel.stringValue)"
+        let vault = vaultButton.isHidden ? "-" : "open"
+        return "mode=\(ZeusMode.allCases[max(0, control.selectedSegment)].rawValue) enabled=\(control.isEnabled) access=\(accessSwitch.isHidden ? "-" : (accessSwitch.state == .on ? "on" : "off") + (accessSwitch.isEnabled ? "" : "(loading)")) cost=\(costLabel.isHidden ? "-" : costLabel.stringValue) vault=\(vault)"
     }
     #endif
 
     @objc private func choose() {
         let index = control.selectedSegment
-        // The control shows the mode of the app until a switch is done.
+        // The control shows the mode of the tab until its switch is done.
         refresh()
-        guard ZeusMode.allCases.indices.contains(index) else { return }
-        (NSApp.delegate as? AppDelegate)?.requestMode(ZeusMode.allCases[index])
+        guard ZeusMode.allCases.indices.contains(index), let tab else { return }
+        (NSApp.delegate as? AppDelegate)?.switchTab(tab, to: ZeusMode.allCases[index])
     }
 }

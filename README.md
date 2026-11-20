@@ -128,9 +128,9 @@ The installer skips each step that is already done.
 | 9 | Copy of the zeus repo to `~/Code/zeus`, or an update of an existing copy (fast-forward only, local work is never discarded) | The copy is already up to date or already has the Zeus version that Zeus Editor needs, or it cannot update safely. Then the installer tells you how Zeus gets the update. |
 | 10 | Zeus Editor plugin (`zeus-editor@zeus-editor`, for your user) | Never skipped. An existing install is updated. |
 | 11 | The `zeus` command in `~/.local/bin` | The command is already installed and up to date. |
-| 12 | Google Cloud CLI 593.0.0 in `~/google-cloud-sdk`, for the Google sign-in of EU mode. The installer checks the SHA-256 of the official macOS archive and does not change your shell profile. | `gcloud` is already installed (on your `PATH`, in `~/google-cloud-sdk`, or from Homebrew). |
-| 13 | Copy of the zeus repo to `~/Code/zeus-eu`, the EU workspace, or an update of an existing copy (fast-forward only) | The copy is already up to date, or it cannot update safely. |
-| 14 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, the first-start settings of that folder, and the status line of Standard Claude Code (see [EU mode](#eu-mode)) | Never skipped. Installed plugins are updated. |
+| 12 | Google Cloud CLI 593.0.0 in `~/google-cloud-sdk`, for the Google sign-in of EU mode. The installer checks the SHA-256 of the official macOS archive and does not change your shell profile. gcloud needs Python 3.10 or later: when the first Python on your `PATH` is older (the Python of macOS is 3.9), Zeus runs gcloud with a Python 3.10 or later of this Mac, such as Anaconda's (`CLOUDSDK_PYTHON`), and says so; the Zeus app does the same. When gcloud does not run, the step shows its error and the fix. | `gcloud` is already installed and runs (on your `PATH`, in `~/google-cloud-sdk`, or from Homebrew). |
+| 13 | The Zeus plugins of EU mode (Zeus Editor and the skill plugins) in the EU Claude folder `~/.zeus/eu/claude`, the first-start settings of that folder, and the status line of Standard Claude Code (see [EU mode](#eu-mode)). That folder is in the EU vault, so the step runs only while the vault is open. | Simple EU (the default): EU uses the plugins of Standard, so the step has nothing to do. With isolation: the EU vault is not open (or not made yet). The Zeus app asks you to run the setup again after it opened the vault. Installed plugins are updated. |
+| 14 | Google sign-in of EU mode: `gcloud auth application-default login` in the browser, a check of the access of your Google account to the EU project, and the EU project as the quota project of the sign-in. The installer asks first; answer `n` if you do not use EU mode. The access check costs nothing: it calls no model. Without access, the step shows the message for the two roles with your Google account (see [Set up EU mode](#set-up-eu-mode)). When gcloud does not run, the step says so and asks nothing. | You are already signed in with access to the EU project. While you are signed out, the installer asks on each run. |
 | 15 | The Zeus app in `/Applications` (`~/Applications` without administrator rights), from the newest app release of the private zeus repo. An installed older app is updated in its folder, as with the install line (see [You already have the Zeus app](#you-already-have-the-zeus-app)). | The app is already the newest version, or an older app is open (quit it, then run the line again). A failed download does not stop the installer. |
 
 The installer does not use `sudo`.
@@ -138,8 +138,9 @@ Your Mac password can be necessary only for the Apple pop-up in step 1.
 The installer asks you to accept the Anaconda license before it installs Anaconda.
 Logs for Anaconda, the GitHub CLI, and the Claude Code update are in `~/Library/Logs/zeus-install`.
 A failed EU step (12 to 14, or 14 to 16 in the app) does not stop the installer.
+This includes a Google account without access to the EU project.
 It is a warning, the other steps continue, and the Zeus app is installed.
-The app shows what EU mode is missing when you switch to EU mode; run the setup again to finish it.
+The app shows what EU mode is missing when you start an EU chat; run the setup again to finish it.
 
 ## After the install
 
@@ -174,64 +175,107 @@ claude plugin install celonis-pql@celonis-pql --scope user
 EU mode runs Zeus with Claude on Google Vertex AI in the EU (location `eu`), for clients whose data must stay in the EU.
 The default model is Claude Sonnet 5.5; Opus 5.5 and Haiku 5.5 are also available, and small background calls use Haiku 5.5.
 Fable is not available in EU mode.
-Web search is available; web fetch and MCP servers are off.
-EU mode has its own workspace (`~/Code/zeus-eu`), its own Claude Code folder (`~/.zeus/eu/claude`), and its own Zeus Editor state (`~/.zeus/eu/editor`).
-Nothing of EU mode goes into `~/Code/zeus` or `~/.claude`.
+EU mode and Standard mode work in the same workspace, `~/Code/zeus`.
+A project that you make in one mode is in the other mode at once.
+
+EU mode has two forms. The EU launch profile of Zeus Editor (`eu-profile.json`) selects one with `isolation`:
+
+- **Simple EU** (`isolation` is false, the default): an EU tab is a Standard tab in every way, with the same Claude Code folder (`~/.claude`), plugins, skills, settings, status line, and tools.
+  Only the model account is different: Claude on Google Vertex AI in the EU with your Google account, in place of your Claude account.
+  The app makes and opens no EU vault, asks for no Touch ID, and runs Standard without the read block.
+  EU data access and the handover are not used.
+- **EU with isolation** (`isolation` is true): EU runs apart from Standard, as described in the rest of this section.
+
+With isolation, web search is available; web fetch and MCP servers are off.
+EU mode keeps its Claude Code folder (`~/.zeus/eu/claude`), its Zeus Editor state (`~/.zeus/eu/editor`), and its client data in the EU vault.
+The EU vault is an encrypted disk image (`~/Library/Application Support/Zeus/eu-vault.sparsebundle`) that the app opens at `~/.zeus/eu` with Touch ID.
+Standard sessions can not read the vault.
+Nothing of EU mode goes into `~/.claude`.
 EU Claude Code shows the same status line as Standard Claude Code.
 Each install and each EU session start in the app copy it again from `~/.claude/settings.json`, or remove it when Standard has none.
 A status line that you set yourself in `~/.zeus/eu/claude/settings.json` stays as it is.
 
 ### Set up EU mode
 
-1. Run the install line or Zeus > Zeus Setup… in the app.
-   The EU steps are the same on every Mac (steps 12 to 14, or 14 to 16 in the app).
-2. Ask the Zeus maintainer to give your Google account access to the EU project.
+1. Ask the Zeus maintainer to give your Google account access to the EU project.
    The maintainer gives the account two roles on the project `project-4bf0bacd-fec4-406b-a99`:
    Vertex AI User (`roles/aiplatform.user`) and Service Usage Consumer (`roles/serviceusage.serviceUsageConsumer`).
    The second role is necessary for the quota project of the sign-in and for the EU start check.
-   Without it, the sign-in or the EU start check fails with "no access".
-3. Sign in to Google one time.
+   Without it, the sign-in step or the EU start check fails with "no access".
+2. Run the install line or Zeus > Zeus Setup… in the app.
+   The EU steps are the same on every Mac (steps 12 to 14, or 14 to 16 in the app).
+   The last EU step signs you in to Google: answer `y` (in the app: **Sign in to Google**).
+   While you are signed out, each setup run asks again.
+   When your account has no access yet, the step shows the message, and the rest of the setup completes.
+   After you get the roles, run the setup again; you do not sign in again.
+3. When you skipped the sign-in, or it expired, sign in later.
    In the app, the EU start page shows **Sign in to Google Cloud** when it is necessary.
-   In Terminal, use these two commands:
+   In Terminal, you can also use these two commands:
 
 ```text
 gcloud auth application-default login
 gcloud auth application-default set-quota-project project-4bf0bacd-fec4-406b-a99
 ```
 
+4. With isolation, the first EU start in the app makes the EU vault (simple EU has no vault: the EU chat starts at once):
+   - Choose **File > New EU Chat** (Shift+Cmd+T), or click **EU** in the mode switch of a tab and then **Start EU Chat**.
+   - Confirm with Touch ID (or your login password). The app makes the vault and opens it.
+   - The app says that the Zeus plugins of EU mode are missing. Click **Run the Zeus Setup**. The setup installs them in the open vault.
+   - Start the EU chat again. The EU chat starts.
+
+   Later EU starts ask for Touch ID once per app run, to open the vault.
+   After an app update, macOS asks once for your login password so that the new app can read the key of the vault: click **Always Allow**.
+   The vault locks when you quit the app.
+
+The app does not use or remove the folders of EU mode from before the shared workspace: the old EU workspace `~/Code/zeus-eu` and the old files in `~/.zeus/eu`.
+
 ### Use EU mode in the app
 
-- The mode switch is at the right of the tab bar (`Standard | EU`).
-  A green EU pill shows in EU mode.
-- A switch closes all the tabs of the current mode and stops their sessions before the other mode starts.
-  The app asks first when a tab has unsent text or Zeus is working.
-  The tabs of each mode come back when you switch back to that mode.
-  An EU tab never opens in Standard mode, and a Standard tab never opens in EU mode.
+- Each tab has its own mode, Standard or EU.
+  Standard tabs and EU tabs run at the same time, also on the same project.
+  An EU tab works like a Standard tab: the same chat, tab actions, Celonis steps, and dashboard steps.
+  An EU tab shows a green **EU** badge in its label.
+- To start an EU chat, choose **File > New EU Chat** (Shift+Cmd+T).
+  **New Tab** (Cmd+T) and **New Chat** (Cmd+N) open a tab in the mode of the tab in front.
+  The first tab after an app start has the mode of the tab that you used last.
+- The mode switch at the right of the tab bar (`Standard | EU`) shows the mode of the selected tab.
+  A click on the other mode asks first, then starts a new chat of that mode in the same tab.
+  The old chat ends and stays in the history of its mode; your other tabs keep running.
+  The app asks once more when the tab has unsent text or Zeus is working in it.
+  You can also right-click a tab and choose **Switch Tab to EU…** or **Switch Tab to Standard…**.
+- In simple EU, an EU chat starts at once, as a Standard chat does.
+- With isolation, an EU chat starts only when the EU vault is open.
+  When Touch ID is cancelled, the tab stays Standard.
+  When the app starts with an EU tab and Touch ID is cancelled, it opens a Standard tab and says why.
+- While the vault is open, a green lock shows at the right of the tab bar.
+- After an app update, each tab opens again in its own mode.
+  With isolation, the EU tabs wait for Touch ID to open the vault; an EU chat never opens in a Standard tab.
 - Each mode has its own web data (cookies and storage) and its own terminal environment.
-- In EU mode, the tab bar shows **EU data access** for the project of the tab.
+- With isolation, an EU tab shows **EU data access** in the tab bar for the project of the tab.
   It is off for each project until you turn it on.
-  When it is on, Zeus can read client data rows of that project in EU mode (SQL results, data profiles, research results) and write row files into the project's `out` folder.
+  When it is on, Zeus can read client data rows of that project in EU mode (SQL results, data profiles, research results) and write row files into the project's folder in the EU vault.
   Only you can turn it on or off, with this switch; Zeus can not.
   Tell Zeus in the chat when you turned it on.
-- In EU mode, the tab bar shows an estimate of the session cost in euros, at the daily reference rate of the European Central Bank.
+- In an EU tab, the tab bar shows an estimate of the session cost in euros, at the daily reference rate of the European Central Bank.
   The estimate itself is in USD, from the token counts of the chat and the Vertex AI EU prices of the model; the tooltip shows the USD value.
   The euro value is only a conversion of that USD estimate at the ECB daily reference rate.
   It is not the amount that Google bills.
   When the app can not load the euro rate of today, the cost shows in USD with the note "no euro rate".
-- When the EU start fails, the app shows why and what to do: sign in to Google Cloud, run the Zeus setup, try again, or switch to Standard.
+- When the EU start fails, the tab shows why and what to do: sign in to Google Cloud, run the Zeus setup, try again, or switch the tab to Standard.
 
 ### Hand over EU work to Standard
 
+The handover is for EU with isolation; in simple EU, both modes share all files.
 EU work never goes to Standard by itself.
 A person releases it in the app:
 
-1. In EU mode, click **Standard** in the mode switch, then click **Hand Over First…**.
+1. In an EU tab, click **Standard** in the mode switch, then click **Hand Over First…**.
 2. Click **Ask Zeus in this chat**.
    The EU chat writes the handover summary of its project.
    Then click **Review…** next to the project.
    When no project has work to hand over, the window says why.
 3. Review the summary and the files.
-   The app copies them into its own folder (`~/Library/Application Support/Zeus/handover`), which EU Claude can not write, and scans them for client data with the Zeus scripts of the Standard workspace, which EU Claude can not change.
+   The app copies them into its own folder (`~/Library/Application Support/Zeus/handover`), which EU Claude can not write, and scans them for client data with the Zeus scripts of the workspace, whose `scripts` folder EU Claude can not write.
    Each finding group is one value (with its places in all files), and the window shows the value.
    For each group, choose **Keep** (it is not client data, and it crosses as it is) or **Mask** (Zeus replaces it with `masked-<kind>-<n>` in every file).
    **Mask All** masks every group that you did not decide yet.

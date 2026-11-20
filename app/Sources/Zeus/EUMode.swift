@@ -1,19 +1,24 @@
 import Foundation
 import WebKit
 
-/// The mode of the whole app: Standard (Claude on Anthropic's API, the Team plan) or EU (Claude on Google Vertex AI in the
-/// EU). All tabs run in one mode. A switch ends every session of the old mode before the new mode starts, so that the
-/// modes never share a running session (zeus-editor docs/chat.md "EU mode", zeus references/eu-mode.md).
+/// The mode of one chat tab: Standard (Claude on Anthropic's API, the Team plan) or EU (Claude on Google Vertex AI in the
+/// EU). Each tab runs in its own mode, and Standard and EU tabs run side by side in the same workspace. A tab switches
+/// its mode in a new chat (`ChatTab.switchSession`): its session of the old mode ends, so a chat never moves between the
+/// modes (zeus-editor docs/chat.md "EU mode", zeus references/eu-mode.md).
 enum ZeusMode: String, Codable, CaseIterable {
     case standard
     case eu
 
     var title: String { self == .eu ? "EU" : "Standard" }
 
-    /// The current mode of the app, kept across app starts.
-    static var current: ZeusMode {
+    /// The mode of the tab that the user used last, kept across app starts: the app start opens its first tab in it,
+    /// and a new tab without a tab in front gets it.
+    static var lastUsed: ZeusMode {
         get { Preferences.zeusMode.flatMap(ZeusMode.init(rawValue:)) ?? .standard }
-        set { Preferences.zeusMode = newValue.rawValue }
+        set {
+            guard newValue != lastUsed else { return }
+            Preferences.zeusMode = newValue.rawValue
+        }
     }
 }
 
@@ -21,15 +26,25 @@ enum ZeusMode: String, Codable, CaseIterable {
 /// the newest installed `dist/zeus.mjs`, which the zeus command starts). `zeus --eu` reads the same file, so the app
 /// and the command use the same folders. Without a valid profile (a Zeus Editor from before EU mode) the app uses the
 /// defaults of the profile; `found` is then false and EU mode needs the Zeus setup.
+///
+/// EU and Standard use one workspace, `~/Code/zeus` (`Paths.zeusDir`). Schema 2 of the profile has no `workspace`;
+/// the `workspace` of a schema 1 profile (`~/Code/zeus-eu`, from before the shared workspace) is not used.
+///
+/// `isolation` (default false) is the one switch that Zeus Editor, zeus, and the app share. Off (simple EU): an EU tab is a
+/// Standard tab in every way (the same Claude Code folder, plugins, settings, and workspace) and only its model account
+/// differs (Google Vertex AI in the EU); the app makes, opens, and mounts no EU vault, and runs Standard without the read
+/// block. On: EU runs apart from Standard, with the EU vault (`EUVault`), the read block of Standard (`StandardJail`), the
+/// handover, and EU data access.
 struct EUProfile: Equatable {
     var vertexProject: String
     var configDir: String
     var editorStateDir: String
-    var workspace: String
     /// The EU temporary folder (`tmp_dir`, with `{uid}` replaced by the user ID), as the profile writes it.
     var tmpDir: String
     /// The path of the profile, or nil when the app uses the defaults.
     var file: String?
+    /// EU runs apart from Standard, with the EU vault. False (simple EU) when the profile does not say true.
+    var isolation = false
 
     var found: Bool { file != nil }
 
@@ -38,25 +53,31 @@ struct EUProfile: Equatable {
     static let defaults = EUProfile(vertexProject: "project-4bf0bacd-fec4-406b-a99",
                                     configDir: Paths.home + "/.zeus/eu/claude",
                                     editorStateDir: Paths.home + "/.zeus/eu/editor",
-                                    workspace: Paths.home + "/Code/zeus-eu", tmpDir: defaultTmpDir, file: nil)
+                                    tmpDir: defaultTmpDir, file: nil)
 
     /// The profile of the newest installed Zeus Editor, read again on each call (an update can change it).
     static func load() -> EUProfile {
         guard let file = newestProfileFile(),
               let data = FileManager.default.contents(atPath: file),
               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              object["schema"] as? Int == 1,
+              let schema = object["schema"] as? Int, schema == 1 || schema == 2,
               let project = object["vertex_project"] as? String, project.range(of: #"^[a-z][a-z0-9-]{4,61}[a-z0-9]$"#, options: .regularExpression) != nil,
-              let config = expand(object["config_dir"]), let state = expand(object["editor_state_dir"]),
-              let workspace = expand(object["workspace"])
+              let config = expand(object["config_dir"]), let state = expand(object["editor_state_dir"])
         else { return defaults }
         var tmp = defaults.tmpDir
         if let raw = object["tmp_dir"] {
             guard let text = raw as? String, let value = expand(text.replacingOccurrences(of: "{uid}", with: String(getuid()))) else { return defaults }
             tmp = value
         }
-        return EUProfile(vertexProject: project, configDir: config, editorStateDir: state, workspace: workspace, tmpDir: tmp, file: file)
+        return EUProfile(vertexProject: project, configDir: config, editorStateDir: state, tmpDir: tmp, file: file,
+                         isolation: object["isolation"] as? Bool ?? false)
     }
+
+    /// The installed Zeus Editor runs EU apart from Standard (`isolation`), with the EU vault.
+    static var isolated: Bool { load().isolation }
+
+    /// EU sessions can start now: always in simple EU, and with isolation only while the EU vault is open.
+    static var sessionsCanStart: Bool { !isolated || EUVault.isOpen }
 
     /// `~/` is the home folder; any other value must be an absolute path.
     private static func expand(_ value: Any?) -> String? {
@@ -92,16 +113,22 @@ struct EUProfile: Equatable {
 }
 
 /// What a Mac needs for EU mode. The Zeus setup installs it (install.sh, the EU steps), the same on every Mac.
-/// The Google sign-in is not part of it: the EU start checks it and gives the sign-in button (`EUStartFailure`).
+/// The Google sign-in is not part of it: the setup offers it (a user can skip it), and the EU start checks it and gives
+/// the sign-in button (`EUStartFailure`).
+/// The EU Claude Code folder is in the EU vault, so its part (the Zeus plugins of EU mode) can be checked and installed
+/// only while the vault is open: `missingInVault`.
 enum EUSetup {
-    /// The parts that are missing, in words; empty when EU mode can start.
+    /// The parts outside the vault that are missing, in words; empty when the EU vault can open and EU mode can start.
     static func missing(profile: EUProfile = .load()) -> [String] {
         var parts: [String] = []
         if !profile.found { parts.append("a Zeus Editor with EU mode") }
-        if !FileManager.default.fileExists(atPath: profile.workspace + "/.git") { parts.append("the EU workspace (\(display(profile.workspace)))") }
-        if !editorPluginInstalled(configDir: profile.configDir) { parts.append("the Zeus plugins of EU mode") }
         if GoogleCloud.gcloud() == nil { parts.append("the Google Cloud CLI") }
         return parts
+    }
+
+    /// The parts in the open EU vault that are missing, in words: the Zeus plugins in the EU Claude Code folder.
+    static func missingInVault(profile: EUProfile = .load()) -> [String] {
+        editorPluginInstalled(configDir: profile.configDir) ? [] : ["the Zeus plugins of EU mode"]
     }
 
     /// The Zeus Editor plugin is installed in the EU Claude Code folder.
@@ -117,7 +144,8 @@ enum EUSetup {
     }
 }
 
-/// EU Claude Code shows the status line of Standard Claude Code. The installer copies it (install.sh
+/// With isolation, EU Claude Code shows the status line of Standard Claude Code (simple EU uses the Claude Code folder of
+/// Standard, with its status line). The installer copies it (install.sh
 /// `eu_mirror_status_line`), and the app runs that step again before each EU session, so that a change in Standard
 /// reaches EU. A failure only leaves the EU status line as it was.
 enum EUStatusLine {
@@ -240,7 +268,7 @@ struct EUCost: Equatable {
 }
 
 /// The daily euro reference rate of the European Central Bank (USD per EUR), for the EU cost label. The app loads it
-/// in EU mode only, once a day, and keeps it for that day in `~/Library/Application Support/Zeus/euro-rate.json`
+/// for EU tabs only, once a day, and keeps it for that day in `~/Library/Application Support/Zeus/euro-rate.json`
 /// (no user data). Without a rate of today, the label shows USD with a note.
 final class EuroRate {
     struct Rate: Codable, Equatable {
@@ -281,7 +309,7 @@ final class EuroRate {
         return nil
     }
 
-    /// Loads the rate of today when the app has none (main queue). EU mode only: the caller is an EU cost.
+    /// Loads the rate of today when the app has none (main queue). EU tabs only: the caller is an EU cost.
     func load() {
         guard current == nil, !loading else { return }
         if let failedAt, Date().timeIntervalSince(failedAt) < Self.retryAfter { return }
@@ -339,7 +367,7 @@ final class EuroRate {
 
 /// EU data access of an EU project (zeus references/eu-mode.md, "EU data access"): whether Zeus may read client data rows
 /// of the project in EU mode. Only the user turns it on or off, with the switch in the title bar. The app runs
-/// `eu-access <project> [on|off] --json` with the Standard workspace's Zeus, outside Claude, as it runs the handover commands;
+/// `eu-access <project> [on|off] --json` with the Zeus of the shared workspace, outside Claude, as it runs the handover commands;
 /// Zeus refuses the change from any Claude session.
 final class EUDataAccess {
     struct State: Equatable {
@@ -356,10 +384,7 @@ final class EUDataAccess {
     private var loading: Set<String> = []
     private let queue = DispatchQueue(label: "zeus.eu-access")
 
-    private func cli() -> HandoffCLI {
-        let profile = EUProfile.load()
-        return HandoffCLI(workspace: profile.workspace, profile: profile, scriptsWorkspace: Paths.zeusDir)
-    }
+    private func cli() -> HandoffCLI { HandoffCLI(profile: EUProfile.load()) }
 
     /// Reads the state of a project (main queue).
     func load(_ project: String) {
@@ -481,7 +506,7 @@ struct EUStartFailure: Equatable {
     let message: String
     /// The fix needs the Google sign-in of EU mode (`gcloud auth application-default login`).
     let needsSignIn: Bool
-    /// The fix is the Zeus setup (a missing EU workspace, gcloud, or an old Zeus Editor).
+    /// The fix is the Zeus setup (gcloud, the EU plugins, or an old Zeus Editor).
     let needsSetup: Bool
 
     init(log: TerminalLog, exitCode: Int32?) {

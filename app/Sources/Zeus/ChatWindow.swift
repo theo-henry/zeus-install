@@ -2,14 +2,17 @@ import AppKit
 import WebKit
 
 /// The tab of one Zeus session in a chat window. It shows the loading screen (the Zeus globe) while `zeus` starts,
-/// then hands over to the chat page. Closing the tab ends the session.
+/// then hands over to the chat page. Closing the tab ends the session. The tab has the mode of its session; a switch to
+/// the other mode ends the session and starts a new chat of the other mode in the same tab (`switchSession`).
 final class ChatTab: NSObject {
-    let session: ZeusSession
+    private(set) var session: ZeusSession
     /// The content of the tab: the close banner, the page, and the terminal.
     let view = NSStackView()
     /// The window that shows the tab.
     weak var host: ChatWindowController?
-    private let handler = WebViewHandler()
+    /// The handler of the chat page. A mode switch gives the tab a new chat page with a new handler, so that the old
+    /// page can not reach the tab.
+    private var handler = WebViewHandler()
     private(set) var webView: WKWebView!
     /// The name of the tab: the project of the chat, or a name that the user gave it.
     let tabName = TabName()
@@ -41,7 +44,7 @@ final class ChatTab: NSObject {
     private var closed = false
 
     /// The tab as it was before an update from the settings, which this tab opens again (`TabRestore`).
-    private let restore: TabRestore.Tab?
+    private var restore: TabRestore.Tab?
     private enum Resume { case none, waiting, running, done }
     /// The Claude Code session of `restore` resumes before the chat page loads.
     private var resume = Resume.none
@@ -51,12 +54,14 @@ final class ChatTab: NSObject {
     var onRunSetup: (() -> Void)?
     var onRetry: (() -> Void)?
     var onClosed: ((ChatTab) -> Void)?
-    /// The status page of an EU start asks for Standard mode ("Switch to Standard"): the app asks first.
+    /// The status page of an EU start asks to switch this tab to Standard ("Switch to Standard"): the app asks first.
     var onSwitchToStandard: (() -> Void)?
+    /// The app switches the mode of this tab now: no other switch of the tab starts.
+    var isSwitching = false
     /// EU mode: the chat ended with a Vertex error that the user can act on; the words to show.
     var onEUError: ((ChatTab, String) -> Void)?
 
-    /// EU mode: the session cost of this tab's launch, from its chat page after each reply. Nil in Standard.
+    /// EU tab: the session cost of this tab's launch, from its chat page after each reply. Nil in Standard.
     private(set) var cost: EUCost?
     /// EU mode: the Google sign-in that runs in the terminal panel after a failed EU start.
     private var signIn: GoogleSignIn?
@@ -68,10 +73,7 @@ final class ChatTab: NSObject {
         self.restore = restore
         super.init()
 
-        webView = handler.makeWebView(mode: session.mode)
-        webView.configuration.userContentController.addUserScript(TabName.projectScript)
-        // The window's Zeus background shows until the first page paints, not a gray frame.
-        webView.setValue(false, forKey: "drawsBackground")
+        webView = makeChatPage(mode: session.mode)
         terminal = TerminalPanel(session: session)
         terminal.webView.isHidden = !(restore?.terminalVisible ?? false)
         if let restore {
@@ -92,12 +94,35 @@ final class ChatTab: NSObject {
         terminal.webView.heightAnchor.constraint(equalToConstant: 260).isActive = true
         webView.heightAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
 
+        listen(to: session)
+        render()
+    }
+
+    private func listen(to session: ZeusSession) {
+        session.onStateChange = { [weak self, weak session] _ in
+            guard let self, session === self.session else { return }
+            self.render()
+        }
+        session.onLog = { [weak self, weak session] in
+            guard let self, session === self.session else { return }
+            self.updateLoaderStatus()
+        }
+    }
+
+    /// A new chat page with the web data of the mode (`ModeWebData`: fixed when the page is made) and its own handler.
+    private func makeChatPage(mode: ZeusMode) -> WKWebView {
+        let handler = WebViewHandler()
+        self.handler = handler
+        let page = handler.makeWebView(mode: mode)
+        page.configuration.userContentController.addUserScript(TabName.projectScript)
+        // The window's Zeus background shows until the first page paints, not a gray frame.
+        page.setValue(false, forKey: "drawsBackground")
         handler.openLocalWindow = { request, configuration in
             EditorWindowController.open(request: request, configuration: configuration)
         }
         handler.onScriptMessage = { [weak self] message in self?.handle(message) }
         handler.onPageLoaded = { [weak self] webView in
-            guard let self else { return }
+            guard let self, webView === self.webView else { return }
             if self.host?.selectedTab === self { WebViewHandler.matchTitleBar(of: webView.window, to: webView) }
             guard self.shownURL != nil, webView.url == self.shownURL else { return }
             self.restoreDraft()
@@ -113,10 +138,61 @@ final class ChatTab: NSObject {
         }
         // A chat page that does not load must not stay behind the loading screen.
         handler.onPageFailed = { [weak self] in self?.handOver() }
+        return page
+    }
 
-        session.onStateChange = { [weak self] _ in self?.render() }
-        session.onLog = { [weak self] in self?.updateLoaderStatus() }
+    /// Switches the tab to the mode of `newSession` in a new chat (zeus `eu-mode.md`; the consultant's answer Q5: a new
+    /// chat first). The old session ends; its chat stays in the history of its mode. The tab keeps its name, its place,
+    /// and its terminal panel; the chat page is made again, because the web data of a page is fixed when it is made.
+    func switchSession(to newSession: ZeusSession) {
+        guard !closed else { newSession.stop(); return }
+        let old = session
+        Trace.log("tab mode: \(old.pid) \(old.mode.rawValue) -> \(newSession.pid) \(newSession.mode.rawValue)")
+        SpeechService.shared.cancel(in: webView, reason: "mode switch")
+        signIn?.stop()
+        signIn = nil
+        signInNote = nil
+        // A close that waited for the old chat ends: the tab stays open with the new chat.
+        closeGeneration += 1
+        closePending = false
+        closeReason = nil
+        closeBanner.isHidden = true
+        closeSpinner.stopAnimation(nil)
+        old.onStateChange = nil
+        old.onLog = nil
+        old.stop()
+        if !old.isAlive { SessionManager.shared.remove(old) }
+
+        let oldPage = webView!
+        oldPage.stopLoading()
+        oldPage.configuration.userContentController.removeScriptMessageHandler(forName: "zeusApp")
+        let page = makeChatPage(mode: newSession.mode)
+        let index = view.arrangedSubviews.firstIndex(of: oldPage) ?? 1
+        view.removeArrangedSubview(oldPage)
+        oldPage.removeFromSuperview()
+        view.insertArrangedSubview(page, at: index)
+        page.translatesAutoresizingMaskIntoConstraints = false
+        page.widthAnchor.constraint(equalTo: view.widthAnchor).isActive = true
+        page.heightAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
+        webView = page
+        if let loader {
+            loader.view.removeFromSuperview()
+            self.loader = nil
+        }
+        handingOver = false
+        shownURL = nil
+        pageLoaded = false
+        settingsWanted = false
+        restore = nil
+        resume = .none
+        cost = nil
+
+        session = newSession
+        terminal.attach(newSession)
+        listen(to: newSession)
         render()
+        if host?.selectedTab === self { view.window?.makeFirstResponder(page) }
+        host?.tabModeChanged(self)
     }
 
     private func render() {
@@ -826,11 +902,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         SpeechService.shared.cancel(in: webView, reason: "window closed")
         EditorWindowController.open.removeAll { $0 === self }
-    }
-
-    /// A mode switch closes the Zeus Editor pages of the old mode.
-    static func closeAll() {
-        for controller in open { controller.window?.close() }
     }
 
     /// Speech to text stops when the page goes out of view: another tab of the window shows, or the window is minimized.
