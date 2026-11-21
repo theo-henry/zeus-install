@@ -462,8 +462,12 @@ defaults write "$PREFS_DOMAIN" setupDone -bool true
 launch_app logout
 check "the app opens a chat at once after the setup" 'wait_for "page loaded: http://127.0.0.1" 30'
 act test-draft
+# The turn of the second tab is long, so that it is still busy when the quit checks the tabs (a 3 s turn can end
+# before the close check of a slow run reaches it).
+touch "$STATE/long-turn"
 act test-cmd-t
 check "a second tab opens" 'wait_count "state: running(" 2 20 && newest_page_loaded && sleep 1'
+rm -f "$STATE/long-turn"
 act test-draft
 sleep 0.3
 act test-send
