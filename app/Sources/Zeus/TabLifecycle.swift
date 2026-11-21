@@ -13,7 +13,7 @@ import Foundation
 ///     each phase except closed ──close──▶ closed
 ///     loading, handingOver, showing ──pageLoaded(url of the page)──▶ the same phase, with the page loaded
 ///
-/// `epoch` increases with each phase change. An async callback (a timer, a script answer, the end of a resume or of a
+/// `epoch` increases with each phase change, and with each restart and close (also a restart from starting). An async callback (a timer, a script answer, the end of a resume or of a
 /// sign-in) keeps the epoch of the moment it was made and acts only while the epoch is the same. So a callback of an
 /// earlier phase, or of the session before a mode switch, can not act on the tab.
 ///
@@ -186,7 +186,7 @@ struct TabLifecycle: Equatable {
     @discardableResult
     mutating func apply(_ event: Event) -> Bool {
         guard let next = Self.next(phase, event) else { return false }
-        if next.name != phase.name { epoch += 1 }
+        if next.name != phase.name || event == .restart || event == .close { epoch += 1 }
         phase = next
         switch event {
         case .restart, .close:

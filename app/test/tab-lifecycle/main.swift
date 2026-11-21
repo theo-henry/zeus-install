@@ -120,6 +120,11 @@ tab.apply(.restart)
 tab.apply(.chatURL(other, resume: false))
 check("a page-load timer of the old session can not act after a mode switch", !tab.isCurrent(timerEpoch))
 check("the new session's own page-load timer can act", tab.isCurrent(tab.epoch))
+tab = lifecycle(.starting)
+let startEpoch = tab.epoch
+tab.apply(.restart)
+check("a restart from starting increases the epoch", tab.epoch > startEpoch && tab.phase == .starting)
+check("a callback of the session before a switch in starting can not act", !tab.isCurrent(startEpoch))
 tab = lifecycle(.handingOver(loaded))
 let globeEpoch = tab.epoch
 tab.apply(.restart)
