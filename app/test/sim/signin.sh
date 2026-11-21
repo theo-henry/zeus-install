@@ -9,10 +9,10 @@
 # setup in this app run. The first round answers the Anaconda license and the GitHub login.
 setup_round() {
   act setup-install
-  wait_count "setup event: running 1 " "$1" 30 >/dev/null || return 1
+  wait_count "setup event: running xcode " "$1" 30 >/dev/null || return 1
   if [ "$1" = 1 ]; then
-    wait_for "setup event: ask 2 " 40 >/dev/null && act setup-answer-yes
-    wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && act setup-enter
+    wait_for "setup event: ask anaconda " 40 >/dev/null && act setup-answer-yes
+    wait_for "setup event: running github-login " 40 >/dev/null && sleep 1 && act setup-enter
   fi
 }
 
@@ -25,7 +25,7 @@ signin_terminal() {
   env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" \
     ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" \
     python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-    bash -c 'ZEUS_INSTALL_SOURCED=1 source "$1"; WORK_DIR="$(mktemp -d)"; install_eu; echo after-eu; printf "%s\n" "${SUMMARY[@]}"' \
+    bash -c 'ZEUS_INSTALL_SOURCED=1 source "$1"; WORK_DIR="$(mktemp -d)"; run_install_step gcloud; run_install_step eu-plugins; run_install_step google-sign-in; echo after-eu; printf "%s\n" "${SUMMARY[@]}"' \
     _ "$REPO_DIR/install.sh" 2>&1
 }
 
@@ -36,9 +36,9 @@ signin_scenario() {
   start_app signin
   adc="$SANDBOX/.config/gcloud/application_default_credentials.json"
   need "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
-  # The sign-in is the last step of the check (the last EU step in app mode), whatever its number.
-  SIGNIN="$(grep -o "setup event: state [0-9]*" "$TRACE" | tail -1 | awk '{print $4}')"
-  need "the check finds the Google sign-in, step $SIGNIN, to do on a new Mac" '[ -n "$SIGNIN" ] && grep -q "setup event: state $SIGNIN todo" "$TRACE"'
+  # The key of the sign-in step in the step table of install.sh.
+  SIGNIN=google-sign-in
+  need "the check finds the Google sign-in to do on a new Mac" 'grep -q "setup event: state $SIGNIN todo" "$TRACE"'
 
   # Skip: a user who does not use EU mode.
   setup_round 1

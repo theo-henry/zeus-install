@@ -257,46 +257,50 @@ echo
 echo "Scenario 1: a new Mac, full setup, chat, close"
 start_app new ZEUS_SIM_START_DELAY=2500
 need "the setup window opens and checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
-todo="$(grep -c 'setup event: state [0-9]* todo' "$TRACE" || true)"
+todo="$(grep -c 'setup event: state [a-z-]* todo' "$TRACE" || true)"
 need "the check finds 14 steps to do on a new Mac (got $todo)" '[ "$todo" = 14 ]'
 # A new Mac has no Zeus Editor yet, so no EU profile with isolation: simple EU uses the plugins of Standard.
-check "the EU plugins step is not needed on a new Mac (simple EU)" 'wait_for "setup event: state 15 ok" 5'
+check "the EU plugins step is not needed on a new Mac (simple EU)" 'wait_for "setup event: state eu-plugins ok" 5'
 shot 1-check
 
 act setup-install
-check "step 1: the Xcode tools install (simulated system window)" 'wait_for "setup event: done 1 " 40'
-check "step 2: the installer asks for the Anaconda license" 'wait_for "setup event: ask 2 " 20'
+check "step 1 (xcode): the Xcode tools install (simulated system window)" 'wait_for "setup event: done xcode " 40'
+check "step 2 (anaconda): the installer asks for the Anaconda license" 'wait_for "setup event: ask anaconda " 20'
 shot 2-anaconda-license
 act setup-answer-yes
-check "step 2: Anaconda installs after Accept" 'wait_for "setup event: done 2 " 30'
-check "step 3: the GitHub CLI installs" 'wait_for "setup event: done 3 " 30'
-check "step 4: the GitHub login starts" 'wait_for "setup event: running 4 " 10'
+check "step 2 (anaconda): Anaconda installs after Accept" 'wait_for "setup event: done anaconda " 30'
+check "step 3 (gh): the GitHub CLI installs" 'wait_for "setup event: done gh " 30'
+check "step 4 (github-login): the GitHub login starts" 'wait_for "setup event: running github-login " 10'
 sleep 2
 shot 3-github-code
 act setup-enter
-check "step 4: the GitHub login completes after Open GitHub" 'wait_for "setup event: done 4 " 20'
-check "step 5: access to the Zeus repos" 'wait_for "setup event: done 5 " 20'
-check "step 6: Node.js installs" 'wait_for "setup event: done 6 " 60'
-check "step 7: Claude Code installs" 'wait_for "setup event: done 7 " 30'
-check "step 8: content-cli installs" 'wait_for "setup event: done 8 " 30'
-check "step 9: the Zeus workspace is cloned" 'wait_for "setup event: done 9 " 30'
-check "step 10: the Zeus Editor plugin installs" 'wait_for "setup event: done 10 " 30'
-check "step 11: the zeus command installs" 'wait_for "setup event: done 11 " 30'
-check "step 12: the Zeus skill plugins install" 'wait_for "setup event: done 12 " 90'
-check "step 13: the Claude login starts" 'wait_for "setup event: running 13 " 10'
+check "step 4 (github-login): the GitHub login completes after Open GitHub" 'wait_for "setup event: done github-login " 20'
+check "step 5 (repo-access): access to the Zeus repos" 'wait_for "setup event: done repo-access " 20'
+check "step 6 (node): Node.js installs" 'wait_for "setup event: done node " 60'
+check "step 7 (claude): Claude Code installs" 'wait_for "setup event: done claude " 30'
+check "step 8 (content-cli): content-cli installs" 'wait_for "setup event: done content-cli " 30'
+check "step 9 (workspace): the Zeus workspace is cloned" 'wait_for "setup event: done workspace " 30'
+check "step 10 (editor-plugin): the Zeus Editor plugin installs" 'wait_for "setup event: done editor-plugin " 30'
+check "step 11 (zeus-command): the zeus command installs" 'wait_for "setup event: done zeus-command " 30'
+check "step 12 (skill-plugins): the Zeus skill plugins install" 'wait_for "setup event: done skill-plugins " 90'
+check "step 13 (claude-login): the Claude login starts" 'wait_for "setup event: running claude-login " 10'
 sleep 1.5
 shot 4-claude-login
-check "step 13: the Claude login completes" 'wait_for "setup event: done 13 " 30'
-check "step 14: the Google Cloud CLI installs in ~/google-cloud-sdk" 'wait_for "setup event: done 14 " 30 && [ -x "$SANDBOX/google-cloud-sdk/bin/gcloud" ]'
-check "step 15: without an open EU vault, the EU plugins wait, and the setup writes nothing in ~/.zeus/eu" \
-  'wait_for "setup event: skipped 15 Zeus plugins of EU mode (EU vault not open)" 30 && [ ! -e "$SANDBOX/.zeus/eu" ] && [ ! -e "$SANDBOX/Code/zeus-eu" ]'
-check "step 16: the installer asks for the Google sign-in of EU mode" 'wait_for "setup event: ask 16 " 20'
+check "step 13 (claude-login): the Claude login completes" 'wait_for "setup event: done claude-login " 30'
+check "step 14 (gcloud): the Google Cloud CLI installs in ~/google-cloud-sdk" 'wait_for "setup event: done gcloud " 30 && [ -x "$SANDBOX/google-cloud-sdk/bin/gcloud" ]'
+check "step 15 (eu-plugins): without an open EU vault, the EU plugins wait, and the setup writes nothing in ~/.zeus/eu" \
+  'wait_for "setup event: skipped eu-plugins Zeus plugins of EU mode (EU vault not open)" 30 && [ ! -e "$SANDBOX/.zeus/eu" ] && [ ! -e "$SANDBOX/Code/zeus-eu" ]'
+check "step 16 (google-sign-in): the installer asks for the Google sign-in of EU mode" 'wait_for "setup event: ask google-sign-in " 20'
 shot 5-google-question
 act setup-answer-yes
-check "step 16: the Google sign-in runs, then the EU project becomes the quota project" \
-  'wait_for "setup event: done 16 Google sign-in (EU mode, sim@example.com)" 30 && grep -q "^auth application-default login$" "$STATE/gcloud.log" && grep -q "\"quota_project_id\": \"project-4bf0bacd-fec4-406b-a99\"" "$SANDBOX/.config/gcloud/application_default_credentials.json"'
+check "step 16 (google-sign-in): the Google sign-in runs, then the EU project becomes the quota project" \
+  'wait_for "setup event: done google-sign-in Google sign-in (EU mode, sim@example.com)" 30 && grep -q "^auth application-default login$" "$STATE/gcloud.log" && grep -q "\"quota_project_id\": \"project-4bf0bacd-fec4-406b-a99\"" "$SANDBOX/.config/gcloud/application_default_credentials.json"'
 check "the access check gets the token in files, never on the command line" 'grep -q ":testIamPermissions" "$STATE/curl.log" && ! grep -q "sim-access-token" "$STATE/curl.log"'
 check "the setup finishes" 'wait_for "setup ended: check=false code=0" 20'
+check "the run ends with end ok, and the app shows it as a finished setup" 'wait_for "setup event: end ok" 5 && wait_for "setup result: ok" 5'
+check "each step has a result of this run: done or skipped" \
+  'wait_for "setup states: " 5 && ! grep "setup states: " "$TRACE" | tail -1 | grep -qE "=(unknown|todo|always|running|failed|ok)( |$)"'
+check "no line of the installer was refused" '! grep -q "setup event refused" "$TRACE"'
 shot 5-finished
 check "the installer wrote only into the simulated home folder" '[ -x "$SANDBOX/.local/bin/zeus" ] && [ -d "$SANDBOX/Code/zeus/.git" ]'
 # The EU plugins step with an open vault (the EU vault scenario runs it in a real vault): ZEUS_INSTALL_TEST_EU_VAULT_OPEN.
@@ -304,16 +308,16 @@ eu_install() {
   env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" \
     ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 ZEUS_INSTALL_TEST_EU_VAULT_OPEN=1 "$@"
 }
-check "with an open EU vault, step 15 installs the Zeus plugins in the EU Claude Code folder" \
-  'eu_install bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; install_eu" _ "$REPO_DIR/install.sh" >"$WORK/eu-install.out" 2>&1 && grep -q "^@@zeus done 15 Zeus plugins of EU mode" "$WORK/eu-install.out" && grep -q "zeus-editor@zeus-editor" "$SANDBOX/.zeus/eu/claude/plugins/installed_plugins.json" && grep -q "celonis-pql@celonis-pql" "$SANDBOX/.zeus/eu/claude/plugins/installed_plugins.json"'
+check "with an open EU vault, the step eu-plugins installs the Zeus plugins in the EU Claude Code folder" \
+  'eu_install bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; run_install_step gcloud; run_install_step eu-plugins; run_install_step google-sign-in" _ "$REPO_DIR/install.sh" >"$WORK/eu-install.out" 2>&1 && grep -q "^@@zeus done eu-plugins Zeus plugins of EU mode" "$WORK/eu-install.out" && grep -q "zeus-editor@zeus-editor" "$SANDBOX/.zeus/eu/claude/plugins/installed_plugins.json" && grep -q "celonis-pql@celonis-pql" "$SANDBOX/.zeus/eu/claude/plugins/installed_plugins.json"'
 check "the EU plugins are installed apart from the Standard plugins" '[ "$(ls "$STATE" | grep -c "^eu-plugin-")" = 4 ] && [ "$(ls "$STATE" | grep -c "^plugin-")" = 4 ]'
 check "EU Claude Code starts without the first-start questions in the shared workspace ~/Code/zeus" \
   'python3 -c "import json,os,sys; c=json.load(open(sys.argv[1])); p=c[\"projects\"][os.path.realpath(sys.argv[2])]; sys.exit(0 if c[\"hasCompletedOnboarding\"] and p[\"hasTrustDialogAccepted\"] and p[\"hasClaudeMdExternalIncludesWarningShown\"] and not p[\"hasClaudeMdExternalIncludesApproved\"] and len(c[\"projects\"])==1 else 1)" "$SANDBOX/.zeus/eu/claude/.claude.json" "$SANDBOX/Code/zeus"'
 check "the EU setup changes no shell profile" '! grep -qs "google-cloud-sdk\|zeus-eu\|CLOUDSDK\|CLAUDE_CONFIG_DIR\|\.zeus/eu" "$SANDBOX/.zprofile" "$SANDBOX/.zshrc" "$SANDBOX/.bash_profile" "$SANDBOX/.bashrc"'
 check "install.sh --check then finds the EU steps done" \
-  '[ "$(eu_install bash "$REPO_DIR/install.sh" --check 2>&1 | grep -c "@@zeus state 1[456] ok")" = 3 ]'
+  '[ "$(eu_install bash "$REPO_DIR/install.sh" --check 2>&1 | grep -cE "@@zeus state (gcloud|eu-plugins|google-sign-in) ok")" = 3 ]'
 check "install.sh --check without an open vault says that the EU plugins step waits" \
-  'env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check >"$WORK/check-locked.out" 2>&1; grep -q "@@zeus state 15 always" "$WORK/check-locked.out"'
+  'env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check >"$WORK/check-locked.out" 2>&1; grep -q "@@zeus state eu-plugins always" "$WORK/check-locked.out"'
 
 act setup-start
 if [ -n "$SHOTS" ]; then
@@ -899,12 +903,14 @@ echo "Scenario 5: the account has no access to one private repo"
 start_app noaccess ZEUS_SIM_NO_ACCESS=theo-henry/celonis-pql
 check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 act setup-install
-wait_for "setup event: ask 2 " 40 >/dev/null && act setup-answer-yes
-wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && act setup-enter
-check "step 5 fails and names the missing access" 'wait_for "setup event: failed 5 " 40'
+wait_for "setup event: ask anaconda " 40 >/dev/null && act setup-answer-yes
+wait_for "setup event: running github-login " 40 >/dev/null && sleep 1 && act setup-enter
+check "step 5 (repo-access) fails and names the missing access" 'wait_for "setup event: failed repo-access " 40'
 check "the setup stops with an error" 'wait_for "setup ended: check=false code=1" 20'
+check "the run ends with end failed, and the result names the failed step" \
+  'wait_for "setup event: end failed" 5 && wait_for "setup result: failed(Zeus.SetupSteps.Failure.step(\"repo-access\"))" 5'
 shot 7-no-access
-check "nothing after step 5 is installed" '[ ! -d "$SANDBOX/.local/node" ] && [ ! -d "$SANDBOX/Code/zeus" ]'
+check "nothing after step 5 (repo-access) is installed" '[ ! -d "$SANDBOX/.local/node" ] && [ ! -d "$SANDBOX/Code/zeus" ]'
 stop_app
 
 echo
@@ -913,12 +919,14 @@ echo "Scenario 5b: an EU step fails, and the Standard setup still completes"
 start_app eu-step-fails ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL=1
 check "the setup window checks this Mac" 'wait_for "setup ended: check=true code=0" 30'
 act setup-install
-wait_for "setup event: ask 2 " 40 >/dev/null && act setup-answer-yes
-wait_for "setup event: running 4 " 40 >/dev/null && sleep 1 && act setup-enter
-check "step 14 fails: the Google Cloud CLI download fails" 'wait_for "setup event: failed 14 The download of google-cloud-cli-" 120 && [ ! -e "$SANDBOX/google-cloud-sdk" ]'
-check "the later EU steps still run" 'wait_for "setup event: skipped 15 " 30'
-check "step 16 fails without the Google Cloud CLI, and asks nothing" 'wait_for "setup event: failed 16 The Google Cloud CLI is not installed" 30 && ! grep -q "setup event: ask 16 " "$TRACE"'
+wait_for "setup event: ask anaconda " 40 >/dev/null && act setup-answer-yes
+wait_for "setup event: running github-login " 40 >/dev/null && sleep 1 && act setup-enter
+check "step 14 (gcloud) fails: the Google Cloud CLI download fails" 'wait_for "setup event: failed gcloud The download of google-cloud-cli-" 120 && [ ! -e "$SANDBOX/google-cloud-sdk" ]'
+check "the later EU steps still run" 'wait_for "setup event: skipped eu-plugins " 30'
+check "step 16 (google-sign-in) fails without the Google Cloud CLI, and asks nothing" 'wait_for "setup event: failed google-sign-in The Google Cloud CLI is not installed" 30 && ! grep -q "setup event: ask google-sign-in " "$TRACE"'
 check "the setup completes without an error" 'wait_for "setup ended: check=false code=0" 20 && [ "$(grep -c "setup event: failed " "$TRACE")" = 2 ]'
+check "the failed EU steps stay failed in a finished setup" \
+  'wait_for "setup result: ok" 5 && grep "setup states: " "$TRACE" | tail -1 | grep -q "gcloud=failed .*google-sign-in=failed"'
 shot 7b-eu-step-failed
 act setup-start
 check "Standard mode starts" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
@@ -926,14 +934,14 @@ act test-mode:eu
 check "EU mode names the missing Google Cloud CLI" 'wait_for "mode: EU setup missing: .*the Google Cloud CLI" 10'
 act test-alert:1
 check "in Terminal use, a failed EU step is a warning, and the steps after it run" \
-  'out="$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; install_eu; echo after-eu; printf \"%s\\n\" \"\${SUMMARY[@]}\"" _ "$REPO_DIR/install.sh" 2>&1)" && printf "%s" "$out" | grep -q "^after-eu$" && printf "%s" "$out" | grep -q "Warning:.*google-cloud-cli" && printf "%s" "$out" | grep -q "^warning   Google Cloud CLI (not set up; EU mode only)$" && ! printf "%s" "$out" | grep -q "Stopped:"'
+  'out="$(env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_SIM_PAYLOAD="$SIM_DIR/payload" ZEUS_SIM_INSTALLER="$REPO_DIR/install.sh" ZEUS_SIM_GCLOUD_DOWNLOAD_FAIL=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; run_install_step gcloud; run_install_step eu-plugins; run_install_step google-sign-in; echo after-eu; printf \"%s\\n\" \"\${SUMMARY[@]}\"" _ "$REPO_DIR/install.sh" 2>&1)" && printf "%s" "$out" | grep -q "^after-eu$" && printf "%s" "$out" | grep -q "Warning:.*google-cloud-cli" && printf "%s" "$out" | grep -q "^warning   Google Cloud CLI (not set up; EU mode only)$" && ! printf "%s" "$out" | grep -q "Stopped:"'
 blocked="$WORK/eu-config-blocked"
 mkdir -p "$blocked/.zeus" "$blocked/.claude/plugins/cache/zeus-editor/zeus-editor/sim/dist"
 : >"$blocked/.zeus/eu"
 : >"$blocked/.claude/plugins/cache/zeus-editor/zeus-editor/sim/dist/zeus.mjs"
 cp "$SIM_DIR/payload/eu-profile.json" "$blocked/.claude/plugins/cache/zeus-editor/zeus-editor/sim/eu-profile.json"
 check "an EU step that fails without its own message (an EU config folder that can not be made) is reported failed, and the setup goes on" \
-  'out="$(env HOME="$blocked" PATH="$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_INSTALL_APP=1 ZEUS_INSTALL_TEST_EU_VAULT_OPEN=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; eu_step install_eu_plugins \"Zeus plugins of EU mode\"; echo after-eu; printf \"%s\\n\" \"\${SUMMARY[@]}\"" _ "$REPO_DIR/install.sh" 2>&1)" && [ "$(printf "%s\n" "$out" | grep -c "^@@zeus failed ")" = 1 ] && printf "%s" "$out" | grep -q "^@@zeus failed 15 Zeus plugins of EU mode could not be set up" && printf "%s" "$out" | grep -q "^after-eu$" && printf "%s" "$out" | grep -q "^warning   Zeus plugins of EU mode (not set up; EU mode only)$"'
+  'out="$(env HOME="$blocked" PATH="$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_INSTALL_APP=1 ZEUS_INSTALL_TEST_EU_VAULT_OPEN=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; run_install_step eu-plugins; echo after-eu; printf \"%s\\n\" \"\${SUMMARY[@]}\"" _ "$REPO_DIR/install.sh" 2>&1)" && [ "$(printf "%s\n" "$out" | grep -c "^@@zeus failed ")" = 1 ] && printf "%s" "$out" | grep -q "^@@zeus failed eu-plugins Zeus plugins of EU mode could not be set up" && printf "%s" "$out" | grep -q "^after-eu$" && printf "%s" "$out" | grep -q "^warning   Zeus plugins of EU mode (not set up; EU mode only)$"'
 stop_app
 
 echo

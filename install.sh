@@ -108,37 +108,122 @@ ZEUS_APP_REPO="${ZEUS_APP_REPO:-$ZEUS_REPO}"
 APP_BUNDLE_ID="io.github.theo-henry.zeus"
 APP_ONLY=""
 if [ "${1:-}" = "--app-only" ]; then APP_ONLY=1; fi
-# Terminal use: steps 12 to 14 set up EU mode, and step 15 installs the Zeus app. App mode: steps 12 and 13 finish the
-# setup that the app needs, and steps 14 to 16 set up EU mode.
-# --app-only: step 6 installs the Zeus app, and the app does steps 6 to 16 in its setup window.
-TOTAL_STEPS=15
-EU_FIRST_STEP=12
-if [ -n "$APP_MODE" ]; then TOTAL_STEPS=16; EU_FIRST_STEP=14; fi
-if [ -n "$APP_ONLY" ]; then TOTAL_STEPS=6; fi
-# The Google sign-in is the last EU step: the last step in app mode, and the step before the Zeus app in Terminal use.
-EU_SIGN_IN_STEP=$((TOTAL_STEPS - 1))
-if [ -n "$APP_MODE" ]; then EU_SIGN_IN_STEP=$TOTAL_STEPS; fi
-CURRENT_STEP=0
+# The step table: the one list of the installer steps, in the order that they run. Each line: the key, the modes, the
+# function, and the title. The modes are t (Terminal use), a (app mode, ZEUS_INSTALL_APP=1), and o (--app-only); "-"
+# keeps the columns aligned. The number of a step is its place among the steps of the mode, so a new step is one new
+# line here and one function. main runs the steps of the mode from this table (run_steps). The "@@zeus" lines for the
+# app use the key, never the number: the app gets the keys and their order in the "plan" line.
+# Terminal use: the EU steps come after the zeus command, then the Zeus app. App mode: the Zeus skill plugins and the
+# Claude login come before the EU steps. --app-only: the Zeus app comes after the access check, and the app does the
+# other steps in its setup window.
+STEP_TABLE='
+xcode           tao  install_xcode_tools    Git (Xcode Command Line Tools)
+anaconda        tao  install_anaconda       Python (Anaconda)
+gh              tao  install_gh             GitHub CLI
+github-login    tao  login_github           GitHub login
+repo-access     tao  check_access           Access to the Zeus repos
+node            ta-  install_node           Node.js
+claude          ta-  install_claude         Claude Code
+content-cli     ta-  install_content_cli    Celonis content-cli
+workspace       ta-  clone_zeus             Zeus repo
+editor-plugin   ta-  install_editor_plugin  Zeus Editor plugin
+zeus-command    ta-  install_zeus_command   The zeus command
+skill-plugins   -a-  install_skill_plugins  Zeus skill plugins
+claude-login    -a-  login_claude           Claude login
+gcloud          ta-  eu_install_gcloud      Google Cloud CLI (EU mode)
+eu-plugins      ta-  eu_install_eu_plugins  Zeus plugins of EU mode
+google-sign-in  ta-  eu_sign_in_google      Google sign-in (EU mode)
+app             t-o  install_zeus_app       Zeus app
+'
+STEP_MODE=t
+if [ -n "$APP_MODE" ]; then STEP_MODE=a; fi
+if [ -n "$APP_ONLY" ]; then STEP_MODE=o; fi
+
+# Prints one line for each step of this mode, in run order: "<number> <key> <function> <title>".
+step_rows() {
+  local key modes fn title number=0
+  while read -r key modes fn title; do
+    [ -n "$key" ] || continue
+    case "$modes" in
+      *"$STEP_MODE"*)
+        number=$((number + 1))
+        printf '%s %s %s %s\n' "$number" "$key" "$fn" "$title"
+        ;;
+    esac
+  done <<<"$STEP_TABLE"
+}
+
+TOTAL_STEPS="$(step_rows | wc -l | tr -d ' ')"
+# The key of the step that runs; empty before the first step and after a step reported its result (record).
+CURRENT_STEP=""
+# Set when the "plan" line was printed: the run then ends with one "end" line (end_run).
+RUN_PLANNED=""
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 
-# Prints one line for Zeus.app in app mode: "@@zeus <event> <step> <text>". Prints nothing in Terminal use.
+# Prints one line for Zeus.app in app mode: "@@zeus <event> <key> <text>". Prints nothing in Terminal use.
+# The events (app/Sources/Zeus/SetupSteps.swift reads them and owns the legal order):
+#   plan <key>...                  the first line of a run: the steps of app mode, in order (plan_run)
+#   state <key> ok|todo|always     --check: the result of the check of one step (check_steps)
+#   running <key> <title>          a step starts (step)
+#   done|skipped <key> <text>      the step ends (record)
+#   failed <key>|- <message>       the step fails; "-" is a failure outside a step (fail)
+#   ask <key> <question>           the step asks yes or no (ask)
+#   end ok|failed                  the last line of a run: the run result (end_run)
 emit() {
   # On stderr, so that a line from inside a command substitution, such as ask, is not captured.
   if [ -n "$APP_MODE" ]; then printf '@@zeus %s\n' "$*" >&2; fi
 }
 
-# step <number> <name>
+# The first line of a run in app mode: the keys of the steps, in order.
+plan_run() {
+  local keys
+  keys="$(step_rows | awk '{ printf "%s%s", (NR > 1 ? " " : ""), $2 }')"
+  RUN_PLANNED=1
+  emit "plan $keys"
+}
+
+# The EXIT trap of main: the last line of a planned run carries its result, then the work folder goes.
+# Argument: the exit status of the installer.
+end_run() {
+  if [ -n "$RUN_PLANNED" ]; then
+    if [ "$1" -eq 0 ]; then emit "end ok"; else emit "end failed"; fi
+  fi
+  cleanup
+}
+
+# step <key>: starts the step of the table with this key.
 step() {
-  CURRENT_STEP="$1"
+  local row number key fn title
+  row="$(step_rows | awk -v key="$1" '$2 == key')"
+  if [ -z "$row" ]; then
+    fail "The installer has no step '$1' in this mode." "This is a defect of the installer. Tell $ZEUS_OWNER."
+  fi
+  read -r number key fn title <<<"$row"
+  CURRENT_STEP="$key"
   printf '\n'
-  bold "==> $1/$TOTAL_STEPS $2"
-  emit "running $1 $2"
+  bold "==> $number/$TOTAL_STEPS $title"
+  emit "running $key $title"
+}
+
+# run_install_step <key>: starts the step of the table with this key and runs its function.
+run_install_step() {
+  step "$1"
+  "$(step_rows | awk -v key="$1" '$2 == key { print $3 }')"
+}
+
+# Runs each step of this mode, in the order of the step table. The keys are read first, so that no step reads the table
+# as its input.
+run_steps() {
+  local key
+  for key in $(step_rows | awk '{ print $2 }'); do
+    run_install_step "$key"
+  done
 }
 
 fail() {
-  emit "failed $CURRENT_STEP $1"
+  emit "failed ${CURRENT_STEP:--} $1"
   local line
   if [ -n "$EU_STEP" ]; then
     printf '\n\033[1;33mWarning:\033[0m %s\n' "$1" >&2
@@ -164,9 +249,11 @@ fail() {
   exit 1
 }
 
+# record done|skipped|failed <text>: the result of the step that runs. It ends the step.
 record() {
   SUMMARY+=("$(printf '%-9s %s' "$1" "$2")")
-  emit "$1 $CURRENT_STEP $2"
+  emit "$1 ${CURRENT_STEP:--} $2"
+  CURRENT_STEP=""
 }
 
 cleanup() {
@@ -182,7 +269,7 @@ ask() {
     fail "This step needs your answer, but no keyboard is connected." \
       "Run the install line in the Terminal app."
   fi
-  emit "ask $CURRENT_STEP $prompt"
+  emit "ask ${CURRENT_STEP:--} $prompt"
   printf '    %s ' "$prompt" >&2
   IFS= read -r answer <&3 || answer=""
   exec 3<&-
@@ -321,9 +408,8 @@ find_conda() {
   return 1
 }
 
-# Step 1 - Xcode Command Line Tools (git).
+# Step xcode - Xcode Command Line Tools (git).
 install_xcode_tools() {
-  step 1 "Git (Xcode Command Line Tools)"
   local dev_dir
   if dev_dir="$(xcode-select -p 2>/dev/null)" && [ -x "$dev_dir/usr/bin/git" ]; then
     info "Already installed."
@@ -346,9 +432,8 @@ install_xcode_tools() {
   record "done" "Git (Xcode Command Line Tools)"
 }
 
-# Step 2 - Anaconda (Python and conda).
+# Step anaconda - Anaconda (Python and conda).
 install_anaconda() {
-  step 2 "Python (Anaconda)"
   if find_conda >/dev/null; then
     info "conda is already installed."
     record "skipped" "Python (Anaconda)"
@@ -396,9 +481,8 @@ install_anaconda() {
   record "done" "Python (Anaconda)"
 }
 
-# Step 3 - GitHub CLI from conda-forge, in its own environment.
+# Step gh - GitHub CLI from conda-forge, in its own environment.
 install_gh() {
-  step 3 "GitHub CLI"
   if command -v gh >/dev/null 2>&1; then
     info "Already installed."
     record "skipped" "GitHub CLI"
@@ -419,21 +503,21 @@ install_gh() {
   record "done" "GitHub CLI"
 }
 
-# Step 4 - Log in to GitHub.
+# Step github-login - Log in to GitHub. The step ends after git uses the login (gh auth setup-git).
 login_github() {
-  step 4 "GitHub login"
+  local result=skipped
   if gh auth status -h github.com >/dev/null 2>&1; then
     info "Already logged in."
-    record "skipped" "GitHub login"
   else
     info "Your browser opens. Enter the one-time code that is shown here."
     info "Log in with your GitHub password and 2FA."
     with_tty gh auth login -h github.com -p https -w ||
       fail "The GitHub login did not complete."
-    record "done" "GitHub login"
+    result=done
   fi
   gh auth setup-git -h github.com ||
     fail "'gh auth setup-git' failed."
+  record "$result" "GitHub login"
 }
 
 # Tells the user which private repos the account cannot reach, and who can fix it. Stops the install.
@@ -453,9 +537,8 @@ fail_no_access() {
   fail "Your GitHub account has no access to all the private Zeus repos." "${lines[@]}"
 }
 
-# Step 5 - Check access to every private repo that Zeus uses. This only reads. Nothing is installed.
+# Step repo-access - Check access to every private repo that Zeus uses. This only reads. Nothing is installed.
 check_access() {
-  step 5 "Access to the Zeus repos"
   local user repo
   local -a missing=()
   user="$(gh api user --jq .login 2>/dev/null)" || user="(unknown)"
@@ -474,9 +557,8 @@ check_access() {
   record "done" "Access to the Zeus repos ($user)"
 }
 
-# Step 6 - Node.js in the home folder.
+# Step node - Node.js in the home folder.
 install_node() {
-  step 6 "Node.js"
   local current=""
   if command -v node >/dev/null 2>&1; then
     current="$(node -p 'process.versions.node' 2>/dev/null || true)"
@@ -636,9 +718,8 @@ update_claude() {
   fi
 }
 
-# Step 7 - Claude Code. An installed Claude Code is updated.
+# Step claude - Claude Code. An installed Claude Code is updated.
 install_claude() {
-  step 7 "Claude Code"
   if command -v claude >/dev/null 2>&1 || [ -x "$LOCAL_BIN/claude" ]; then
     update_claude
     return
@@ -664,9 +745,8 @@ npm_install_content_cli() {
   return 1
 }
 
-# Step 8 - Celonis content-cli.
+# Step content-cli - Celonis content-cli.
 install_content_cli() {
-  step 8 "Celonis content-cli"
   if command -v content-cli >/dev/null 2>&1; then
     info "Already installed."
     record "skipped" "Celonis content-cli"
@@ -697,7 +777,7 @@ install_content_cli() {
   record "done" "Celonis content-cli"
 }
 
-# Step 9 - Clone the zeus repo.
+# Step workspace - Clone the zeus repo.
 # Brings an existing clone up to date with the reviewed updater from origin/main
 # (.claude/hooks/zeus_update.py --now): a fast-forward only, local work is never discarded, and when
 # it cannot update it gives one step. An older origin/main without that updater keeps the clone as it is;
@@ -764,12 +844,11 @@ clone_workspace() {
 }
 
 clone_zeus() {
-  step 9 "Zeus repo"
   # shellcheck disable=SC2088 # A name for the user, not a path.
   clone_workspace "$ZEUS_DIR" "~/Code/zeus"
 }
 
-# The shim for step 11. The quoted heredoc keeps every $ as it is.
+# The shim of the step zeus-command. The quoted heredoc keeps every $ as it is.
 write_zeus_shim() {
   cat <<'SHIM'
 #!/bin/sh
@@ -789,10 +868,9 @@ exec node "$newest" "$@"
 SHIM
 }
 
-# Step 10 - The Zeus Editor plugin, for the current user (all folders).
-# Step 5 already checked access to the private repo.
+# Step editor-plugin - The Zeus Editor plugin, for the current user (all folders).
+# The step repo-access already checked access to the private repo.
 install_editor_plugin() {
-  step 10 "Zeus Editor plugin"
   # Adding a marketplace that exists is safe. The update then fetches the newest version.
   claude plugin marketplace add "$EDITOR_REPO" --scope user </dev/null >"$LOG_DIR/zeus-editor.log" 2>&1 ||
     fail "The Zeus Editor marketplace could not be added." "See the log: $LOG_DIR/zeus-editor.log"
@@ -811,9 +889,8 @@ install_editor_plugin() {
   fi
 }
 
-# Step 11 - The zeus command.
+# Step zeus-command - The zeus command.
 install_zeus_command() {
-  step 11 "The zeus command"
   local shim="$LOCAL_BIN/zeus" expected
   expected="$(write_zeus_shim)"
   if [ -x "$shim" ] && [ "$(cat "$shim")" = "$expected" ]; then
@@ -829,7 +906,7 @@ install_zeus_command() {
   record "done" "The zeus command"
 }
 
-# EU mode, steps 12 to 14 (terminal use) or 14 to 16 (app mode). The same on every Mac; no shell profile changes.
+# EU mode, the steps gcloud, eu-plugins, and google-sign-in. The same on every Mac; no shell profile changes.
 
 # Prints the first gcloud in the places where Zeus Editor's EU check looks (src/eu/preflight.js): PATH, then the usual
 # install folders.
@@ -914,10 +991,9 @@ gcloud_python_note() {
   info "To use gcloud in Terminal, add this line to your shell profile: export CLOUDSDK_PYTHON=$GCLOUD_PYTHON_FIXED"
 }
 
-# Step 12/14 - The Google Cloud CLI, for the Google sign-in of EU mode. Claude Code itself reads the sign-in file.
+# Step gcloud - The Google Cloud CLI, for the Google sign-in of EU mode. Claude Code itself reads the sign-in file.
 # A gcloud that is there must also run (gcloud_must_run).
 install_gcloud() {
-  step "$EU_FIRST_STEP" "Google Cloud CLI (EU mode)"
   local found
   if found="$(find_gcloud)"; then
     gcloud_must_run "$found"
@@ -1082,14 +1158,13 @@ if os.path.exists(record):
 PY
 }
 
-# Step 13/15 - The Zeus plugins in the EU Claude Code folder, in the EU vault. EU Claude Code reads its plugins, settings,
-# and chats there only, never from ~/.claude. Each run updates them, as step 10 does for Standard. While the vault is
+# Step eu-plugins - The Zeus plugins in the EU Claude Code folder, in the EU vault. EU Claude Code reads its plugins,
+# settings, and chats there only, never from ~/.claude. Each run updates them, as the step editor-plugin does for Standard. While the vault is
 # locked (or not made yet), the step waits: the Zeus app asks for the setup again after it opened the vault.
 # Simple EU (no isolation) uses the Standard Claude Code folder and its plugins: the step has nothing to do.
 install_eu_plugins() {
-  step $((EU_FIRST_STEP + 1)) "Zeus plugins of EU mode"
   if ! eu_isolated; then
-    info "Not needed: EU mode uses the Zeus plugins of Standard (step 10 and 12)."
+    info "Not needed: EU mode uses the Zeus plugins of Standard (the Zeus Editor plugin and the Zeus skill plugins)."
     record "skipped" "Zeus plugins of EU mode (not needed)"
     return
   fi
@@ -1228,11 +1303,10 @@ eu_no_access() {
     "To use another Google account, run: gcloud auth application-default login"
 }
 
-# Step 15/17 - The Google sign-in of EU mode: `gcloud auth application-default login` (the browser opens), the access
+# Step google-sign-in - The Google sign-in of EU mode: `gcloud auth application-default login` (the browser opens), the access
 # check, and the EU project as the quota project, as the sign-in button of the Zeus app does. A Mac that is already signed
 # in gets no question. Without access, the step gives the message for the roles; the setup goes on.
 sign_in_google() {
-  step "$EU_SIGN_IN_STEP" "Google sign-in (EU mode)"
   EU_GCLOUD="$(find_gcloud)" ||
     fail "The Google Cloud CLI is not installed, so the Google sign-in of EU mode cannot run."
   local signed_in="" status=0
@@ -1294,6 +1368,8 @@ eu_step() {
   )
   status=$?
   set -e
+  # The subshell ended the step (record or fail).
+  CURRENT_STEP=""
   while IFS= read -r line; do SUMMARY+=("$line"); done <"$summary"
   if [ "$status" -ne 0 ]; then
     SUMMARY+=("$(printf '%-9s %s' "warning" "$2 (not set up; EU mode only)")")
@@ -1307,20 +1383,18 @@ eu_step_exit() {
   fi
 }
 
-install_eu() {
-  eu_step install_gcloud "Google Cloud CLI"
-  eu_step install_eu_plugins "Zeus plugins of EU mode"
-  eu_step sign_in_google "Google sign-in of EU mode"
-}
+# The EU steps of the step table.
+eu_install_gcloud() { eu_step install_gcloud "Google Cloud CLI"; }
+eu_install_eu_plugins() { eu_step install_eu_plugins "Zeus plugins of EU mode"; }
+eu_sign_in_google() { eu_step sign_in_google "Google sign-in of EU mode"; }
 
-# Step 12 (app mode) - The Zeus skill plugins, for the current user, like the Zeus Editor plugin.
-# Step 5 already checked access to the private repos.
+# Step skill-plugins (app mode) - The Zeus skill plugins, for the current user, like the Zeus Editor plugin.
+# The step repo-access already checked access to the private repos.
 skill_plugin_installed() {
   claude plugin list </dev/null 2>/dev/null | grep -qF "$1"
 }
 
 install_skill_plugins() {
-  step 12 "Zeus skill plugins"
   local entry plugin repo marketplace installed=0
   for entry in $SKILL_PLUGINS; do
     plugin="${entry%%:*}"
@@ -1344,7 +1418,7 @@ install_skill_plugins() {
   fi
 }
 
-# Step 13 (app mode) - Log in to Claude.
+# Step claude-login (app mode) - Log in to Claude.
 claude_logged_in() {
   claude auth status </dev/null 2>/dev/null | grep -q '"loggedIn": *true'
 }
@@ -1401,7 +1475,6 @@ fail_keychain() {
 }
 
 login_claude() {
-  step 13 "Claude login"
   if claude_logged_in; then
     info "Already logged in."
     record "skipped" "Claude login"
@@ -1430,24 +1503,24 @@ login_claude() {
   record "done" "Claude login"
 }
 
-# --check (app mode): one "@@zeus state <step> ok|todo|always" line for each step. Installs nothing.
+# --check (app mode): one "@@zeus state <key> ok|todo|always" line for each step of app mode. Installs nothing.
 # "always" is a step that runs every time (the access check and the plugin update).
 check_steps() {
   local dev_dir current
   state() { emit "state $1 $2"; }
-  if dev_dir="$(xcode-select -p 2>/dev/null)" && [ -x "$dev_dir/usr/bin/git" ]; then state 1 ok; else state 1 todo; fi
-  if find_conda >/dev/null || { python_ok && command -v gh >/dev/null 2>&1; }; then state 2 ok; else state 2 todo; fi
-  if command -v gh >/dev/null 2>&1; then state 3 ok; else state 3 todo; fi
-  if command -v gh >/dev/null 2>&1 && gh auth status -h github.com >/dev/null 2>&1; then state 4 ok; else state 4 todo; fi
-  state 5 always
+  if dev_dir="$(xcode-select -p 2>/dev/null)" && [ -x "$dev_dir/usr/bin/git" ]; then state xcode ok; else state xcode todo; fi
+  if find_conda >/dev/null || { python_ok && command -v gh >/dev/null 2>&1; }; then state anaconda ok; else state anaconda todo; fi
+  if command -v gh >/dev/null 2>&1; then state gh ok; else state gh todo; fi
+  if command -v gh >/dev/null 2>&1 && gh auth status -h github.com >/dev/null 2>&1; then state github-login ok; else state github-login todo; fi
+  state repo-access always
   current=""
   if command -v node >/dev/null 2>&1; then current="$(node -p 'process.versions.node' 2>/dev/null || true)"; fi
-  if [ -n "$current" ] && version_at_least "$current" "$NODE_MIN_VERSION"; then state 6 ok; else state 6 todo; fi
-  if command -v claude >/dev/null 2>&1 || [ -x "$LOCAL_BIN/claude" ]; then state 7 ok; else state 7 todo; fi
-  if command -v content-cli >/dev/null 2>&1; then state 8 ok; else state 8 todo; fi
-  if [ -d "$ZEUS_DIR/.git" ]; then state 9 ok; else state 9 todo; fi
-  if command -v claude >/dev/null 2>&1 && skill_plugin_installed "$EDITOR_PLUGIN"; then state 10 ok; else state 10 todo; fi
-  if [ -x "$LOCAL_BIN/zeus" ] && [ "$(cat "$LOCAL_BIN/zeus")" = "$(write_zeus_shim)" ]; then state 11 ok; else state 11 todo; fi
+  if [ -n "$current" ] && version_at_least "$current" "$NODE_MIN_VERSION"; then state node ok; else state node todo; fi
+  if command -v claude >/dev/null 2>&1 || [ -x "$LOCAL_BIN/claude" ]; then state claude ok; else state claude todo; fi
+  if command -v content-cli >/dev/null 2>&1; then state content-cli ok; else state content-cli todo; fi
+  if [ -d "$ZEUS_DIR/.git" ]; then state workspace ok; else state workspace todo; fi
+  if command -v claude >/dev/null 2>&1 && skill_plugin_installed "$EDITOR_PLUGIN"; then state editor-plugin ok; else state editor-plugin todo; fi
+  if [ -x "$LOCAL_BIN/zeus" ] && [ "$(cat "$LOCAL_BIN/zeus")" = "$(write_zeus_shim)" ]; then state zeus-command ok; else state zeus-command todo; fi
   local entry all=ok
   if command -v claude >/dev/null 2>&1; then
     for entry in $SKILL_PLUGINS; do
@@ -1456,24 +1529,23 @@ check_steps() {
   else
     all=todo
   fi
-  state 12 "$all"
-  if command -v claude >/dev/null 2>&1 && claude_logged_in; then state 13 ok; else state 13 todo; fi
+  state skill-plugins "$all"
+  if command -v claude >/dev/null 2>&1 && claude_logged_in; then state claude-login ok; else state claude-login todo; fi
   local gcloud
-  if gcloud="$(find_gcloud)" && gcloud_runs "$gcloud"; then state 14 ok; else state 14 todo; fi
+  if gcloud="$(find_gcloud)" && gcloud_runs "$gcloud"; then state gcloud ok; else state gcloud todo; fi
   # Simple EU needs no EU plugins. With isolation, the EU plugins are in the EU vault: while it is not open, the step runs
   # at each setup and waits for the vault.
   if ! eu_isolated; then
-    state 15 ok
+    state eu-plugins ok
   elif ! eu_vault_open; then
-    state 15 always
-  elif command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state 15 ok; else state 15 todo; fi
+    state eu-plugins always
+  elif command -v claude >/dev/null 2>&1 && eu_plugins_installed && eu_first_start_done; then state eu-plugins ok; else state eu-plugins todo; fi
   # No network here: a sign-in with the EU quota project. The step itself checks the access.
   if [ -f "$ADC_FILE" ] && [ "$(adc_quota_project)" = "$EU_VERTEX_PROJECT" ]; then
-    state "$EU_SIGN_IN_STEP" ok
+    state google-sign-in ok
   else
-    state "$EU_SIGN_IN_STEP" todo
+    state google-sign-in todo
   fi
-  emit "checked"
 }
 
 # Prints the tag of the newest Zeus app release ("app-v<version>") in $ZEUS_APP_REPO.
@@ -1824,12 +1896,11 @@ zeus_app_failed() {
   record "failed" "Zeus app"
 }
 
-# Step 12 (Terminal use) or step 6 (--app-only) - The Zeus app. It opens Zeus without Terminal and finishes
-# the setup in its own window. Step 5 already checked access to the private repo with the app releases.
+# Step app (Terminal use and --app-only) - The Zeus app. It opens Zeus without Terminal and finishes
+# the setup in its own window. The step repo-access already checked access to the private repo with the app releases.
 # An installed app is updated to the newest release. The update changes only the app: the Zeus folder and its
 # projects, the Zeus settings, the Claude chats, the plugins, and the app state stay as they are.
 install_zeus_app() {
-  step "$TOTAL_STEPS" "Zeus app"
   local tag
   APP_FOLDER="$(zeus_app_folder)"
   APP_INSTALLED="$APP_FOLDER/Zeus.app"
@@ -1900,7 +1971,6 @@ open_zeus_app() {
 
 print_summary() {
   if [ -n "$APP_MODE" ]; then
-    emit "finished"
     printf '\n'
     bold "Zeus install is complete."
     return
@@ -1980,9 +2050,10 @@ main() {
     return
   fi
 
+  plan_run
+  trap 'end_run $?' EXIT
   mkdir -p "$LOG_DIR"
   WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/zeus-install.XXXXXX")"
-  trap cleanup EXIT
 
   if [ "${1:-}" = "--check" ]; then
     [ -n "$APP_MODE" ] || fail "--check works only in app mode (ZEUS_INSTALL_APP=1)."
@@ -2017,30 +2088,7 @@ main() {
     require_owned "$HOME/.config" "$HOME/.config/gh" "$HOME/.local" "$LOCAL_BIN" "$HOME/.npm" "$HOME/.claude"
   fi
 
-  install_xcode_tools
-  install_anaconda
-  install_gh
-  login_github
-  check_access
-  if [ -n "$APP_ONLY" ]; then
-    install_zeus_app
-    print_summary
-    return
-  fi
-  install_node
-  install_claude
-  install_content_cli
-  clone_zeus
-  install_editor_plugin
-  install_zeus_command
-  if [ -n "$APP_MODE" ]; then
-    install_skill_plugins
-    login_claude
-    install_eu
-  else
-    install_eu
-    install_zeus_app
-  fi
+  run_steps
   print_summary
 }
 

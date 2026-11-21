@@ -270,6 +270,24 @@ app/test/lifecycle/run.sh
 
 It compiles `Sources/Zeus/AppLifecycle.swift` alone and checks each legal transition of the app phase (the start, the update at launch, and the steps of an update from the settings) and of the quit phase, and that each phase refuses every other event.
 
+## Test the setup checklist
+
+```bash
+app/test/setup-steps/run.sh
+app/test/install-steps/run.sh
+```
+
+`setup-steps` compiles `Sources/Zeus/SetupSteps.swift` alone.
+It checks how the app reads each `@@zeus` line of `install.sh`, each legal transition of the run phase and of the step state, and that each state refuses every other event.
+It checks the run result: a check or a setup succeeds only with `end ok`, exit code 0, and a result for each step.
+A step without a result never becomes a green tick, and a failure outside a step marks no step as failed.
+It also checks that the app has a name for each key of the step table of `install.sh` in app mode.
+
+`install-steps` checks the step table of `install.sh` (`STEP_TABLE`): the steps and their numbers in Terminal use, in app mode, and with `--app-only`.
+It checks that `main` runs the steps in the order of the table, and that only `run_install_step` starts a step.
+It checks the `@@zeus` lines: the plan, one check result for each step, `end ok` or `end failed`, and `failed -` for a failure outside a step.
+It checks that the GitHub login step reports its result only after `gh auth setup-git`, and that a failure after an EU step is not reported as a failure of that step.
+
 ## Test gcloud with an old Python
 
 ```bash
@@ -350,13 +368,13 @@ It also checks the EU plugin list and that the EU status line follows the Standa
 app/test/claude-update/run.sh
 ```
 
-Step 7 of `install.sh` updates an installed Claude Code with the method that installed it.
-The test runs step 7 against a simulated `claude`, `npm`, `brew`, and `sudo` in a temporary home folder, so the real Claude Code of this Mac does not change.
+Step 7 of `install.sh` (the step `claude`) updates an installed Claude Code with the method that installed it.
+The test runs that step against a simulated `claude`, `npm`, `brew`, and `sudo` in a temporary home folder, so the real Claude Code of this Mac does not change.
 It checks the native install (`claude update`), an npm install (`npm install -g` in the same prefix), and a Homebrew install (`brew upgrade --cask claude-code`).
 It checks that the summary shows the old and the new version, or "up to date".
 It checks that a failed update, an npm folder that needs `sudo`, and an update that does not finish in the time limit give a warning, never use `sudo`, and let the installer continue.
 It checks that the time limit also stops the child processes of the update.
-It also checks the `@@zeus` lines of step 7 in app mode.
+It also checks the `@@zeus` lines of the step `claude` in app mode.
 
 ## Test the environment failures
 
