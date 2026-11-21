@@ -35,42 +35,13 @@ enum Updater {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
     }
 
-    /// An update in progress, in a file that the old and the new copy of the app both read.
+    /// The update in progress, in a file that the old and the new copy of the app both read (`UpdateHandoff`).
     /// install.sh writes the same file when it updates an installed app; it is then the waiting process.
-    struct Pending: Codable {
-        var from: String
-        var to: String
-        var appPath: String
-        /// The old copy of the app, kept until the new copy confirms.
-        var backupPath: String
-        /// The folder of the update files, removed at the end.
-        var workPath: String
-        /// The old copy (or install.sh), which waits for the confirmation.
-        var waitingPID: Int32
-        /// The new copy, which writes its process ID at launch. The app that `openApplication` gives can be a
-        /// placeholder without a process (pid -1) while the new copy still starts.
-        var newPID: Int32?
-        var confirmed = false
-        /// The old copy rolled back the update and runs on. A copy that starts while the old copy runs is a late start
-        /// of the new copy (macOS can start it after the roll back, from the app path that holds the old app again),
-        /// and quits at once. Without this, that copy would update again at launch.
-        var rolledBack: Bool?
+    private static var handoffFile: UpdateHandoffFile {
+        UpdateHandoffFile(url: URL(fileURLWithPath: Paths.appSupport + "/update.json"))
     }
 
-    /// The time that the old copy keeps the roll back mark after a roll back.
-    static let lateStartWindow: TimeInterval = 120
-
-    private static var pendingURL: URL { URL(fileURLWithPath: Paths.appSupport + "/update.json") }
-
-    private static func readPending() -> Pending? {
-        (try? Data(contentsOf: pendingURL)).flatMap { try? JSONDecoder().decode(Pending.self, from: $0) }
-    }
-
-    private static func writePending(_ pending: Pending) throws {
-        try JSONEncoder().encode(pending).write(to: pendingURL, options: .atomic)
-    }
-
-    private static func removePending() { try? FileManager.default.removeItem(at: pendingURL) }
+    private static func processRuns(_ pid: Int32) -> Bool { pid > 0 && kill(pid, 0) == 0 }
 
     // MARK: The new copy
 
@@ -88,51 +59,56 @@ enum Updater {
 
     /// Called first at launch.
     static func confirmPendingUpdate() -> LaunchRole {
-        guard let pending = readPending() else { return .normal }
-        let bundlePath = Bundle.main.bundleURL.standardizedFileURL.path
-        let oldCopyRuns = kill(pending.waitingPID, 0) == 0
-        if pending.rolledBack == true {
-            if oldCopyRuns, pending.waitingPID != getpid() {
-                Trace.log("update: a late copy of the rolled back update to \(pending.to) quits")
-                return .late
-            }
-            removePending()
+        let file = handoffFile
+        guard let handoff = file.read() else { return .normal }
+        let pid = getpid()
+        let role = UpdateHandoff.role(handoff, version: currentVersion, bundlePath: Bundle.main.bundleURL.standardizedFileURL.path,
+                                      pid: pid, now: Date(), isAlive: processRuns,
+                                      exists: { FileManager.default.fileExists(atPath: $0) })
+        switch role {
+        case .normal:
             return .normal
-        }
-        if pending.to == currentVersion, pending.appPath == bundlePath {
-            var pending = pending
-            pending.newPID = getpid()
-            try? writePending(pending)
+        case .removeMark:
+            file.remove(ifStill: handoff)
+            return .normal
+        case .removeStopped:
+            Trace.log("update: removed the files of a stopped update to \(handoff.to)")
+            removeUpdateFiles(handoff)
+            return .normal
+        case .late:
+            Trace.log("update: a late copy of the rolled back update to \(handoff.to) quits")
+            return .late
+        case .newCopyAlone:
+            // The old copy stopped before it could finish the update. This copy finishes it.
+            Trace.log("update: finished \(handoff.from) -> \(handoff.to) without the old copy")
+            removeUpdateFiles(handoff)
+            return .newCopy
+        case .newCopy:
+            guard case .applied = file.apply(.newCopyStarts(pid: pid)) else { return lateAfterRollBack(handoff) }
             #if DEBUG
             if DebugEnvironment.value("ZEUS_APP_TEST_NO_CONFIRM") == "1" {
                 Trace.log("update: not confirmed (test)")
                 return .unconfirmed
             }
             #endif
-            if oldCopyRuns {
-                var confirmed = pending
-                confirmed.confirmed = true
-                try? writePending(confirmed)
-                Trace.log("update: confirmed \(pending.from) -> \(pending.to)")
-            } else {
-                // The old copy stopped before it could finish the update. This copy finishes it.
-                Trace.log("update: finished \(pending.from) -> \(pending.to) without the old copy")
-                removeUpdateFiles(pending)
-            }
+            // The old copy can roll back at the same moment (its time ran out): the transition that comes first wins.
+            guard case .applied = file.apply(.newCopyConfirms(pid: pid)) else { return lateAfterRollBack(handoff) }
+            Trace.log("update: confirmed \(handoff.from) -> \(handoff.to)")
             return .newCopy
         }
-        if !oldCopyRuns {
-            // A stopped update: the app is the old copy again, or the update files are left from an earlier launch.
-            Trace.log("update: removed the files of a stopped update to \(pending.to)")
-            if FileManager.default.fileExists(atPath: pending.appPath) { removeUpdateFiles(pending) }
-        }
-        return .normal
     }
 
-    private static func removeUpdateFiles(_ pending: Pending) {
-        try? FileManager.default.removeItem(atPath: pending.backupPath)
-        try? FileManager.default.removeItem(atPath: pending.workPath)
-        removePending()
+    /// The handoff moved on before this copy could start or confirm (the old copy rolled back the update at the same
+    /// moment): this copy quits, and the old copy runs on.
+    private static func lateAfterRollBack(_ handoff: UpdateHandoff) -> LaunchRole {
+        Trace.log("update: the update to \(handoff.to) ended before this copy confirmed; this copy quits")
+        return .late
+    }
+
+    private static func removeUpdateFiles(_ handoff: UpdateHandoff) {
+        try? FileManager.default.removeItem(atPath: handoff.backupPath)
+        try? FileManager.default.removeItem(atPath: handoff.workPath)
+        handoffFile.remove()
     }
 
     // MARK: The old copy
@@ -274,59 +250,80 @@ enum Updater {
     /// Calls `done(true)` before this copy quits, or `done(false)` after a roll back.
     static func install(_ update: Update, done: @escaping (Bool) -> Void) {
         let fileManager = FileManager.default
+        let file = handoffFile
         let bundle = Bundle.main.bundleURL.standardizedFileURL
         let backup = update.work.appendingPathComponent("previous")
-        let finish: (String) -> Void = { why in
+        // The update ends without the new app. `keepMark`: the roll back mark stays in the file.
+        let finish: (String, Bool) -> Void = { why, keepMark in
             Trace.log("update: failed: \(why)")
             try? fileManager.removeItem(at: update.work)
-            removePending()
+            if !keepMark { file.remove() }
             done(false)
             UpdateWindow.shared.close()
         }
-        let pending = Pending(from: currentVersion, to: update.version, appPath: bundle.path,
-                              backupPath: backup.appendingPathComponent("Zeus.app").path, workPath: update.work.path,
-                              waitingPID: getpid())
+        let handoff = UpdateHandoff(from: currentVersion, to: update.version, appPath: bundle.path,
+                                    backupPath: backup.appendingPathComponent("Zeus.app").path, workPath: update.work.path,
+                                    waitingPID: getpid(), stage: .swapped)
         do {
             try fileManager.createDirectory(at: backup, withIntermediateDirectories: true)
-            try writePending(pending)
+            try file.write(handoff)
         } catch {
-            return finish("cannot prepare: \(error.localizedDescription)")
+            return finish("cannot prepare: \(error.localizedDescription)", false)
         }
         // After the swap, the app path holds the new app and the update folder holds the old app.
-        guard swap(update.app, bundle) else { return finish("cannot replace the app (errno \(errno))") }
+        guard swap(update.app, bundle) else { return finish("cannot replace the app (errno \(errno))", false) }
         do {
-            try fileManager.moveItem(at: update.app, to: URL(fileURLWithPath: pending.backupPath))
+            try fileManager.moveItem(at: update.app, to: URL(fileURLWithPath: handoff.backupPath))
         } catch {
             _ = swap(update.app, bundle)
-            return finish("cannot keep the old app: \(error.localizedDescription)")
+            return finish("cannot keep the old app: \(error.localizedDescription)", false)
         }
         Trace.log("update: installed \(update.version), starting it")
 
+        let finishConfirmed = {
+            Trace.log("update: done \(currentVersion) -> \(update.version)")
+            removeUpdateFiles(handoff)
+            UpdateWindow.shared.close()
+            done(true)
+            NSApp.terminate(nil)
+        }
+
         // Puts the old app back when the new app does not start.
+        // The roll back first becomes the stage of the handoff, under its lock: when the new copy confirmed first, the
+        // update is done instead, and a new copy that comes later sees the roll back and quits.
         // The handle that `openApplication` gives is not reliable (it can say "terminated" while the new copy runs),
         // so the new copy is stopped by its process ID and by its path: every other copy of the app at this path.
         let rollBack: (String, NSRunningApplication?) -> Void = { why, newApp in
+            let until = UpdateHandoff.rollBackEnd(now: Date())
+            var mark = handoff
+            mark.stage = .rolledBack(until: until)
+            var newPID: Int32?
+            switch file.apply(.waiterRollsBack(until: until)) {
+            case .applied(let previous, let next):
+                if case .newCopyStarted(let pid) = previous.stage { newPID = pid }
+                mark = next
+            case .refused(let current?) where current.stage == .confirmed:
+                Trace.log("update: the new app confirmed before the roll back (\(why))")
+                return finishConfirmed()
+            case .refused:
+                // The file is gone or holds no stage that rolls back: the mark is written again for a late new copy.
+                try? file.write(mark)
+            }
             var copies = Set(NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
                 .filter { $0.bundleURL?.standardizedFileURL.path == bundle.path }
                 .map(\.processIdentifier))
-            if let pid = readPending()?.newPID { copies.insert(pid) }
+            if let newPID { copies.insert(newPID) }
             if let pid = newApp?.processIdentifier, pid > 0 { copies.insert(pid) }
             copies.remove(getpid())
             for pid in copies where pid > 0 { kill(pid, SIGKILL) }
             // The new app goes to the update folder, which `finish` removes.
-            if swap(URL(fileURLWithPath: pending.backupPath), bundle) {
+            if swap(URL(fileURLWithPath: handoff.backupPath), bundle) {
                 Trace.log("update: rolled back to \(currentVersion)")
             } else {
                 Trace.log("update: roll back failed (errno \(errno)); the new app stays")
             }
-            finish(why)
-            // A new copy that macOS still starts now must not run (see `Pending.rolledBack`).
-            var mark = pending
-            mark.rolledBack = true
-            try? writePending(mark)
-            DispatchQueue.main.asyncAfter(deadline: .now() + lateStartWindow) {
-                if let current = readPending(), current.rolledBack == true, current.waitingPID == getpid() { removePending() }
-            }
+            finish(why, true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + UpdateHandoff.lateStartWindow) { file.remove(ifStill: mark) }
         }
 
         let configuration = NSWorkspace.OpenConfiguration()
@@ -339,19 +336,15 @@ enum Updater {
                 if let error { return rollBack("the new app does not open: \(error.localizedDescription)", newApp) }
                 let deadline = Date().addingTimeInterval(confirmTimeout)
                 Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { timer in
-                    if readPending()?.confirmed == true {
-                        timer.invalidate()
-                        Trace.log("update: done \(currentVersion) -> \(update.version)")
-                        removeUpdateFiles(pending)
-                        UpdateWindow.shared.close()
-                        done(true)
-                        NSApp.terminate(nil)
+                    switch UpdateHandoff.waiterStep(file.read(), now: Date(), deadline: deadline, isAlive: processRuns) {
+                    case .wait:
                         return
-                    }
-                    let stopped = readPending()?.newPID.map { kill($0, 0) != 0 } ?? false
-                    if stopped || Date() > deadline {
+                    case .finish:
                         timer.invalidate()
-                        rollBack(stopped ? "the new app stopped" : "the new app did not confirm", newApp)
+                        finishConfirmed()
+                    case .rollBack(let why):
+                        timer.invalidate()
+                        rollBack(why, newApp)
                     }
                 }
             }
