@@ -6,22 +6,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var chatTabs: [ChatTab] = []
     private var chatWindows: [ChatWindowController] = []
     private var setupWindow: SetupWindowController?
-    /// A user quit checks the tabs and asks about the unsafe ones before it stops the sessions.
-    private var checkingQuit = false
-    /// The quit is approved: the next terminate stops every session.
-    private var quitApproved = false
-    /// No session runs, and the quit waits for the EU vault to lock.
-    private var lockingForQuit = false
-    /// The approved quit is stopping the sessions; the app quits when they have ended.
-    private var stoppingForQuit = false
-    /// The window that shows the quit question as a sheet.
-    private var quitQuestionWindow: NSWindow?
+    /// The phase of the app (its start and its updates) and of its quit: the one place that keeps them (`AppLifecycle`).
+    private(set) var lifecycle = AppLifecycle<NSWindow>() {
+        didSet {
+            if lifecycle.app != oldValue.app { Trace.log("app phase: \(oldValue.app) -> \(lifecycle.app)") }
+            if lifecycle.quit != oldValue.quit { Trace.log("quit phase: \(oldValue.quit) -> \(lifecycle.quit)") }
+        }
+    }
+    /// The observer of the window that shows the quit question, which ends the quit when that window closes.
+    private var quitQuestionObserver: NSObjectProtocol?
+
+    /// Applies an event of the app phase (`AppUpdate` gives the update steps). An event that is not legal in the
+    /// phase now changes nothing and returns false.
+    @discardableResult
+    func apply(_ event: AppEvent) -> Bool {
+        let applied = lifecycle.apply(event)
+        if !applied { Trace.log("app phase: \(event.rawValue) refused in \(lifecycle.app)") }
+        return applied
+    }
     private let statusMenu = StatusMenu()
     /// The menu item of each app action, which shows and runs its shortcut from the Zeus settings.
     private var actionItems: [AppAction: NSMenuItem] = [:]
-    /// The update check at launch runs, or an update from the settings installs; only its loading screen shows,
-    /// and no Zeus session opens until it ends.
-    private var updating = false
     private var handoverWindow: HandoverWindowController?
     /// The EU tab from which the user opened the handover: "Switch to Standard" after a release switches it.
     private weak var handoverTab: ChatTab?
@@ -54,7 +59,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil,
                                                           queue: .main) { [weak self] _ in
             Trace.log("macOS powers off")
-            guard let self, self.checkingQuit else { return }
+            guard let self else { return }
+            // Only a user quit that checks or asks: a power-off warning alone (a logout that another app cancels) stops nothing.
+            guard self.lifecycle.quit.isUserQuit else { return }
             self.approveQuit()
         }
 
@@ -88,15 +95,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
 
         // Updates install only here, before any Zeus session starts.
-        updating = true
+        apply(.launchUpdateStarted)
         Updater.checkAtLaunch { [weak self] relaunching in
             guard let self, !relaunching else { return }
-            self.updating = false
             self.startZeus()
         }
     }
 
     private func startZeus(restoring: Bool = false) {
+        apply(.zeusStarted)
         let firstSetup = setupNeeded
         if firstSetup {
             showSetup(nil)
@@ -133,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     /// A click on the Dock icon while no window is open.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if updating {
+        if lifecycle.app.blocksSessions {
             UpdateWindow.shared.bringForward()
             return true
         }
@@ -159,33 +166,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// reaches the app. A quit that macOS starts asks nothing and ends within 12 s.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         setupWindow?.model.stop()
-        guard SessionManager.shared.sessions.contains(where: \.isAlive) else {
-            // The EU vault locks when the app quits (EUVault).
-            guard EUVault.shared.isMounted || lockingForQuit else { return .terminateNow }
-            if !lockingForQuit {
-                lockingForQuit = true
-                EUVault.shared.lockForQuit { NSApp.reply(toApplicationShouldTerminate: true) }
-            }
+        let sessionsAlive = SessionManager.shared.sessions.contains(where: \.isAlive)
+        let byMacOS = sessionsAlive && Self.quitStartedByMacOS
+        if sessionsAlive {
+            Trace.log("quit requested: phase=\(lifecycle.quit)")
+            if byMacOS { Trace.log("quit by macOS") }
+        }
+        switch lifecycle.terminate(sessionsAlive: sessionsAlive, vaultMounted: EUVault.shared.isMounted, byMacOS: byMacOS) {
+        case .now:
+            return .terminateNow
+        case .lockVault:
+            EUVault.shared.lockForQuit { NSApp.reply(toApplicationShouldTerminate: true) }
             return .terminateLater
-        }
-        Trace.log("quit requested: approved=\(quitApproved) checking=\(checkingQuit)")
-        if Self.quitStartedByMacOS {
-            Trace.log("quit by macOS")
-            quitApproved = true
-        }
-        if stoppingForQuit { return .terminateLater }
-        if quitApproved {
-            stoppingForQuit = true
-            checkingQuit = false
-            endQuitQuestion()
+        case let .stopSessions(question):
+            endQuitQuestion(on: question)
             stopAllAndQuit()
             return .terminateLater
-        }
-        if !checkingQuit {
-            checkingQuit = true
+        case .wait:
+            return .terminateLater
+        case .checkTabs:
             checkTabsBeforeQuit()
+            return .terminateCancel
+        case .cancel:
+            return .terminateCancel
         }
-        return .terminateCancel
     }
 
     private static var quitStartedByMacOS: Bool {
@@ -197,7 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func checkTabsBeforeQuit() {
         let tabs = chatTabs
-        guard !tabs.isEmpty else { approveQuit(); return }
+        guard !tabs.isEmpty else { confirmQuit([]); return }
         var unsafe: [(ChatTab, String)] = []
         var remaining = tabs.count
         for tab in tabs {
@@ -210,9 +214,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func confirmQuit(_ unsafe: [(ChatTab, String)]) {
-        guard checkingQuit else { return }
-        guard let first = unsafe.first?.0, let window = first.host?.window else { approveQuit(); return }
-        first.host?.select(first)
+        let first = unsafe.first?.0
+        let window: NSWindow
+        switch lifecycle.tabsChecked(unsafeWindow: first?.host?.window) {
+        case .approved:
+            terminateAfterApproval()
+            return
+        case let .ask(asked):
+            window = asked
+        case .cancelled, .ignored:
+            return
+        }
+        if let first { first.host?.select(first) }
         Trace.log("quit deferred: \(unsafe.map(\.1).joined(separator: " "))")
         let alert = NSAlert()
         alert.messageText = unsafe.count == 1 ? "A Zeus tab is not safe to close" : "\(unsafe.count) Zeus tabs are not safe to close"
@@ -222,32 +235,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         alert.addButton(withTitle: "Cancel")
         Front.show(window)
         Front.activate()
-        quitQuestionWindow = window
-        Front.beginSheet(alert, for: window) { [weak self] response in
-            guard let self, self.checkingQuit else { return }
-            self.quitQuestionWindow = nil
-            if response == .alertSecondButtonReturn {
-                self.checkingQuit = false
+        // AppKit does not call the completion handler of a sheet whose window closes, and keeps the sheet attached, so
+        // that no later quit reaches the app: the quit ends with the window (the window of its last tab, which closes).
+        quitQuestionObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window,
+                                                                      queue: .main) { [weak self, weak window] _ in
+            guard let self, let window, self.lifecycle.questionWindowClosed(window) == .cancelled else { return }
+            Trace.log("quit cancelled: the window of the question closed")
+            self.endQuitQuestion(on: window)
+        }
+        Front.beginSheet(alert, for: window) { [weak self, weak window] response in
+            guard let self, let window else { return }
+            // An answer that comes after the quit was approved or ended (the sheet ended by the app) changes nothing.
+            switch self.lifecycle.answered(quitAnyway: response == .alertFirstButtonReturn, on: window) {
+            case .approved:
+                self.stopObservingQuitQuestion()
+                self.terminateAfterApproval()
+            case .cancelled:
+                self.stopObservingQuitQuestion()
                 Trace.log("quit cancelled")
-                return
+            case .ask, .ignored:
+                break
             }
-            self.approveQuit()
         }
     }
 
+    /// Approves the quit without the question (power off, test action) and terminates again.
     private func approveQuit() {
-        checkingQuit = false
-        quitApproved = true
-        // AppKit does not quit while a sheet is open.
-        endQuitQuestion()
+        guard case let .approved(question) = lifecycle.approve() else { return }
+        endQuitQuestion(on: question)
+        terminateAfterApproval()
+    }
+
+    private func terminateAfterApproval() {
         // Not from inside a main-queue block: quitting waits for callbacks on the main queue.
         NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
     }
 
-    private func endQuitQuestion() {
-        guard let window = quitQuestionWindow, let sheet = window.attachedSheet else { return }
-        quitQuestionWindow = nil
+    /// Ends the quit question on this window, when it still shows: AppKit does not quit while a sheet is open.
+    private func endQuitQuestion(on window: NSWindow?) {
+        stopObservingQuitQuestion()
+        guard let window, let sheet = window.attachedSheet else { return }
         window.endSheet(sheet, returnCode: .abort)
+    }
+
+    private func stopObservingQuitQuestion() {
+        if let quitQuestionObserver { NotificationCenter.default.removeObserver(quitQuestionObserver) }
+        quitQuestionObserver = nil
     }
 
     /// The close check takes at most `closeCheckLimit`, so the quit ends within 12 s, and the EU vault lock within 4 s more.
@@ -273,7 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     /// A new tab of this mode. An EU tab starts only while the EU vault is open: Touch ID opens it first.
     func newChat(mode: ZeusMode) {
-        guard !updating, !openingEU else { return }
+        guard !lifecycle.app.blocksSessions, !openingEU else { return }
         if mode == .eu {
             let missing = EUSetup.missing()
             if !missing.isEmpty { askForEUSetup(missing, standardFallback: chatTabs.isEmpty); return }
@@ -369,7 +402,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Calls `completion` with the kept tabs when the sessions have ended, or with nil (and shows the chat windows
     /// again) when a tab started to work before the windows were hidden: the update then waits again.
     func endTabsForUpdate(to version: String, completion: @escaping (TabRestore?) -> Void) {
-        updating = true
         // The front chat window first, so that it is the window that the loading screen replaces.
         let ordered = NSApp.orderedWindows.compactMap { $0.windowController as? ChatWindowController }
         let windows = ordered + chatWindows.filter { window in !ordered.contains { $0 === window } }
@@ -380,7 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             guard let self else { return }
             guard busy == 0 else {
                 Trace.log("update: \(busy) tabs work again; the update waits")
-                self.updating = false
+                self.apply(.tabsBusyAgain)
                 windows.forEach { Front.show($0.window) }
                 UpdateWindow.shared.close()
                 completion(nil)
@@ -432,7 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     /// The new copy did not start: this copy opens the same tabs again and says why.
     func reopenAfterFailedUpdate(_ restore: TabRestore, version: String) {
-        updating = false
+        apply(.installFailed)
         reopenTabs(restore)
         let alert = NSAlert()
         alert.messageText = "Zeus \(version) did not start"
@@ -496,7 +528,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var keyChatTab: ChatTab? { keyChatWindow?.selectedTab }
 
     @objc func showSetup(_ sender: Any?) {
-        guard !updating else { return }
+        guard !lifecycle.app.blocksSessions else { return }
         if let setupWindow {
             Front.show(setupWindow.window)
             Front.activate()
@@ -526,7 +558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// `afterRelease`: the user clicked Switch to Standard after a release in the handover window; the switch does not
     /// ask again.
     func switchTab(_ tab: ChatTab, to target: ZeusMode, afterRelease: Bool = false) {
-        guard target != tab.mode, !tab.isSwitching, !updating, !openingEU, chatTabs.contains(where: { $0 === tab }) else {
+        guard target != tab.mode, !tab.isSwitching, !lifecycle.app.blocksSessions, !openingEU, chatTabs.contains(where: { $0 === tab }) else {
             refreshModeViews()
             return
         }
@@ -982,8 +1014,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 let windows = ordered + self.chatWindows.filter { window in !ordered.contains { $0 === window } }
                 self.keepTabs(windows, version: Updater.currentVersion) { restore in
                     Trace.log("restore: kept \(restore.tabCount) tabs")
-                    self.quitApproved = true
-                    NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+                    self.approveQuit()
                 }
             // The number of tabs that an update from the settings waits for.
             case "test-busy-tabs": self.busyTabCount { Trace.log("busy tabs: \($0)") }

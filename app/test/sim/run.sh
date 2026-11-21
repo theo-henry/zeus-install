@@ -6,11 +6,12 @@
 # home folder, Claude Code, and GitHub login are not used. The test presses the app's buttons through
 # its debug test actions (active only with ZEUS_APP_TRACE) and checks the trace.
 #
-# Usage: app/test/sim/run.sh [--eu | --eu-simple | --vault | --signin] [screenshot-folder]
+# Usage: app/test/sim/run.sh [--eu | --eu-simple | --vault | --signin | --quit] [screenshot-folder]
 # With a folder, it saves a screenshot of each app window state there (the app's windows only).
 # --eu runs only the EU mode scenario with isolation (the EU vault), --eu-simple only the simple EU scenario (no
-# isolation), --vault only the EU vault and Standard read block scenario, and --signin only the Google sign-in step of
-# the setup (app/test/run-all.sh runs each part with its own time limit).
+# isolation), --vault only the EU vault and Standard read block scenario, --signin only the Google sign-in step of
+# the setup, and --quit only the quit question whose window closes (app/test/run-all.sh runs each part with its own
+# time limit).
 
 # check runs its test, in single quotes, with eval; ShellCheck does not see the variables in it.
 # shellcheck disable=SC2016,SC2034
@@ -24,6 +25,7 @@ if [ "${1:-}" = "--eu" ]; then PART=eu; shift; fi
 if [ "${1:-}" = "--eu-simple" ]; then PART=eu-simple; shift; fi
 if [ "${1:-}" = "--vault" ]; then PART=vault; shift; fi
 if [ "${1:-}" = "--signin" ]; then PART=signin; shift; fi
+if [ "${1:-}" = "--quit" ]; then PART=quit; shift; fi
 SHOTS="${1:-}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zeus-sim.XXXXXX")"
@@ -232,12 +234,15 @@ source "$SIM_DIR/simple.sh"
 source "$SIM_DIR/vault.sh"
 # shellcheck source=app/test/sim/signin.sh
 source "$SIM_DIR/signin.sh"
+# shellcheck source=app/test/sim/quit.sh
+source "$SIM_DIR/quit.sh"
 if [ "$PART" != main ]; then
   case "$PART" in
     eu) eu_scenario ;;
     eu-simple) eu_simple_scenario ;;
     vault) vault_scenario ;;
     signin) signin_scenario ;;
+    quit) quit_scenario ;;
   esac
   echo
   if [ "$FAILURES" -eq 0 ]; then
@@ -457,8 +462,12 @@ defaults write "$PREFS_DOMAIN" setupDone -bool true
 launch_app logout
 check "the app opens a chat at once after the setup" 'wait_for "page loaded: http://127.0.0.1" 30'
 act test-draft
+# The turn of the second tab is long, so that it is still busy when the quit checks the tabs (a 3 s turn can end
+# before the close check of a slow run reaches it).
+touch "$STATE/long-turn"
 act test-cmd-t
 check "a second tab opens" 'wait_count "state: running(" 2 20 && newest_page_loaded && sleep 1'
+rm -f "$STATE/long-turn"
 act test-draft
 sleep 0.3
 act test-send
@@ -677,7 +686,7 @@ speech_round() {
 touch "$MODELS_SRV/accurate-1.bin.hold"
 # shellcheck disable=SC2046
 launch_app whisper $(whisper_env v1.json)
-check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOAD_LIMIT && sleep 1'
 check "the chat page has speech bridge versions 1 and 2" 'page_has "\"version\":1,\"versions\":[1,2],\"close\":\"function\""'
 check "the accurate model downloads in the background after the start" 'wait_for "dictation: download sim-accurate-1 starts (needed)" 10'
 act 'test-speech-post:{"type":"speech-status"}'
@@ -782,7 +791,9 @@ stop_app
 launch_app whisper-swap $(whisper_env v2.json)
 check "after an app update with a new model list, the new model downloads, loads, and replaces the old one" \
   'wait_for "dictation: loaded sim-accurate-2" 30 && wait_for "dictation: accurate model is now sim-accurate-2, was sim-accurate-1" 5'
-check "the old model file is deleted, and the new one is kept" 'sleep 0.5 && [ ! -e "$MODELS_DIR/sim-accurate-1.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ] && [ -f "$MODELS_DIR/sim-fast-1.bin" ]'
+check "the old model file is deleted, and the new one is kept" 'wait_for "dictation: deleting unused model file sim-accurate-1.bin" 5 && sleep 0.5 && [ ! -e "$MODELS_DIR/sim-accurate-1.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ] && [ -f "$MODELS_DIR/sim-fast-1.bin" ]'
+# A quit while the chat page still loads is deferred: the page can not answer the close check yet.
+newest_page_loaded "$PAGE_LOAD_LIMIT" >/dev/null || true
 stop_app
 # shellcheck disable=SC2046
 launch_app whisper-noload $(whisper_env v3.json)
