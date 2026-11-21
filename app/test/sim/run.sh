@@ -746,7 +746,7 @@ wait_for "speech event: state w6 listening" 10 >/dev/null
 act 'test-speech-post:{"type":"speech-stop","id":"w6"}'
 wait_for "speech event: state w6 processing" 10 >/dev/null
 act 'test-speech-post:{"type":"speech-cancel","id":"w6"}'
-check "a cancel while Whisper processes gives stopped and no text" 'wait_for "speech: cancel w6 (page)" 10 && page_wait "state w6 stopped" && ! grep -q "speech event: final w6" "$TRACE"'
+check "a cancel while Whisper processes gives stopped and no text" 'wait_for "speech: cancel w6 (page)" 10 && page_wait "state w6 stopped" && sleep 1 && ! grep -q "speech event: final w6" "$TRACE"'
 act 'test-speech-post:{"type":"speech-settings-set","model":"fast"}'
 check "the Fast model downloads when the user picks it, and loads" 'wait_for "dictation: download sim-fast-1 starts (needed)" 10 && wait_for "dictation: loaded sim-fast-1" 20'
 act test-clear
