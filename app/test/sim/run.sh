@@ -558,6 +558,16 @@ page_has() {
   act "test-${2:-}speech-page"
   wait_count "speech page: " $((before + 1)) 10 >/dev/null && grep "speech page: " "$TRACE" | tail -1 | grep -qF -- "$1"
 }
+# page_wait <text> [seconds]: page_has again and again until the page has the text. The page gets a status from the
+# app after the app event that the trace shows, so one look right after the trace line can come too early under load.
+page_wait() {
+  local waited=0
+  until page_has "$1"; do
+    waited=$((waited + 1))
+    if [ "$waited" -ge $((${2:-10} * 2)) ]; then echo "    (the page never had: $1)"; return 1; fi
+    sleep 0.5
+  done
+}
 check "the chat page can use speech to text, also after it sets window.zeusApp" 'page_has "\"version\":1,\"versions\":[1,2],\"close\":\"function\""'
 act 'test-speech-post:{"type":"speech-languages"}'
 check "the languages are those on this Mac, with the default" 'sleep 1 && page_has "languages  en-US,fr-FR,nl-NL,de-DE/en-US"'
@@ -690,7 +700,7 @@ check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOA
 check "the chat page has speech bridge versions 1 and 2" 'page_has "\"version\":1,\"versions\":[1,2],\"close\":\"function\""'
 check "the accurate model downloads in the background after the start" 'wait_for "dictation: download sim-accurate-1 starts (needed)" 10'
 act 'test-speech-post:{"type":"speech-status"}'
-check "the status says Apple's recognizer while the model is not ready" 'sleep 0.5 && page_has "\"engine\":\"apple\""'
+check "the status says Apple's recognizer while the model is not ready" 'page_wait "\"engine\":\"apple\""'
 act test-draft
 sleep 0.3
 act 'test-speech-post:{"type":"speech-start","id":"w0","locale":null}'
@@ -698,8 +708,8 @@ check "dictation without a model uses Apple's recognizer" 'wait_for "speech: sta
 act 'test-speech-post:{"type":"speech-stop","id":"w0"}'
 check "Apple's recognizer gives its final text" 'wait_for "speech event: state w0 stopped" 10 && page_has "\"text\":\"Test chat turnHello Zeus.\""'
 rm -f "$MODELS_SRV/accurate-1.bin.hold"
-check "the download shows its progress, is checked, and the model loads" 'wait_for "dictation: download sim-accurate-1 checked" 20 && wait_for "dictation: loaded sim-accurate-1" 10 && page_has "accurate:sim-accurate-1:downloading" && page_has "accurate:sim-accurate-1:ready"'
-check "the status says Whisper when the model is loaded" 'sleep 0.5 && page_has "\"engine\":\"whisper\""'
+check "the download shows its progress, is checked, and the model loads" 'wait_for "dictation: download sim-accurate-1 checked" 20 && wait_for "dictation: loaded sim-accurate-1" 10 && page_wait "accurate:sim-accurate-1:downloading" && page_wait "accurate:sim-accurate-1:ready"'
+check "the status says Whisper when the model is loaded" 'page_wait "\"engine\":\"whisper\""'
 check "the model is in the models folder of the app, with installed.json" '[ -f "$MODELS_DIR/sim-accurate-1.bin" ] && grep -q "sim-accurate-1" "$MODELS_DIR/installed.json"'
 act test-clear
 speech_round w1 0.8
@@ -715,7 +725,7 @@ check "then it gets the Whisper text through the version 1 events, before its 4 
   'wait_for "speech event: state v1 stopped" 10 && grep -q "speech: final v1 engine=whisper stop-to-text=[0-9]* ms" "$TRACE" && [ "$(grep "speech: final v1 " "$TRACE" | sed "s/.*stop-to-text=\([0-9]*\) ms/\1/")" -lt 4000 ] && page_has "\"partial v1 Hello Zeus\",\"final v1 Hello Zeus.\",\"state v1 stopped\""'
 act 'test-speech-post:{"type":"speech-settings-set","customWords":[" Celonis ","Apolix","celonis",""]}'
 check "the custom words are saved for both chats, cleaned, and counted in tokens" \
-  'sleep 0.5 && page_has "\"customWords\":[\"Celonis\",\"Apolix\"]" && page_has "\"included\":2" && defaults read "$PREFS_DOMAIN" dictationCustomWords | grep -q Apolix'
+  'page_wait "\"customWords\":[\"Celonis\",\"Apolix\"]" && page_wait "\"included\":2" && defaults read "$PREFS_DOMAIN" dictationCustomWords | grep -q Apolix'
 act test-clear
 speech_round w2
 check "the custom words go to the model as its prompt" 'page_has "\"text\":\"Hello Zeus. [Celonis, Apolix.]\""'
@@ -724,19 +734,19 @@ act test-clear
 speech_round w3
 check "a fixed language goes to the model" 'page_has "Hello Zeus. (fr) [Celonis, Apolix.]"'
 act 'test-speech-post:{"type":"speech-settings-set","language":"xx"}'
-check "an unknown language is refused with an error, and the setting stays" 'sleep 0.5 && page_has "unknown language" && page_has "\"language\":\"fr\""'
+check "an unknown language is refused with an error, and the setting stays" 'page_wait "unknown language" && page_has "\"language\":\"fr\""'
 act 'test-speech-post:{"type":"speech-start","id":"w4","locale":null,"version":2}'
 wait_for "speech event: state w4 listening" 10 >/dev/null
 # The stop and the next start go in one post, so the start comes while Whisper processes, also under load.
 act 'test-speech-post:[{"type":"speech-stop","id":"w4"},{"type":"speech-start","id":"w5","locale":null,"version":2}]'
-check "a start while Whisper processes is busy" 'wait_for "speech event: state w4 processing" 10 && sleep 0.3 && page_has "error w5 busy"'
+check "a start while Whisper processes is busy" 'wait_for "speech event: state w4 processing" 10 && page_wait "error w5 busy"'
 check "the processing recording still gives its text" 'wait_for "speech event: final w4 " 10'
 act 'test-speech-post:{"type":"speech-start","id":"w6","locale":null,"version":2}'
 wait_for "speech event: state w6 listening" 10 >/dev/null
 act 'test-speech-post:{"type":"speech-stop","id":"w6"}'
 wait_for "speech event: state w6 processing" 10 >/dev/null
 act 'test-speech-post:{"type":"speech-cancel","id":"w6"}'
-check "a cancel while Whisper processes gives stopped and no text" 'wait_for "speech: cancel w6 (page)" 10 && sleep 1 && page_has "state w6 stopped" && ! grep -q "speech event: final w6" "$TRACE"'
+check "a cancel while Whisper processes gives stopped and no text" 'wait_for "speech: cancel w6 (page)" 10 && page_wait "state w6 stopped" && sleep 1 && ! grep -q "speech event: final w6" "$TRACE"'
 act 'test-speech-post:{"type":"speech-settings-set","model":"fast"}'
 check "the Fast model downloads when the user picks it, and loads" 'wait_for "dictation: download sim-fast-1 starts (needed)" 10 && wait_for "dictation: loaded sim-fast-1" 20'
 act test-clear
@@ -782,7 +792,9 @@ sleep 0.3
 stop_app
 # shellcheck disable=SC2046
 launch_app whisper-bad $(whisper_env v2-bad.json)
-check "a new model with a wrong checksum fails and Zeus tries again later" 'wait_for "dictation: download sim-accurate-2 failed: The download does not have the expected SHA-256 checksum.; retry in 30 s" 20'
+# The models start 2 s after the first window opens, and under load that window can take more than 20 s, so the
+# limits of the dictation checks count from the start of the models, not from the launch.
+check "a new model with a wrong checksum fails and Zeus tries again later" 'wait_for "dictation: models start" $PAGE_LOAD_LIMIT && wait_for "dictation: download sim-accurate-2 failed: The download does not have the expected SHA-256 checksum.; retry in 30 s" 20'
 check "the old model stays in use" 'wait_for "dictation: loaded sim-accurate-1" 20 && [ -f "$MODELS_DIR/sim-accurate-1.bin" ] && [ ! -e "$MODELS_DIR/sim-accurate-2.bin" ]'
 # A quit while the chat page still loads is deferred: the page can not answer the close check yet.
 newest_page_loaded 60 >/dev/null || true
@@ -790,7 +802,7 @@ stop_app
 # shellcheck disable=SC2046
 launch_app whisper-swap $(whisper_env v2.json)
 check "after an app update with a new model list, the new model downloads, loads, and replaces the old one" \
-  'wait_for "dictation: loaded sim-accurate-2" 30 && wait_for "dictation: accurate model is now sim-accurate-2, was sim-accurate-1" 5'
+  'wait_for "dictation: models start" $PAGE_LOAD_LIMIT && wait_for "dictation: loaded sim-accurate-2" 30 && wait_for "dictation: accurate model is now sim-accurate-2, was sim-accurate-1" 5'
 check "the old model file is deleted, and the new one is kept" 'wait_for "dictation: deleting unused model file sim-accurate-1.bin" 5 && sleep 0.5 && [ ! -e "$MODELS_DIR/sim-accurate-1.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ] && [ -f "$MODELS_DIR/sim-fast-1.bin" ]'
 # A quit while the chat page still loads is deferred: the page can not answer the close check yet.
 newest_page_loaded "$PAGE_LOAD_LIMIT" >/dev/null || true
@@ -798,7 +810,7 @@ stop_app
 # shellcheck disable=SC2046
 launch_app whisper-noload $(whisper_env v3.json)
 check "a new model that does not load is removed, and the old model stays in use" \
-  'wait_for "dictation: model sim-accurate-3 does not load" 30 && wait_for "dictation: loaded sim-accurate-2" 10 && [ ! -e "$MODELS_DIR/sim-accurate-3.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ]'
+  'wait_for "dictation: models start" $PAGE_LOAD_LIMIT && wait_for "dictation: model sim-accurate-3 does not load" 30 && wait_for "dictation: loaded sim-accurate-2" 10 && [ ! -e "$MODELS_DIR/sim-accurate-3.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ]'
 stop_app
 kill "$MODEL_SERVER_PID" 2>/dev/null || true
 rm -rf "$MODELS_DIR"
