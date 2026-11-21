@@ -792,7 +792,9 @@ sleep 0.3
 stop_app
 # shellcheck disable=SC2046
 launch_app whisper-bad $(whisper_env v2-bad.json)
-check "a new model with a wrong checksum fails and Zeus tries again later" 'wait_for "dictation: download sim-accurate-2 failed: The download does not have the expected SHA-256 checksum.; retry in 30 s" 20'
+# The models start 2 s after the first window opens, and under load that window can take more than 20 s, so the
+# limits of the dictation checks count from the start of the models, not from the launch.
+check "a new model with a wrong checksum fails and Zeus tries again later" 'wait_for "dictation: models start" $PAGE_LOAD_LIMIT && wait_for "dictation: download sim-accurate-2 failed: The download does not have the expected SHA-256 checksum.; retry in 30 s" 20'
 check "the old model stays in use" 'wait_for "dictation: loaded sim-accurate-1" 20 && [ -f "$MODELS_DIR/sim-accurate-1.bin" ] && [ ! -e "$MODELS_DIR/sim-accurate-2.bin" ]'
 # A quit while the chat page still loads is deferred: the page can not answer the close check yet.
 newest_page_loaded 60 >/dev/null || true
@@ -800,7 +802,7 @@ stop_app
 # shellcheck disable=SC2046
 launch_app whisper-swap $(whisper_env v2.json)
 check "after an app update with a new model list, the new model downloads, loads, and replaces the old one" \
-  'wait_for "dictation: loaded sim-accurate-2" 30 && wait_for "dictation: accurate model is now sim-accurate-2, was sim-accurate-1" 5'
+  'wait_for "dictation: models start" $PAGE_LOAD_LIMIT && wait_for "dictation: loaded sim-accurate-2" 30 && wait_for "dictation: accurate model is now sim-accurate-2, was sim-accurate-1" 5'
 check "the old model file is deleted, and the new one is kept" 'wait_for "dictation: deleting unused model file sim-accurate-1.bin" 5 && sleep 0.5 && [ ! -e "$MODELS_DIR/sim-accurate-1.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ] && [ -f "$MODELS_DIR/sim-fast-1.bin" ]'
 # A quit while the chat page still loads is deferred: the page can not answer the close check yet.
 newest_page_loaded "$PAGE_LOAD_LIMIT" >/dev/null || true
@@ -808,7 +810,7 @@ stop_app
 # shellcheck disable=SC2046
 launch_app whisper-noload $(whisper_env v3.json)
 check "a new model that does not load is removed, and the old model stays in use" \
-  'wait_for "dictation: model sim-accurate-3 does not load" 30 && wait_for "dictation: loaded sim-accurate-2" 10 && [ ! -e "$MODELS_DIR/sim-accurate-3.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ]'
+  'wait_for "dictation: models start" $PAGE_LOAD_LIMIT && wait_for "dictation: model sim-accurate-3 does not load" 30 && wait_for "dictation: loaded sim-accurate-2" 10 && [ ! -e "$MODELS_DIR/sim-accurate-3.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ]'
 stop_app
 kill "$MODEL_SERVER_PID" 2>/dev/null || true
 rm -rf "$MODELS_DIR"
