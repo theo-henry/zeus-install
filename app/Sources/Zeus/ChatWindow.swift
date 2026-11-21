@@ -16,17 +16,13 @@ final class ChatTab: NSObject {
     private(set) var webView: WKWebView!
     /// The name of the tab: the project of the chat, or a name that the user gave it.
     let tabName = TabName()
-    private var shownURL: URL?
+    /// The phase of the tab, its close request, and its mode switch (`TabLifecycle`). Each change goes through it.
+    private(set) var lifecycle = TabLifecycle()
     /// The loading screen, above the chat page until the hand-over.
     private var loader: LoaderOverlay?
-    private var handingOver = false
     /// The globe hand-over plays once per app run, for the first chat. Later chats (Cmd+T, a retry)
     /// come in at once when their page is ready: the user does not wait for the animation again.
     private static var greeted = false
-    /// The chat page of `shownURL` has loaded.
-    private var pageLoaded = false
-    /// Settings… came while the chat page was not loaded yet: the settings open when it has loaded.
-    private var settingsWanted = false
 
     private var terminal: TerminalPanel!
     /// The terminal had the keyboard when the tab last went out of view (or the rename field took the keyboard).
@@ -36,20 +32,11 @@ final class ChatTab: NSObject {
     private let closeSpinner = NSProgressIndicator()
     private let closeAnywayButton = NSButton()
     private let cancelCloseButton = NSButton()
-    private var closeReason: String?
-    private var closeRequestedAt = Date()
-    private var closePending = false
-    private var closeApproved = false
-    private var closeGeneration = 0
-    private var closed = false
 
-    /// The tab as it was before an update from the settings, which this tab opens again (`TabRestore`).
+    /// The tab as it was before an update from the settings, which this tab opens again (`TabRestore`). Its Claude Code
+    /// session resumes before the chat page loads (the phase `resuming`); its unsent text of the message box goes back
+    /// once, and then this copy no longer has it.
     private var restore: TabRestore.Tab?
-    private enum Resume { case none, waiting, running, done }
-    /// The Claude Code session of `restore` resumes before the chat page loads.
-    private var resume = Resume.none
-    /// The unsent text of `restore` goes back into the message box once.
-    private var draftRestored = false
 
     var onRunSetup: (() -> Void)?
     var onRetry: (() -> Void)?
@@ -57,7 +44,10 @@ final class ChatTab: NSObject {
     /// The status page of an EU start asks to switch this tab to Standard ("Switch to Standard"): the app asks first.
     var onSwitchToStandard: (() -> Void)?
     /// The app switches the mode of this tab now: no other switch of the tab starts.
-    var isSwitching = false
+    var isSwitching: Bool { lifecycle.isSwitching }
+    /// Starts a mode switch of the tab. Returns false when the tab closed or a switch already runs.
+    func beginSwitch() -> Bool { lifecycle.beginSwitch() }
+    func endSwitch() { lifecycle.endSwitch() }
     /// EU mode: the chat ended with a Vertex error that the user can act on; the words to show.
     var onEUError: ((ChatTab, String) -> Void)?
 
@@ -79,7 +69,6 @@ final class ChatTab: NSObject {
         if let restore {
             tabName.setProject(restore.project)
             tabName.rename(restore.customName)
-            if restore.sessionID != nil || restore.terminalDraft != nil { resume = .waiting }
         }
         makeCloseBanner()
         let content = self.view
@@ -124,38 +113,60 @@ final class ChatTab: NSObject {
         handler.onPageLoaded = { [weak self] webView in
             guard let self, webView === self.webView else { return }
             if self.host?.selectedTab === self { WebViewHandler.matchTitleBar(of: webView.window, to: webView) }
-            guard self.shownURL != nil, webView.url == self.shownURL else { return }
+            guard let url = webView.url, self.apply(.pageLoaded(url)) else { return }
             self.restoreDraft()
-            self.pageLoaded = true
-            if self.settingsWanted {
-                self.settingsWanted = false
-                self.openSettings()
-            }
+            if self.lifecycle.takeSettingsWish() { self.openSettings() }
             // After the first chat, the page comes in as soon as it is loaded.
             guard !Self.greeted else { self.handOver(); return }
             // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.handOver() }
+            let epoch = self.lifecycle.epoch
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                guard let self, self.isCurrent(epoch, "page-load timer") else { return }
+                self.handOver()
+            }
         }
         // A chat page that does not load must not stay behind the loading screen.
-        handler.onPageFailed = { [weak self] in self?.handOver() }
+        handler.onPageFailed = { [weak self, weak page] in
+            guard let self, page === self.webView else { return }
+            self.handOver()
+        }
         return page
     }
+
+    /// Applies a lifecycle event, and writes a phase change to the trace. Returns false when the event is refused.
+    @discardableResult
+    private func apply(_ event: TabLifecycle.Event) -> Bool {
+        let before = lifecycle.phase.name
+        guard lifecycle.apply(event) else { return false }
+        if lifecycle.phase.name != before { Trace.log("tab phase: \(session.pid) \(before) -> \(lifecycle.phase.name)") }
+        return true
+    }
+
+    /// An async callback made at `epoch` may act on the tab only while the phase is the same (`TabLifecycle`).
+    private func isCurrent(_ epoch: Int, _ callback: String) -> Bool {
+        guard lifecycle.isCurrent(epoch) else {
+            Trace.log("tab callback ignored: \(session.pid) \(callback) of epoch \(epoch), now \(lifecycle.epoch) \(lifecycle.phase.name)")
+            return false
+        }
+        return true
+    }
+
+    /// The tab has a kept session (`restore`) that resumes before the chat page loads.
+    private var resumesFirst: Bool { restore.map { $0.sessionID != nil || $0.terminalDraft != nil } ?? false }
 
     /// Switches the tab to the mode of `newSession` in a new chat (zeus `eu-mode.md`; the consultant's answer Q5: a new
     /// chat first). The old session ends; its chat stays in the history of its mode. The tab keeps its name, its place,
     /// and its terminal panel; the chat page is made again, because the web data of a page is fixed when it is made.
     func switchSession(to newSession: ZeusSession) {
-        guard !closed else { newSession.stop(); return }
         let old = session
+        // A new epoch: the callbacks of the old session and its page can not act on the tab. A close that waited for the
+        // old chat ends: the tab stays open with the new chat.
+        guard apply(.restart) else { newSession.stop(); return }
         Trace.log("tab mode: \(old.pid) \(old.mode.rawValue) -> \(newSession.pid) \(newSession.mode.rawValue)")
         SpeechService.shared.cancel(in: webView, reason: "mode switch")
         signIn?.stop()
         signIn = nil
         signInNote = nil
-        // A close that waited for the old chat ends: the tab stays open with the new chat.
-        closeGeneration += 1
-        closePending = false
-        closeReason = nil
         closeBanner.isHidden = true
         closeSpinner.stopAnimation(nil)
         old.onStateChange = nil
@@ -179,12 +190,7 @@ final class ChatTab: NSObject {
             loader.view.removeFromSuperview()
             self.loader = nil
         }
-        handingOver = false
-        shownURL = nil
-        pageLoaded = false
-        settingsWanted = false
         restore = nil
-        resume = .none
         cost = nil
 
         session = newSession
@@ -198,31 +204,20 @@ final class ChatTab: NSObject {
     private func render() {
         switch session.state {
         case .starting:
-            shownURL = nil
-            pageLoaded = false
+            guard lifecycle.phase == .starting else { return }
             showLoader()
         case let .running(url):
-            guard shownURL != url else { return }
             // A tab that an update opens again first resumes its Claude Code session, then shows the chat.
-            switch resume {
-            case .waiting:
-                resume = .running
+            guard apply(.chatURL(url, resume: resumesFirst)) else { return }
+            if case .resuming = lifecycle.phase {
                 loader?.setStatus("Opening the chat again…")
                 resumeSession(url: url)
-                return
-            case .running:
-                return
-            case .none, .done:
-                break
+            } else {
+                loadChatPage(url)
             }
-            shownURL = url
-            pageLoaded = false
-            loader?.setStatus("Opening the chat…")
-            webView.load(URLRequest(url: url))   // Behind the loading screen, until the hand-over.
         case let .failed(message):
-            shownURL = nil
-            pageLoaded = false
-            settingsWanted = false
+            // Also again after the start failed: the status page then shows the note of the sign-in.
+            guard apply(.startFailed) || lifecycle.phase == .failed || lifecycle.phase == .signingIn else { return }
             if session.mode == .eu {
                 let failure = EUStartFailure(log: session.log, exitCode: session.exitCode)
                 Trace.log("eu start failed: \(session.pid) exit=\(session.exitCode.map(String.init) ?? "-") sign-in=\(failure.needsSignIn) \(failure.message)")
@@ -256,7 +251,12 @@ final class ChatTab: NSObject {
             view.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
         ])
         loader = overlay
-        handingOver = false
+    }
+
+    /// Loads the chat page behind the loading screen, until the hand-over.
+    private func loadChatPage(_ url: URL) {
+        loader?.setStatus("Opening the chat…")
+        webView.load(URLRequest(url: url))
     }
 
     /// Removes the loading screen. When it had the keyboard focus, the chat page gets it.
@@ -268,7 +268,7 @@ final class ChatTab: NSObject {
     }
 
     private func updateLoaderStatus() {
-        guard shownURL == nil, resume != .running, let loader else { return }
+        guard lifecycle.showsStartStatus, let loader else { return }
         let updating = session.log.lines.suffix(30).contains { $0.range(of: "updat", options: .caseInsensitive) != nil }
         loader.setStatus(updating ? "Checking for updates…" : "Starting Zeus…")
     }
@@ -278,22 +278,25 @@ final class ChatTab: NSObject {
     /// A chat page without a globe to hand over to (an older Zeus Editor, or a chat that is not empty)
     /// gets a plain cross-fade. After the first chat of the app run, the chat comes in at once.
     private func handOver() {
-        guard let loader, !handingOver, shownURL != nil else { return }
-        handingOver = true
+        guard let loader, apply(.handOverStarts) else { return }
         if Self.greeted {
             Trace.log("hand-over: at once")
             self.loader = nil
+            apply(.handOverEnds)
             webView.evaluateJavaScript("window.zeusGlobe && (window.zeusGlobe.enter(), window.zeusGlobe.reveal())")
             dismiss(loader, over: 0.15)
             return
         }
         Self.greeted = true
+        let epoch = lifecycle.epoch
         DispatchQueue.main.asyncAfter(deadline: .now() + loader.remainingTime) { [weak self] in
-            guard let self else { return }
+            guard let self, self.isCurrent(epoch, "globe timer") else { return }
             let question = "window.zeusGlobe ? JSON.stringify(window.zeusGlobe.rect()) : 'null'"
             self.webView.evaluateJavaScript(question) { [weak self] result, _ in
-                guard let self, let loader = self.loader else { return }
+                guard let self, self.isCurrent(epoch, "globe place"), let loader = self.loader else { return }
                 self.loader = nil
+                self.apply(.handOverEnds)
+                let shown = self.lifecycle.epoch
                 let enter = "window.zeusGlobe && window.zeusGlobe.enter()"
                 let reveal = "window.zeusGlobe && window.zeusGlobe.reveal()"
                 if let rect = Self.rect(from: result) {
@@ -301,8 +304,11 @@ final class ChatTab: NSObject {
                     loader.moveGlobe(to: rect)
                     self.webView.evaluateJavaScript(enter)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.68) { [weak self] in
-                        self?.webView.evaluateJavaScript(reveal)
-                        self?.dismiss(loader, over: 0.18)
+                        // The loading screen of this hand-over always goes; the chat page shows its globe only when it
+                        // is still the page of this hand-over.
+                        guard let self else { return }
+                        if self.isCurrent(shown, "globe reveal") { self.webView.evaluateJavaScript(reveal) }
+                        self.dismiss(loader, over: 0.18)
                     }
                 } else {
                     Trace.log("hand-over: cross-fade")
@@ -351,11 +357,11 @@ final class ChatTab: NSObject {
         }
         switch message {
         case "chat-ready":
+            switch lifecycle.phase {
+            case .loading: handOver()
             // After a reload of the page there is no loading screen: the page comes in at once.
-            if loader == nil {
-                webView.evaluateJavaScript("window.zeusGlobe && (window.zeusGlobe.enter(), window.zeusGlobe.reveal())")
-            } else {
-                handOver()
+            case .showing: webView.evaluateJavaScript("window.zeusGlobe && (window.zeusGlobe.enter(), window.zeusGlobe.reveal())")
+            default: break
             }
         case "retry": onRetry?()
         case "setup": onRunSetup?()
@@ -372,7 +378,7 @@ final class ChatTab: NSObject {
     }
 
     func reload() {
-        if shownURL != nil { webView.reload() } else { render() }
+        if lifecycle.page != nil { webView.reload() } else { render() }
     }
 
     // MARK: Update from the settings
@@ -387,7 +393,8 @@ final class ChatTab: NSObject {
                                  terminalDraft: nil, terminalVisible: !terminal.webView.isHidden,
                                  selected: host?.selectedTab === self)
         // A tab that has not shown its chat yet keeps what it was to open again.
-        if shownURL == nil, let restore {
+        let hasPage = lifecycle.page != nil
+        if !hasPage, let restore {
             tab.sessionID = restore.sessionID
             tab.draft = restore.draft
             tab.terminalDraft = restore.terminalDraft
@@ -405,7 +412,7 @@ final class ChatTab: NSObject {
             }
         }
         var pageDraft: String?
-        if shownURL != nil {
+        if hasPage {
             group.enter()
             webView.evaluateJavaScript(Self.draftScript) { result, _ in
                 pageDraft = result as? String
@@ -418,7 +425,7 @@ final class ChatTab: NSObject {
                 let input = state["input"] as? [String: Any]
                 tab.terminalDraft = (input?["draft"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             }
-            if self?.shownURL != nil { tab.draft = pageDraft.flatMap { $0.isEmpty ? nil : $0 } }
+            if hasPage { tab.draft = pageDraft.flatMap { $0.isEmpty ? nil : $0 } }
             Trace.log("snapshot: \(self?.session.pid ?? 0) session=\(tab.sessionID ?? "-") project=\(tab.project ?? "-") draft=\(tab.draft?.count ?? 0) terminal-draft=\(tab.terminalDraft?.count ?? 0)")
             completion(tab)
         }
@@ -428,7 +435,7 @@ final class ChatTab: NSObject {
     /// The chat answers the close check with the first reason only (unsent text before work), so the launcher
     /// state tells the rest. Calls back on the main queue.
     func isBusy(completion: @escaping (Bool) -> Void) {
-        if session.isAlive, shownURL == nil {
+        if lifecycle.activity == .starting {
             DispatchQueue.main.async { completion(true) }
             return
         }
@@ -460,7 +467,7 @@ final class ChatTab: NSObject {
     /// unsent text back when Claude Code is ready for it.
     private func resumeSession(url: URL) {
         guard let restore else { return }
-        let launchID = session.launchID, pid = session.pid, mode = session.mode
+        let launchID = session.launchID, pid = session.pid, mode = session.mode, epoch = lifecycle.epoch
         let terminalDraft = restore.terminalDraft?.replacingOccurrences(of: "\r", with: "")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var resumed = false
@@ -481,22 +488,22 @@ final class ChatTab: NSObject {
             }
             DispatchQueue.main.async { [weak self] in
                 Trace.log("restore: \(pid) resume=\(restore.sessionID ?? "-") \(resumed ? "ok" : "not resumed")")
-                guard let self, !self.closed else { return }
+                // After a mode switch, the text of the old session must not go into the new session.
+                guard let self, self.isCurrent(epoch, "resume") else { return }
                 if ready, let terminalDraft {
                     // A text of several lines goes in as a paste, so that its line ends do not send it.
                     self.session.write(terminalDraft.contains("\n") ? "\u{1b}[200~\(terminalDraft)\u{1b}[201~" : terminalDraft)
                     Trace.log("restore: \(pid) terminal text back")
                 }
-                self.resume = .done
-                self.render()
+                if self.apply(.resumed) { self.loadChatPage(url) }
             }
         }
     }
 
     /// Puts the unsent text back into the message box of the chat page, when the box is empty.
     private func restoreDraft() {
-        guard !draftRestored, let draft = restore?.draft, !draft.isEmpty else { return }
-        draftRestored = true
+        guard let draft = restore?.draft, !draft.isEmpty else { return }
+        restore?.draft = nil
         let script = """
             for (let i = 0; i < 150; i++) {
               const box = document.getElementById('zeus-message');
@@ -525,7 +532,7 @@ final class ChatTab: NSObject {
     /// Runs the one-time Google sign-in of EU mode in the terminal panel, after an EU start that needs it.
     /// When it completes, the tab starts EU mode again; it never starts Standard.
     private func startSignIn() {
-        guard session.mode == .eu, signIn == nil else { return }
+        guard session.mode == .eu, lifecycle.phase == .failed else { return }
         let profile = EUProfile.load()
         guard let gcloud = GoogleCloud.gcloud() else {
             signInNote = "Zeus could not find the Google Cloud CLI (gcloud). Run the Zeus setup."
@@ -535,6 +542,8 @@ final class ChatTab: NSObject {
         do {
             let process = try GoogleSignIn(gcloud: gcloud, project: profile.vertexProject)
             signIn = process
+            apply(.signInStarts)
+            let epoch = lifecycle.epoch
             terminal.attach(process)
             if terminal.webView.isHidden { toggleTerminal() }
             Trace.log("eu sign-in: started \(process.terminalPID)")
@@ -542,7 +551,10 @@ final class ChatTab: NSObject {
             process.onExit = { [weak self] code in
                 guard let self else { return }
                 Trace.log("eu sign-in: ended code=\(code)")
+                // A sign-in that a mode switch or the close stopped: the tab has moved on.
+                guard self.isCurrent(epoch, "sign-in end") else { return }
                 self.signIn = nil
+                self.apply(.signInEnds)
                 if code == 0 {
                     self.signInNote = nil
                     self.onRetry?()
@@ -592,8 +604,8 @@ final class ChatTab: NSObject {
     /// Settings… (Cmd+,): opens the settings pop-up of the chat page. A tab that still starts or loads its chat
     /// page opens it when the page has loaded, so that the shortcut is not lost behind the loading screen.
     func openSettings() {
-        guard shownURL != nil, pageLoaded, !webView.isLoading else {
-            settingsWanted = true
+        guard lifecycle.canOpenSettings, !webView.isLoading else {
+            guard lifecycle.wantSettings() else { return }
             Trace.log("settings: waiting for the chat page of \(session.pid)")
             return
         }
@@ -679,42 +691,42 @@ final class ChatTab: NSObject {
 
     /// Closes the tab at once when its session has ended, else after the safe-close check.
     func requestClose() {
-        if closeApproved || !session.isAlive { finishClose() } else { requestSafeClose() }
+        if lifecycle.activity == .noSession { finishClose() } else { requestSafeClose() }
     }
 
     /// The chat is the authority for work, draft text, attachments, and pending sends. The tab stays
     /// open while the chat says it is not safe to close, until the user cancels or closes it anyway.
     func requestSafeClose() {
-        guard !closePending else { return }
-        closePending = true
-        closeGeneration += 1
-        closeReason = nil
-        closeRequestedAt = Date()
+        guard let id = lifecycle.requestClose(now: Date()) else { return }
         closeLabel.stringValue = "Checking the chat before the tab closes…"
         closeAnywayButton.isHidden = true
         setCancelTitle("Cancel close")
         closeBanner.isHidden = false
         closeSpinner.startAnimation(nil)
-        checkClose(generation: closeGeneration)
+        checkClose(id)
     }
 
     @objc func cancelClose() {
-        closeGeneration += 1
-        closePending = false
+        lifecycle.cancelClose()
         closeBanner.isHidden = true
         closeSpinner.stopAnimation(nil)
         Trace.log("close cancelled: \(session.pid)")
     }
 
     @objc func closeAnyway() {
-        Trace.log("close anyway: \(session.pid) \(closeReason ?? "-")")
+        Trace.log("close anyway: \(session.pid) \(lifecycle.close.reason ?? "-")")
         finishClose()
     }
 
     /// Asks the chat once if the tab can close. Calls back with nil when it is safe, else with the reason.
     /// A chat that cannot answer within `closeCheckLimit` seconds (no window.zeusApp, an error, no reply) is "unavailable".
+    /// A tab where Zeus starts or resumes has no chat page to ask: it answers "starting" (`TabLifecycle.Activity`).
     func closeState(completion: @escaping (String?) -> Void) {
-        guard session.isAlive, shownURL != nil else { completion(nil); return }
+        switch lifecycle.activity {
+        case .noSession: completion(nil); return
+        case .starting: completion("starting"); return
+        case .chat: break
+        }
         var answered = false
         let answer = { (reason: String?) in
             guard !answered else { return }
@@ -733,24 +745,24 @@ final class ChatTab: NSObject {
     }
 
     /// How long the app waits for a chat that cannot answer before it offers to close anyway.
-    static let closeCheckLimit: TimeInterval = 3
+    static let closeCheckLimit = TabLifecycle.closeCheckLimit
 
-    private func checkClose(generation: Int) {
-        guard closePending, generation == closeGeneration else { return }
+    /// One check of close request `id`; it asks again every 0.5 s until the tab closes or the request ends.
+    private func checkClose(_ id: Int) {
+        guard lifecycle.closeRuns(id) else { return }
         closeState { [weak self] reason in
-            guard let self, self.closePending, generation == self.closeGeneration else { return }
-            guard let reason else { self.finishClose(); return }
-            let waiting = reason == "unavailable" && Date().timeIntervalSince(self.closeRequestedAt) < Self.closeCheckLimit
-            if !waiting, reason != self.closeReason {
-                self.closeReason = reason
+            guard let self else { return }
+            switch self.lifecycle.closeAnswer(id: id, reason: reason, now: Date()) {
+            case .stale: return
+            case .close: self.finishClose(); return
+            case .wait: break
+            case let .show(reason):
                 self.closeLabel.stringValue = Self.closeMessage(for: reason)
                 self.setCancelTitle(reason == "unavailable" ? "Cancel" : "Cancel close")
                 self.closeAnywayButton.isHidden = false
                 Trace.log("close deferred: \(self.session.pid) \(reason)")
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.checkClose(generation: generation)
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.checkClose(id) }
         }
     }
 
@@ -830,11 +842,7 @@ final class ChatTab: NSObject {
     }
 
     private func finishClose() {
-        guard !closed else { return }
-        closed = true
-        closeApproved = true
-        closePending = false
-        closeGeneration += 1
+        guard apply(.close) else { return }
         SpeechService.shared.cancel(in: webView, reason: "tab closed")
         signIn?.stop()
         signIn = nil

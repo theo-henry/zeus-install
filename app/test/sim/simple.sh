@@ -123,4 +123,99 @@ XML
     '[ -d "$BUNDLE" ] && [ -z "$(ls -A "$BUNDLE")" ] && ! mount | grep -qF "$SANDBOX/.zeus/eu"'
   check "the old EU folders stay: ~/Code/zeus-eu and the plain ~/.zeus/eu" \
     '[ -f "$SANDBOX/Code/zeus-eu/clients/acme/out/rows.csv" ] && [ -d "$SANDBOX/Code/zeus-eu/.git" ] && [ "$(cat "$SANDBOX/.zeus/eu/claude/settings.json")" = "{\"old\": true}" ]'
+  switch_before_hand_over
+  not_safe_while_starting
+}
+
+# The first chat of an app run with a chat page that does not say "chat-ready" hands over 2.5 s after its page loaded.
+# A mode switch within those 2.5 s gives the tab a new session; the timer of the old page must not take the loading
+# screen of the new chat while its page still loads (the tab lifecycle, app/Sources/Zeus/TabLifecycle.swift).
+switch_before_hand_over() {
+  echo
+  echo "A mode switch before the hand-over of the first chat: the timer of the old page does not act on the new chat"
+  rm -f "$STATE/slow-page"
+  touch "$STATE/no-chat-ready"
+  launch_app eu-simple-switch ZEUS_APP_TEST_VAULT_AUTH=fail
+  need "the first chat page loads, and it does not say chat-ready" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/" $PAGE_LOAD_LIMIT'
+  local old_pid new_pid target=eu
+  old_pid="$(last_pid)"
+  # The app opens the mode of the tab that the user used last: the switch goes to the other mode.
+  grep -q "session $old_pid started (eu)" "$TRACE" && target=standard
+  # The page of the new chat comes 6 s after it is asked for: the timer of the old page fires while it loads.
+  echo 6000 >"$STATE/slow-page"
+  act "test-mode:$target"
+  wait_for "tab mode: $old_pid switch to $target asked" 5 >/dev/null || true
+  act test-alert:0
+  need "the tab switches to $target" 'wait_for "tab mode: $old_pid switch now $target" 20'
+  new_pid="$(last_pid)"
+  check "the page-load timer of the old page fires after the switch, and the tab ignores it" \
+    'wait_for "tab callback ignored: [0-9]* page-load timer" 10'
+  check "no hand-over before the page of the new chat has loaded" \
+    'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/$new_pid" 30 && ! sed -n "/tab mode: $old_pid switch now $target/,/page loaded: http:\/\/127.0.0.1:[0-9]*\/chat\/$new_pid/p" "$TRACE" | grep -q "hand-over: "'
+  check "the new chat then hands over from its own page" 'wait_for "hand-over: " 10'
+  rm -f "$STATE/no-chat-ready" "$STATE/slow-page"
+  stop_app
+}
+
+# A tab where Zeus starts (no chat page yet) or resumes its kept session after an update gives one answer to each reader:
+# "starting", the reason that the chat page itself gives while Claude Code starts (TabLifecycle.Activity). Cmd+W shows the
+# close banner with Close anyway, the mode switch asks first, the update waits, and the quit question lists the tab.
+not_safe_while_starting() {
+  echo
+  echo "A tab where Zeus starts or resumes is not safe to close: Cmd+W, the mode switch, the update, and the quit"
+  rm -f "$STATE/slow-start" "$STATE/slow-resume" "$STATE/no-chat-ready" "$STATE/slow-page"
+  launch_app eu-simple-starting ZEUS_APP_TEST_VAULT_AUTH=fail
+  need "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/" $PAGE_LOAD_LIMIT && sleep 1'
+  # The zeus of the next tab prints its chat URL only after 120 s.
+  echo 120000 >"$STATE/slow-start"
+  act test-cmd-t
+  need "a second tab starts" 'wait_count "session [0-9]* started" 2 20'
+  starting_readers "starting" "$(last_pid)" simple-5-starting
+  rm -f "$STATE/slow-start"
+
+  launch_app eu-simple-keep ZEUS_APP_TEST_VAULT_AUTH=fail
+  need "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/" $PAGE_LOAD_LIMIT && sleep 1'
+  act test-keep-tabs-and-quit
+  need "the app keeps its tab and quits" 'wait_for "restore: kept 1 tabs" 20'
+  local waited=0
+  while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
+  # The kept session resumes only after 120 s.
+  echo 120000 >"$STATE/slow-resume"
+  launch_app eu-simple-resuming ZEUS_APP_TEST_VAULT_AUTH=fail ZEUS_APP_TEST_RESTORE=1
+  need "the kept tab opens again and resumes its session" 'wait_for "tab phase: [0-9]* starting -> resuming" 30'
+  starting_readers "resuming" "$(last_pid)" simple-6-resuming
+  rm -f "$STATE/slow-resume"
+}
+
+# starting_readers <phase> <pid of its session> <screenshot prefix>: the selected tab is in that phase.
+starting_readers() {
+  local phase="$1" pid="$2" shots="$3" target=eu
+  grep -Eq "session $pid started \((restore, )?eu\)" "$TRACE" && target=standard
+  act test-busy-tabs
+  check "$phase: the update waits for the tab" 'wait_for "busy tabs: 1" 10'
+  act close-chat
+  check "$phase: Cmd+W shows that Zeus is starting, with Close anyway" 'wait_for "close deferred: $pid starting" 10'
+  shot "$shots-close"
+  check "$phase: the tab stays open" 'sleep 1 && ! grep -q "^$pid stop" "$STATE/sessions"'
+  act test-cancel-close
+  check "$phase: Cancel close keeps the tab" 'wait_for "close cancelled: $pid" 10'
+  act "test-mode:$target"
+  wait_for "tab mode: $pid switch to $target asked" 10 >/dev/null || true
+  act test-alert:0
+  check "$phase: the mode switch asks first" 'wait_for "tab mode: switch deferred: starting" 10'
+  shot "$shots-switch"
+  act test-alert:1
+  check "$phase: Cancel keeps the tab in its mode" 'wait_for "tab mode: $pid switch cancelled" 10 && ! grep -q "^$pid stop" "$STATE/sessions"'
+  act quit
+  check "$phase: the quit question lists the tab" 'wait_for "quit deferred: .*starting" 10'
+  shot "$shots-quit"
+  # A logout (macOS first warns of the power off, then sends the quit event) ends the quit question and the app.
+  act test-power-off
+  "$BIN/logout" "$APP_PID"
+  local waited=0
+  while kill -0 "$APP_PID" 2>/dev/null && [ "$waited" -lt 40 ]; do sleep 0.5; waited=$((waited + 1)); done
+  check "$phase: a logout then ends the app" '! kill -0 "$APP_PID" 2>/dev/null'
+  kill -0 "$APP_PID" 2>/dev/null && kill "$APP_PID"
+  APP_PID=""
+  return 0
 }
