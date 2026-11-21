@@ -558,6 +558,16 @@ page_has() {
   act "test-${2:-}speech-page"
   wait_count "speech page: " $((before + 1)) 10 >/dev/null && grep "speech page: " "$TRACE" | tail -1 | grep -qF -- "$1"
 }
+# page_wait <text> [seconds]: page_has again and again until the page has the text. The page gets a status from the
+# app after the app event that the trace shows, so one look right after the trace line can come too early under load.
+page_wait() {
+  local waited=0
+  until page_has "$1"; do
+    waited=$((waited + 1))
+    if [ "$waited" -ge $((${2:-10} * 2)) ]; then echo "    (the page never had: $1)"; return 1; fi
+    sleep 0.5
+  done
+}
 check "the chat page can use speech to text, also after it sets window.zeusApp" 'page_has "\"version\":1,\"versions\":[1,2],\"close\":\"function\""'
 act 'test-speech-post:{"type":"speech-languages"}'
 check "the languages are those on this Mac, with the default" 'sleep 1 && page_has "languages  en-US,fr-FR,nl-NL,de-DE/en-US"'
@@ -690,7 +700,7 @@ check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOA
 check "the chat page has speech bridge versions 1 and 2" 'page_has "\"version\":1,\"versions\":[1,2],\"close\":\"function\""'
 check "the accurate model downloads in the background after the start" 'wait_for "dictation: download sim-accurate-1 starts (needed)" 10'
 act 'test-speech-post:{"type":"speech-status"}'
-check "the status says Apple's recognizer while the model is not ready" 'sleep 0.5 && page_has "\"engine\":\"apple\""'
+check "the status says Apple's recognizer while the model is not ready" 'page_wait "\"engine\":\"apple\""'
 act test-draft
 sleep 0.3
 act 'test-speech-post:{"type":"speech-start","id":"w0","locale":null}'
@@ -698,8 +708,8 @@ check "dictation without a model uses Apple's recognizer" 'wait_for "speech: sta
 act 'test-speech-post:{"type":"speech-stop","id":"w0"}'
 check "Apple's recognizer gives its final text" 'wait_for "speech event: state w0 stopped" 10 && page_has "\"text\":\"Test chat turnHello Zeus.\""'
 rm -f "$MODELS_SRV/accurate-1.bin.hold"
-check "the download shows its progress, is checked, and the model loads" 'wait_for "dictation: download sim-accurate-1 checked" 20 && wait_for "dictation: loaded sim-accurate-1" 10 && page_has "accurate:sim-accurate-1:downloading" && page_has "accurate:sim-accurate-1:ready"'
-check "the status says Whisper when the model is loaded" 'sleep 0.5 && page_has "\"engine\":\"whisper\""'
+check "the download shows its progress, is checked, and the model loads" 'wait_for "dictation: download sim-accurate-1 checked" 20 && wait_for "dictation: loaded sim-accurate-1" 10 && page_wait "accurate:sim-accurate-1:downloading" && page_wait "accurate:sim-accurate-1:ready"'
+check "the status says Whisper when the model is loaded" 'page_wait "\"engine\":\"whisper\""'
 check "the model is in the models folder of the app, with installed.json" '[ -f "$MODELS_DIR/sim-accurate-1.bin" ] && grep -q "sim-accurate-1" "$MODELS_DIR/installed.json"'
 act test-clear
 speech_round w1 0.8
