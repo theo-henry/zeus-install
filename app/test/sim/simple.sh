@@ -128,31 +128,33 @@ XML
 }
 
 # The first chat of an app run with a chat page that does not say "chat-ready" hands over 2.5 s after its page loaded.
-# A mode switch within those 2.5 s gives the tab a new session; the timer of the old page must not take the loading
-# screen of the new chat while its page still loads (the tab lifecycle, app/Sources/Zeus/TabLifecycle.swift).
+# The test makes that wait 10 s, so that the switch ends before it also on a slow Mac. A mode switch within the wait
+# gives the tab a new session; the timer of the old page must not take the loading screen of the new chat while its
+# page still loads (the tab lifecycle, app/Sources/Zeus/TabLifecycle.swift).
 switch_before_hand_over() {
   echo
   echo "A mode switch before the hand-over of the first chat: the timer of the old page does not act on the new chat"
   rm -f "$STATE/slow-page"
   touch "$STATE/no-chat-ready"
-  launch_app eu-simple-switch ZEUS_APP_TEST_VAULT_AUTH=fail
+  launch_app eu-simple-switch ZEUS_APP_TEST_VAULT_AUTH=fail ZEUS_APP_TEST_PAGE_LOAD_WAIT=10
   need "the first chat page loads, and it does not say chat-ready" 'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/" $PAGE_LOAD_LIMIT'
   local old_pid new_pid target=eu
   old_pid="$(last_pid)"
   # The app opens the mode of the tab that the user used last: the switch goes to the other mode.
   grep -q "session $old_pid started (eu)" "$TRACE" && target=standard
-  # The page of the new chat comes 6 s after it is asked for: the timer of the old page fires while it loads.
-  echo 6000 >"$STATE/slow-page"
+  # The page of the new chat comes 20 s after it is asked for: the timer of the old page fires while it loads.
+  echo 20000 >"$STATE/slow-page"
   act "test-mode:$target"
   wait_for "tab mode: $old_pid switch to $target asked" 5 >/dev/null || true
   act test-alert:0
   need "the tab switches to $target" 'wait_for "tab mode: $old_pid switch now $target" 20'
   new_pid="$(last_pid)"
   check "the page-load timer of the old page fires after the switch, and the tab ignores it" \
-    'wait_for "tab callback ignored: [0-9]* page-load timer" 10'
+    'wait_for "tab callback ignored: [0-9]* page-load timer" 15'
   check "no hand-over before the page of the new chat has loaded" \
-    'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/$new_pid" 30 && ! sed -n "/tab mode: $old_pid switch now $target/,/page loaded: http:\/\/127.0.0.1:[0-9]*\/chat\/$new_pid/p" "$TRACE" | grep -q "hand-over: "'
-  check "the new chat then hands over from its own page" 'wait_for "hand-over: " 10'
+    'wait_for "page loaded: http://127.0.0.1:[0-9]*/chat/$new_pid" 40 && ! sed -n "/tab mode: $old_pid switch now $target/,/page loaded: http:\/\/127.0.0.1:[0-9]*\/chat\/$new_pid/p" "$TRACE" | grep -q "hand-over: "'
+  # The new chat is still the first chat of the run: it hands over 10 s after its page loaded.
+  check "the new chat then hands over from its own page" 'wait_for "hand-over: " 20'
   rm -f "$STATE/no-chat-ready" "$STATE/slow-page"
   stop_app
 }

@@ -230,6 +230,7 @@ It also starts a release build of the app with `ZEUS_APP_TRACE` and checks that 
 `ZEUS_APP_TEST_AUDIO_FILE=/path/to/sound.wav` replaces the microphone with that sound file, played in real time and then silence, for the real Whisper model.
 `ZEUS_APP_TEST_RECORDING_LIMIT=<seconds>` replaces the 10-minute recording limit.
 `ZEUS_APP_TEST_V1_DEADLINE=<seconds>` replaces the 2.8 s that Whisper has for the text of a version 1 session.
+`ZEUS_APP_TEST_PAGE_LOAD_WAIT=<seconds>` replaces the 2.5 s that the first chat waits for "chat-ready" after its page loaded.
 `ZEUS_APP_NO_MODEL_DOWNLOAD=1` turns off the download of the dictation models; dictation then uses a model that is already on the Mac, or Apple's recognizer.
 The tests set it.
 `ZEUS_APP_TEST_ID=<id>` makes the test actions reach only this app copy.

@@ -120,7 +120,7 @@ final class ChatTab: NSObject {
             guard !Self.greeted else { self.handOver(); return }
             // A chat page without the globe (an older Zeus Editor) does not say "chat-ready": do not wait long.
             let epoch = self.lifecycle.epoch
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.pageLoadWait) { [weak self] in
                 guard let self, self.isCurrent(epoch, "page-load timer") else { return }
                 self.handOver()
             }
@@ -132,6 +132,15 @@ final class ChatTab: NSObject {
         }
         return page
     }
+
+    /// How long the first chat waits for "chat-ready" after its page loaded: 2.5 s. Debug builds take
+    /// `ZEUS_APP_TEST_PAGE_LOAD_WAIT` (seconds) instead, for the tests.
+    private static let pageLoadWait: TimeInterval = {
+        #if DEBUG
+        if let value = DebugEnvironment.value("ZEUS_APP_TEST_PAGE_LOAD_WAIT").flatMap(TimeInterval.init) { return value }
+        #endif
+        return 2.5
+    }()
 
     /// Applies a lifecycle event, and writes a phase change to the trace. Returns false when the event is refused.
     @discardableResult
