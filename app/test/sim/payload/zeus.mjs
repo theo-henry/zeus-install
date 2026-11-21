@@ -108,9 +108,12 @@ document.getElementById('send').onclick=async()=>{
 </script></body></html>`;
 // With <state>/no-close-state at start, this session acts like an editor plugin older than the app: no window.zeusApp.
 // With <state>/hung-close-state at start, window.zeusApp.closeState() never answers.
-const template = fs.existsSync(`${state}/no-close-state`) ? page.replace('window.zeusApp=', 'window.oldPlugin=')
+// With <state>/no-chat-ready at start, the page never says "chat-ready", like a chat page without the globe: the app hands
+// over 2.5 s after the page has loaded.
+const chatReady = "requestAnimationFrame(()=>requestAnimationFrame(()=>window.webkit?.messageHandlers?.zeusApp?.postMessage('chat-ready')));";
+const template = (fs.existsSync(`${state}/no-close-state`) ? page.replace('window.zeusApp=', 'window.oldPlugin=')
   : fs.existsSync(`${state}/hung-close-state`) ? page.replace('closeState:async()=>{', 'closeState:async()=>{await new Promise(r=>setTimeout(r,600000));')
-  : page;
+  : page).replace(chatReady, fs.existsSync(`${state}/no-chat-ready`) ? '' : chatReady);
 // With <state>/long-turn at start, a turn of this session takes 60 s, longer than any check that waits on it.
 const turnMs = fs.existsSync(`${state}/long-turn`) ? 60000 : Number(process.env.ZEUS_SIM_TURN_MS||3000);
 // The page shows the chat of the session that runs now, in its project.
@@ -126,7 +129,9 @@ const server = http.createServer((req, res) => {
   busy=true;record('busy');let text='';req.on('data',chunk=>text+=chunk);req.on('end',()=>setTimeout(()=>{busy=false;turns+=1;record('reply',text);res.end('Reply: '+text);},turnMs));return;
  }
  if(req.url === '/cost') {res.end(cost());return;}
- res.writeHead(200,{'content-type':'text/html;charset=utf-8'});res.end(req.url === '/editor' ? editor : html());
+ // With <state>/slow-page when the page is asked for, the chat page comes that many ms later (a busy Mac).
+ const slow = req.url !== '/editor' && fs.existsSync(`${state}/slow-page`) ? Number(fs.readFileSync(`${state}/slow-page`, 'utf8')) : 0;
+ setTimeout(() => {res.writeHead(200,{'content-type':'text/html;charset=utf-8'});res.end(req.url === '/editor' ? editor : html());}, slow);
 });
 // The control socket and the launch record of the launcher (zeus-editor packages/launcher/control.js).
 const stateDir = isolatedEU ? path.join(os.homedir(), '.zeus', 'eu', 'editor') : (process.env.ZEUS_EDITOR_STATE_DIR || path.join(os.homedir(), '.zeus-editor'));
@@ -168,18 +173,22 @@ const control = net.createServer((socket) => {
    else if (message.op === 'restart') {
     if (typeof message.resume === 'string') { sessionId = message.resume; record('resume', sessionId); }
     terminalDraft = '';
-    setTimeout(() => reply({ok:true,result:launcherState()}), 300);
+    // With <state>/slow-resume at the restart, the resume takes that many ms more (a tab that stays in "resuming").
+    const slowResume = fs.existsSync(`${state}/slow-resume`) ? Number(fs.readFileSync(`${state}/slow-resume`, 'utf8')) : 0;
+    setTimeout(() => reply({ok:true,result:launcherState()}), 300 + slowResume);
    } else reply({ok:false,error:'unknown op'});
   }
  });
 });
 fs.rmSync(socketPath, {force:true});
 // Delay only the fixture to permit startup screenshots. The app adds no wait.
+// With <state>/slow-start at start, this zeus prints its chat URL that many ms later (a tab that stays in "starting").
+const startDelay = Number(process.env.ZEUS_SIM_START_DELAY || (fs.existsSync(`${state}/slow-start`) ? fs.readFileSync(`${state}/slow-start`, 'utf8') : 0));
 setTimeout(()=>control.listen(socketPath,()=>server.listen(0,'127.0.0.1',()=>{
  fs.mkdirSync(path.dirname(launchRecord), {recursive:true});
  fs.writeFileSync(launchRecord, JSON.stringify({id:String(process.pid),token:'simulated',socket:socketPath,cwd:process.cwd(),pid:process.pid}));
  console.log(`Zeus chat: http://127.0.0.1:${server.address().port}/chat/${process.pid}#k=simulated`);
-})), Number(process.env.ZEUS_SIM_START_DELAY || 0));
+})), startDelay);
 fs.writeFileSync(`${state}/zeus-started`,JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),app:process.env.ZEUS_APP}));
 fs.appendFileSync(`${state}/zeus-starts`,JSON.stringify({pid:process.pid,args:process.argv.slice(2),cwd:process.cwd(),run:process.env.ZEUS_APP_RUN||null})+'\n');
 // The read block test (app/test/sim/vault.sh): a Standard session tries the EU folders, as a Claude Bash command would.

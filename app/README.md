@@ -126,6 +126,8 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   While Zeus works, or while the chat has unsent text, attachments, or a pending send, the tab stays open with a banner, and closes when the chat is safe.
   **Close anyway** closes the tab at once; **Cancel close** keeps the tab.
   When the chat cannot answer (for example an older Zeus Editor plugin), the app waits 3 s, then asks: **Close anyway** or **Cancel**.
+  A tab where Zeus still starts, or resumes its chat after an update, has no chat to ask yet: it is not safe to close, with the reason "Zeus is starting".
+  The same answer goes to the quit question, the mode switch, and an update, which all wait for it or ask first (`Sources/Zeus/TabLifecycle.swift`).
   Then the app sends SIGTERM to its `zeus`; the chat stays in the history.
   In the app, the app owns closing: `zeus` runs with `ZEUS_APP=1`, so the editor does not close terminals when the page closes.
 - **Standard read block.** On a Mac with an EU vault (its disk image, or a mounted vault with its marker), open or locked, the app starts every Standard `zeus` through `/usr/bin/sandbox-exec` with a macOS sandbox profile that denies reading and writing the EU folders (`Sources/Zeus/StandardJail.swift`).
@@ -276,6 +278,16 @@ app/test/update-handoff/run.sh
 
 It tests the stages of `update.json` (`Sources/Zeus/UpdateHandoff.swift`) without app copies: each legal transition and the refused ones, the role of a copy that starts, and each step of the waiting copy.
 Then it tests the file between the app and `install.sh`: each side reads the stages that the other writes, the fields of older app versions stay, both use the same lock, and a roll back of `install.sh` does not stop a new app that confirmed.
+
+## Test the chat tab lifecycle
+
+```bash
+app/test/tab-lifecycle/run.sh
+```
+
+It tests the lifecycle of a chat tab (`Sources/Zeus/TabLifecycle.swift`) without app copies and without WebKit: each legal transition of the phases and that every other transition is refused,
+the epoch that stops a timer or a callback of an earlier phase or of the session before a mode switch, what the phase tells a close, a quit, a mode switch, and an update,
+Settings… before the chat page has loaded, the mode switch of the tab, and the close request.
 
 ## Test the releases and the self-update
 
@@ -431,6 +443,8 @@ the EU plugins step of `install.sh` is done with nothing to install and no vault
 Standard runs without the read block on a Mac with an EU vault disk image; New EU Chat starts `zeus --eu --no-open` in `~/Code/zeus` with no Touch ID, no vault, and no EU status line step;
 the EU cost without EU data access and without a vault button; Standard and EU tabs on the same project; a switch to Standard and back without the handover choice;
 and the restore of both tabs after an app start, with the EU record in the app folder; the vault disk image and the old EU folders stay untouched.
+Then a new app run whose first chat page does not say "chat-ready" switches the mode of its tab before the hand-over: the page-load timer of the old page is ignored, and the new chat hands over only after its own page has loaded.
+Last, a tab where Zeus starts, and a tab that resumes its kept chat, are not safe to close: the update waits for them, Cmd+W shows "Zeus is starting" with **Close anyway**, the mode switch asks first, and the quit question lists them.
 
 `--signin` runs the Google sign-in step of the setup (`app/test/sim/signin.sh`) with a simulated `gcloud` and simulated Google answers:
 **Skip** completes the setup without a sign-in and writes no marker file, and the setup again asks while the user is signed out; an account without the two roles gets the message for the roles with the account, and the setup completes;

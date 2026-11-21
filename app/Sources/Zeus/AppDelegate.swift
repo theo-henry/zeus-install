@@ -534,7 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             let missing = EUSetup.missing()
             if !missing.isEmpty { askForEUSetup(missing); return }
         }
-        tab.isSwitching = true
+        guard tab.beginSwitch() else { refreshModeViews(); return }
         refreshModeViews()
         if afterRelease, target == .standard {
             Trace.log("tab mode: \(tab.session.pid) switch to standard after a release")
@@ -691,7 +691,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func endSwitch(_ tab: ChatTab, _ reason: String, pid: pid_t? = nil) {
         Trace.log("tab mode: \(pid ?? tab.session.pid) switch \(reason)")
-        tab.isSwitching = false
+        tab.endSwitch()
         refreshModeViews()
     }
 
@@ -985,6 +985,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     self.quitApproved = true
                     NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
                 }
+            // The number of tabs that an update from the settings waits for.
+            case "test-busy-tabs": self.busyTabCount { Trace.log("busy tabs: \($0)") }
             case "test-alert":
                 guard let alert = self.openAlert, let index = Int(argument) else { Trace.log("test alert: none"); break }
                 Trace.log("test alert: \(alert.messageText) -> \(index)")
