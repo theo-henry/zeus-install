@@ -1,48 +1,29 @@
 import AppKit
 import SwiftUI
 
-/// Runs the bundled install.sh in app mode and turns its "@@zeus" lines into a checklist.
+/// Runs the bundled install.sh in app mode and turns its "@@zeus" lines into a checklist (`SetupSteps`).
 final class SetupModel: ObservableObject {
-    enum StepState: Equatable { case unknown, ok, todo, always, running, done, skipped, failed }
+    typealias StepState = SetupSteps.State
 
-    struct Step: Identifiable, Equatable {
-        let id: Int
+    /// One row of the checklist.
+    struct Row: Identifiable, Equatable {
+        let id: String
         let name: String
         let note: String
-        var state: StepState = .unknown
-        var detail = ""
+        let state: StepState
+        let detail: String
     }
 
     enum Phase: Equatable { case checking, ready, installing, finished, failed(String) }
 
-    struct Question: Equatable {
-        let step: Int
-        let prompt: String
-    }
+    /// The key of the first row: the app in Applications. It is not an installer step.
+    static let applicationsRow = "applications"
 
-    @Published var steps: [Step] = [
-        Step(id: 0, name: "Zeus app in Applications", note: "Zeus copies itself to the Applications folder.",
-             state: AppMover.isInApplications ? .ok : .todo),
-        Step(id: 1, name: "Git", note: "Xcode Command Line Tools. A system window asks you to install them."),
-        Step(id: 2, name: "Python", note: "Anaconda. You accept its license here."),
-        Step(id: 3, name: "GitHub CLI", note: "The gh command."),
-        Step(id: 4, name: "GitHub login", note: "Your browser opens. You enter a one-time code."),
-        Step(id: 5, name: "Access to the Zeus repos", note: "Checked each time. Ask Theo for access if it fails."),
-        Step(id: 6, name: "Node.js", note: ""),
-        Step(id: 7, name: "Claude Code", note: "Installed or updated."),
-        Step(id: 8, name: "Celonis content-cli", note: ""),
-        Step(id: 9, name: "Zeus workspace", note: "Copied to ~/Code/zeus, or updated there."),
-        Step(id: 10, name: "Zeus Editor plugin", note: "Installed or updated."),
-        Step(id: 11, name: "The zeus command", note: ""),
-        Step(id: 12, name: "Zeus skill plugins", note: "YAML builder, OCPM, and PQL."),
-        Step(id: 13, name: "Claude login", note: "Your browser opens. You log in to Claude."),
-        Step(id: 14, name: "Google Cloud CLI", note: "For EU mode. Installed in ~/google-cloud-sdk."),
-        Step(id: 15, name: "Zeus plugins of EU mode", note: "Installed or updated in the EU vault, while it is open."),
-        Step(id: 16, name: SetupModel.googleSignInName, note: "For EU mode. Your browser opens. You can skip it."),
-    ]
+    /// The installer steps and their states. install.sh gives the steps (the "plan" line).
+    @Published private(set) var checklist = SetupSteps()
+    let inApplications = AppMover.isInApplications
     @Published var phase: Phase = .checking
     @Published var logText = ""
-    @Published var question: Question?
     @Published var githubCode: String?
     @Published var lastLink: URL?
     @Published var licenseURL: URL?
@@ -59,19 +40,25 @@ final class SetupModel: ObservableObject {
     private var lastOutput = Date()
     private var idleTimer: Timer?
 
-    /// The Google sign-in of EU mode, the last EU step: its number comes from the step list, not from a fixed value.
-    static let googleSignInName = "Google sign-in"
-    var googleSignInStep: Int? { steps.first { $0.name == Self.googleSignInName }?.id }
+    var question: SetupSteps.Question? { checklist.question }
 
-    /// Step 0 (the app in Applications) is not an installer step.
-    var needsInstall: Bool { steps.contains { $0.id != 0 && $0.state == .todo } }
+    /// The rows of the checklist: the app in Applications, then the installer steps in the order of install.sh.
+    var rows: [Row] {
+        [Row(id: Self.applicationsRow, name: "Zeus app in Applications", note: "Zeus copies itself to the Applications folder.",
+             state: inApplications ? .ok : .todo, detail: "")] +
+            checklist.steps.map { step in
+                Row(id: step.key, name: SetupSteps.name(of: step.key), note: SetupSteps.note(of: step.key),
+                    state: step.state, detail: step.detail)
+            }
+    }
+
+    var needsInstall: Bool { checklist.steps.contains { $0.state == .todo } }
     var isBusy: Bool { phase == .checking || phase == .installing }
 
     func check() {
         guard process == nil else { return }
         phase = .checking
-        for index in steps.indices where steps[index].id != 0 { steps[index].state = .unknown; steps[index].detail = "" }
-        run(arguments: ["--check"])
+        run(.check, arguments: ["--check"])
     }
 
     func install() {
@@ -80,14 +67,15 @@ final class SetupModel: ObservableObject {
         githubCode = nil
         lastLink = nil
         log = TerminalLog()
-        run(arguments: [])
+        run(.install, arguments: [])
     }
 
-    private func run(arguments: [String]) {
+    private func run(_ kind: SetupSteps.RunKind, arguments: [String]) {
         guard let installer = Paths.installer else {
             phase = .failed("The installer is missing from the app. Download the Zeus app again.")
             return
         }
+        checklist.begin(kind)
         ShellEnvironment.reset()
         let env = ShellEnvironment.make(extra: ["ZEUS_INSTALL_APP": "1"])
         log.onEvent = { [weak self] event in self?.handle(event: event) }
@@ -100,6 +88,7 @@ final class SetupModel: ObservableObject {
             self.process = process
             startIdleTimer()
         } catch {
+            _ = checklist.finish(exitCode: -1)
             phase = .failed(error.localizedDescription)
         }
     }
@@ -133,60 +122,56 @@ final class SetupModel: ObservableObject {
         }
     }
 
-    private func handle(event: String) {
-        Trace.log("setup event: \(event)")
-        let parts = event.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
-        guard let kind = parts.first else { return }
-        let number = parts.count > 1 ? Int(parts[1]) : nil
-        let text = parts.count > 2 ? parts[2] : ""
-        func set(_ state: StepState) {
-            guard let number, let index = steps.firstIndex(where: { $0.id == number }) else { return }
-            steps[index].state = state
-            // A message of an earlier run is not the result of this run.
-            steps[index].detail = state == .failed ? text : ""
+    private func handle(event line: String) {
+        Trace.log("setup event: \(line)")
+        guard let event = SetupSteps.parse(line), checklist.apply(event) else {
+            Trace.log("setup event refused: \(line)")
+            return
         }
-        switch kind {
-        case "state":
-            switch text {
-            case "ok": set(.ok)
-            case "always": set(.always)
-            default: set(.todo)
-            }
-        case "running":
-            set(.running)
-            question = nil
-            // A link of an earlier step (such as the Claude login) is not the link of this step.
-            lastLink = nil
-        case "done": set(.done); question = nil
-        case "skipped": set(.skipped); question = nil
-        case "failed": set(.failed); question = nil
-        case "ask": if let number { question = Question(step: number, prompt: text) }
-        default: break
-        }
+        // A link of an earlier step (such as the Claude login) is not the link of this step.
+        if case .running = event { lastLink = nil }
     }
 
     private func ended(code: Int32, check: Bool) {
         Trace.log("setup ended: check=\(check) code=\(code)")
-        for step in steps where !step.detail.isEmpty { Trace.log("setup detail \(step.id): \(step.detail)") }
+        for step in checklist.steps where !step.detail.isEmpty { Trace.log("setup detail \(step.key): \(step.detail)") }
         process = nil
         idleTimer?.invalidate()
         waitingForInput = false
-        question = nil
-        if check {
-            phase = code == 0 ? .ready : .failed("The check of this Mac did not complete (exit code \(code)).")
-            return
-        }
-        if code == 0 {
+        guard let outcome = checklist.finish(exitCode: code) else { return }
+        Trace.log("setup result: \(outcome)")
+        Trace.log("setup states: " + checklist.steps.map { "\($0.key)=\($0.state)" }.joined(separator: " "))
+        switch outcome {
+        case .ok where check:
+            phase = .ready
+        case .ok:
             phase = .finished
-            for index in steps.indices where steps[index].id != 0 && [.unknown, .running, .todo, .always].contains(steps[index].state) {
-                steps[index].state = .skipped
-            }
             applyOptions()
             Preferences.setupDone = true
-        } else {
-            let failed = steps.first { $0.state == .failed }
-            phase = .failed(failed.map { "Step \($0.id), \($0.name): \($0.detail)" } ?? "The installer stopped (exit code \(code)).")
-            if let index = steps.firstIndex(where: { $0.state == .running }) { steps[index].state = .failed }
+        case let .failed(failure):
+            phase = .failed(message(failure, check: check, code: code))
+        }
+    }
+
+    /// The text of a failed run.
+    private func message(_ failure: SetupSteps.Failure, check: Bool, code: Int32) -> String {
+        func title(_ key: String) -> String {
+            let number = checklist.step(key).map { "Step \($0.number), " } ?? ""
+            return number + SetupSteps.name(of: key)
+        }
+        switch failure {
+        case let .unreported(key) where check:
+            return "The check of this Mac gave no result for \(SetupSteps.name(of: key))."
+        case let .unreported(key):
+            return "\(title(key)): the installer gave no result for this step."
+        case _ where check:
+            return "The check of this Mac did not complete (exit code \(code))."
+        case let .step(key):
+            return "\(title(key)): \(checklist.step(key)?.detail ?? "")"
+        case let .installer(text):
+            return text
+        case let .stopped(exitCode):
+            return "The installer stopped (exit code \(exitCode))."
         }
     }
 
@@ -204,7 +189,7 @@ final class SetupModel: ObservableObject {
 
     func answerQuestion(_ yes: Bool) {
         send(yes ? "y" : "n")
-        question = nil
+        checklist.answered()
     }
 
     func stop() {
@@ -277,7 +262,7 @@ struct SetupView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 9) {
-                    ForEach(model.steps) { step in
+                    ForEach(model.rows) { step in
                         HStack(alignment: .top, spacing: 9) {
                             icon(step.state).frame(width: 18, height: 18)
                             VStack(alignment: .leading, spacing: 1) {
@@ -287,7 +272,8 @@ struct SetupView: View {
                                 let note = !step.detail.isEmpty ? step.detail : done ? "" : step.note
                                 if !note.isEmpty {
                                     Text(note).font(.caption)
-                                        .foregroundStyle(step.state == .failed ? Color.red : Color.secondary)
+                                        // Red only for the message of a failure, not for the instructions of the step.
+                                        .foregroundStyle(step.state == .failed && !step.detail.isEmpty ? Color.red : Color.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
@@ -299,7 +285,7 @@ struct SetupView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             // The step that runs, or else the last failed step, stays in view (the list can be longer than the window).
-            .onChange(of: model.steps) { steps in
+            .onChange(of: model.rows) { steps in
                 guard let step = steps.first(where: { $0.state == .running }) ?? steps.last(where: { $0.state == .failed })
                 else { return }
                 withAnimation { proxy.scrollTo(step.id, anchor: .center) }
@@ -327,7 +313,7 @@ struct SetupView: View {
 
     @ViewBuilder
     private var prompts: some View {
-        if let question = model.question, question.step == 2 {
+        if let question = model.question, question.key == SetupSteps.Key.anaconda {
             promptBox {
                 Text("Do you accept the Anaconda license?").fontWeight(.semibold)
                 Text("Zeus uses Anaconda for Python and the GitHub CLI.").font(.callout).foregroundStyle(.secondary)
@@ -338,7 +324,7 @@ struct SetupView: View {
                     Button("Accept") { model.answerQuestion(true) }.keyboardShortcut(.defaultAction)
                 }
             }
-        } else if let question = model.question, question.step == model.googleSignInStep {
+        } else if let question = model.question, question.key == SetupSteps.Key.googleSignIn {
             promptBox {
                 Text("Sign in to Google for EU mode?").fontWeight(.semibold)
                 Text("EU mode runs Claude on Google Cloud in the EU. Sign in with your work email. If you do not use EU mode, skip it.")
@@ -360,7 +346,7 @@ struct SetupView: View {
                 }
             }
         }
-        if model.phase == .installing, let code = model.githubCode, model.steps.first(where: { $0.id == 4 })?.state == .running {
+        if model.phase == .installing, let code = model.githubCode, model.checklist.state(of: SetupSteps.Key.githubLogin) == .running {
             promptBox {
                 Text("GitHub login").fontWeight(.semibold)
                 Text("Copy this code, then open GitHub and paste it there.").font(.callout).foregroundStyle(.secondary)
@@ -375,7 +361,7 @@ struct SetupView: View {
                 }
             }
         }
-        if model.phase == .installing, model.steps.first(where: { $0.id == 13 })?.state == .running, let link = model.lastLink {
+        if model.phase == .installing, model.checklist.state(of: SetupSteps.Key.claudeLogin) == .running, let link = model.lastLink {
             promptBox {
                 Text("Claude login").fontWeight(.semibold)
                 Text("Log in to Claude in your browser. If no browser window opened, open the link.")
@@ -390,7 +376,7 @@ struct SetupView: View {
 
     @ViewBuilder
     private var googleSignIn: some View {
-        if model.phase == .installing, model.question == nil, model.steps.first(where: { $0.id == model.googleSignInStep })?.state == .running,
+        if model.phase == .installing, model.question == nil, model.checklist.state(of: SetupSteps.Key.googleSignIn) == .running,
            let link = model.lastLink {
             promptBox {
                 Text("Google sign-in").fontWeight(.semibold)

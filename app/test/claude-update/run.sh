@@ -1,9 +1,9 @@
 #!/bin/bash
-# Test of step 7 of install.sh on a Mac that has Claude Code: the installer updates it to the newest version
+# Test of the step claude (7) of install.sh on a Mac that has Claude Code: the installer updates it to the newest version
 # with the method that installed it (claude update, npm, or Homebrew), never with sudo, and within a time
 # limit. A failed or stopped update is a warning, and the installer continues.
 #
-# install.sh is loaded with ZEUS_INSTALL_SOURCED=1 and step 7 runs against simulated claude, npm, brew, and sudo
+# install.sh is loaded with ZEUS_INSTALL_SOURCED=1 and the step claude runs against simulated claude, npm, brew, and sudo
 # commands in a temporary home folder. The real Claude Code of this Mac is not used or changed.
 #
 # Usage: app/test/claude-update/run.sh
@@ -112,7 +112,7 @@ setup() {
   OUT="$dir/out"
 }
 
-# run_step [app]: runs step 7 of install.sh, and then a line that shows that the installer continued.
+# run_step [app]: runs the step claude of install.sh, and then a line that shows that the installer continued.
 # With "app", in app mode (ZEUS_INSTALL_APP=1). The output (stdout and stderr) is in $OUT.
 run_step() {
   local app_mode=""
@@ -121,7 +121,7 @@ run_step() {
     ZEUS_INSTALL_APP="$app_mode"
     # shellcheck source=install.sh
     source "$REPO_DIR/install.sh"
-    install_claude
+    run_install_step claude
     printf 'SUMMARY: %s\n' "${SUMMARY[@]}"
     echo "the installer continues"
   ) >"$OUT" 2>&1
@@ -194,14 +194,14 @@ check "the installer continues" 'continued'
 printf '\nApp mode (Zeus.app)\n'
 setup app-old native 2.1.0 2.1.5 ok
 run_step app
-check "the app gets the running and done lines of step 7" \
-  'grep -qx "@@zeus running 7 Claude Code" "$OUT" && grep -qx "@@zeus done 7 Claude Code (updated from 2.1.0 to 2.1.5)" "$OUT"'
+check "the app gets the running and done lines of the step claude" \
+  'grep -qx "@@zeus running claude Claude Code" "$OUT" && grep -qx "@@zeus done claude Claude Code (updated from 2.1.0 to 2.1.5)" "$OUT"'
 (ZEUS_INSTALL_APP=1; source "$REPO_DIR/install.sh"; check_steps) >"$OUT.check" 2>&1 || true
-check "the app check shows step 7 as done when Claude Code is installed" 'grep -qx "@@zeus state 7 ok" "$OUT.check"'
+check "the app check shows the step claude as done when Claude Code is installed" 'grep -qx "@@zeus state claude ok" "$OUT.check"'
 setup app-fail native 2.1.0 2.1.5 fail
 run_step app
 check "a failed update is skipped in the app, not failed" \
-  'grep -qx "@@zeus skipped 7 Claude Code (2.1.0, not updated)" "$OUT" && ! grep -q "@@zeus failed" "$OUT"'
+  'grep -qx "@@zeus skipped claude Claude Code (2.1.0, not updated)" "$OUT" && ! grep -q "@@zeus failed" "$OUT"'
 
 printf '\n'
 if [ "$FAILURES" -gt 0 ]; then

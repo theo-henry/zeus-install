@@ -3,7 +3,7 @@
 # app started with its fallback PATH, which had only Python 3.9, and gcloud 593 (no Python of its own) stopped with
 # "gcloud failed to load ... Python 3.9". The Google sign-in then opened nothing and said "did not complete".
 # Here the PATH has only a Python 3.9, and a fake gcloud that, like the real one, refuses a Python before 3.10.
-# Installer: step 14 checks that gcloud runs and gives it a Python 3.10+ of this Mac (CLOUDSDK_PYTHON); without one it
+# Installer: the step gcloud checks that gcloud runs and gives it a Python 3.10+ of this Mac (CLOUDSDK_PYTHON); without one it
 # stops with the gcloud error and the fix; the sign-in step then says that gcloud does not run and asks nothing.
 # App: GcloudPython finds the same Python for CLOUDSDK_PYTHON of the commands that it starts (ShellEnvironment.make).
 set -uo pipefail
@@ -60,15 +60,15 @@ run_step() {
 }
 check_state() {
   env -i HOME="$HOME_DIR" PATH="$FALLBACK_PATH" TMPDIR="$WORK" ZEUS_INSTALL_SYSTEM_PYTHON_DIRS="" ZEUS_INSTALL_APP=1 \
-    bash -c 'ZEUS_INSTALL_SOURCED=1 source "$1"; WORK_DIR="$(mktemp -d)"; state() { echo "state $1 $2"; }; gcloud=""; if gcloud="$(find_gcloud)" && gcloud_runs "$gcloud"; then state 14 ok; else state 14 todo; fi' _ "$REPO_DIR/install.sh" </dev/null 2>&1
+    bash -c 'ZEUS_INSTALL_SOURCED=1 source "$1"; WORK_DIR="$(mktemp -d)"; state() { echo "state $1 $2"; }; gcloud=""; if gcloud="$(find_gcloud)" && gcloud_runs "$gcloud"; then state gcloud ok; else state gcloud todo; fi' _ "$REPO_DIR/install.sh" </dev/null 2>&1
 }
 
 echo "Installer, a Mac with only Python 3.9"
 out="$(run_step install_gcloud)"; status=$?
-check "step 14 does not take a gcloud that does not run as installed" '[ "$status" -ne 0 ] && ! printf "%s" "$out" | grep -q "Already installed"'
+check "the step gcloud does not take a gcloud that does not run as installed" '[ "$status" -ne 0 ] && ! printf "%s" "$out" | grep -q "Already installed"'
 check "it says that gcloud does not run, with the gcloud error and the fix" \
   'printf "%s" "$out" | grep -q "The Google Cloud CLI does not run: ERROR: gcloud failed to load. You are running gcloud with Python 3.9" && printf "%s" "$out" | grep -q "installs Python 3.10 or later"'
-check "the setup check finds step 14 to do" '[ "$(check_state | grep "^state 14")" = "state 14 todo" ]'
+check "the setup check finds the step gcloud to do" '[ "$(check_state | grep "^state gcloud")" = "state gcloud todo" ]'
 out="$(run_step sign_in_google)"
 check "the sign-in step says that gcloud does not run" 'printf "%s" "$out" | grep -q "The Google Cloud CLI does not run: ERROR: gcloud failed to load"'
 check "it asks no sign-in question, starts no sign-in, and does not say that the sign-in did not complete" \
@@ -78,9 +78,9 @@ echo "Installer, a Mac with Anaconda in the home folder (not on the PATH)"
 mkdir -p "$HOME_DIR/anaconda3/bin"
 ln -s "$GOOD" "$HOME_DIR/anaconda3/bin/python3"
 out="$(run_step install_gcloud)"; status=$?
-check "step 14 gives gcloud the Python of Anaconda and says so" \
+check "the step gcloud gives gcloud the Python of Anaconda and says so" \
   '[ "$status" -eq 0 ] && printf "%s" "$out" | grep -q "Zeus runs it with $HOME_DIR/anaconda3/bin/python3 (CLOUDSDK_PYTHON)" && grep -q "^--version python=$HOME_DIR/anaconda3/bin/python3$" "$HOME_DIR/gcloud-calls.log"'
-check "the setup check finds step 14 done" '[ "$(check_state | grep "^state 14")" = "state 14 ok" ]'
+check "the setup check finds the step gcloud done" '[ "$(check_state | grep "^state gcloud")" = "state gcloud ok" ]'
 
 echo "App, GcloudPython"
 swiftc "$APP_DIR/Sources/Zeus/GcloudPython.swift" "$TEST_DIR/main.swift" -o "$WORK/test-gcloud-python" 2>&1 | grep -v "warning" || true

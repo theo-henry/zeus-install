@@ -96,6 +96,10 @@ The app runs its own copy of `install.sh` in app mode (`ZEUS_INSTALL_APP=1`).
 In app mode, the installer prints `@@zeus` status lines for the checklist, `--check` only reports which steps are done,
 and two more steps run: the Zeus skill plugins (step 12) and the Claude login (step 13).
 Steps 14 to 16 set up EU mode (see [EU mode](#eu-mode)).
+The steps, their order, and their numbers come from one step table in `install.sh` (`STEP_TABLE`).
+Each status line names its step by a key, such as `claude-login`, not by a number.
+The first line of a run gives the keys in order, and the last line gives the run result (`end ok` or `end failed`).
+The app shows a setup as finished only after `end ok` and a result for each step.
 To build the app, see [app/README.md](app/README.md).
 
 ## Install in Terminal only

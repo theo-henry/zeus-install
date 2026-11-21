@@ -7,7 +7,7 @@
 #      with "EINVAL: invalid argument, kqueue" on /dev/tty). Without a terminal, the installer prints how to log
 #      in with the Terminal app, and the login that is already done is skipped.
 #   4. The Claude login and the macOS keychain: no default keychain, a missing keychain file, or a locked keychain stops
-#      step 13 before the browser opens with the exact fix, and so does a default keychain that is not in the
+#      the step claude-login before the browser opens with the exact fix, and so does a default keychain that is not in the
 #      search list; a failed login with an unusable keychain shows the same fix.
 #   3. content-cli: when the global folder of npm is not writable, it goes to ~/.npm-global, and the command is
 #      linked into ~/.local/bin and found in the same run and on the next run.
@@ -184,7 +184,7 @@ setup claude-tty ok
 check "with a terminal, the login command gets the real terminal device" 'python3 -I "$WORK/pty.py" "source \"$REPO_DIR/install.sh\"; with_tty \"$WORK/login-probe.sh\"" >"$OUT"; grep -qE "login input: /dev/ttys[0-9]+" "$OUT" && ! grep -q "kqueue" "$OUT"'
 setup claude-notty ok
 cat >"$HOME/login.sh" <<'LOGIN'
-# Step 13 against a claude that is not logged in and has no terminal.
+# The step claude-login against a claude that is not logged in and has no terminal.
 claude() { if [ "$1 $2" = "auth status" ]; then echo '{"loggedIn": false}'; else echo "claude was started"; fi; }
 LOGIN
 check "without a terminal, the login step stops and tells how to log in in the Terminal app" '! python3 -I "$WORK/notty.py" "source \"$REPO_DIR/install.sh\"; source \"$HOME/login.sh\"; LOG_DIR=\"$HOME\"; login_claude" >"$OUT" && grep -q "Open the Terminal app and run: claude" "$OUT" && ! grep -q "claude was started" "$OUT"'
@@ -248,7 +248,7 @@ TOOL
   chmod +x "$HOME/../bin/claude"
   printf '%s\n' "${3:-ok}" >"$STATE/claude"
 }
-# login_in_terminal: step 13 with a pseudo terminal, with the result in $OUT.
+# login_in_terminal: the step claude-login with a pseudo terminal, with the result in $OUT.
 login_in_terminal() {
   python3 -I "$WORK/pty.py" "source \"$REPO_DIR/install.sh\"; LOG_DIR=\"$HOME\"; login_claude; echo \"the installer continues\"" >"$OUT"
 }

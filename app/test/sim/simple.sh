@@ -24,9 +24,9 @@ PY
   mkdir -p "$SANDBOX/.zeus/eu/claude"
   printf '{"old": true}\n' >"$SANDBOX/.zeus/eu/claude/settings.json"
   check "in simple EU, install.sh --check finds the EU plugins step done: EU uses the plugins of Standard" \
-    'env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check >"$WORK/eu/simple-check.out" 2>&1; grep -q "@@zeus state 15 ok" "$WORK/eu/simple-check.out"'
+    'env HOME="$SANDBOX" PATH="$SANDBOX/.local/bin:$SANDBOX/.local/node/bin:$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_INSTALL_APP=1 bash "$REPO_DIR/install.sh" --check >"$WORK/eu/simple-check.out" 2>&1; grep -q "@@zeus state eu-plugins ok" "$WORK/eu/simple-check.out"'
   check "in simple EU, the EU plugins step installs nothing and asks for no vault" \
-    'env HOME="$SANDBOX" PATH="$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_INSTALL_APP=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; install_eu_plugins" _ "$REPO_DIR/install.sh" >"$WORK/eu/simple-plugins.out" 2>&1 && grep -q "^@@zeus skipped 15 Zeus plugins of EU mode (not needed)$" "$WORK/eu/simple-plugins.out" && ! grep -qi "vault" "$WORK/eu/simple-plugins.out" && [ "$(cat "$SANDBOX/.zeus/eu/claude/settings.json")" = "{\"old\": true}" ]'
+    'env HOME="$SANDBOX" PATH="$SIM_DIR/stubs:/usr/bin:/bin" ZEUS_SIM_STATE="$STATE" ZEUS_INSTALL_APP=1 bash -c "ZEUS_INSTALL_SOURCED=1 source \"\$1\"; WORK_DIR=\"\$(mktemp -d)\"; run_install_step eu-plugins" _ "$REPO_DIR/install.sh" >"$WORK/eu/simple-plugins.out" 2>&1 && grep -q "^@@zeus skipped eu-plugins Zeus plugins of EU mode (not needed)$" "$WORK/eu/simple-plugins.out" && ! grep -qi "vault" "$WORK/eu/simple-plugins.out" && [ "$(cat "$SANDBOX/.zeus/eu/claude/settings.json")" = "{\"old\": true}" ]'
   # An EU vault disk image from earlier tests of EU with isolation: simple EU does not use it.
   BUNDLE="$SANDBOX/Library/Application Support/Zeus/eu-vault.sparsebundle"
   mkdir -p "$BUNDLE"
