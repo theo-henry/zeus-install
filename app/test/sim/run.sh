@@ -682,7 +682,7 @@ speech_round() {
 touch "$MODELS_SRV/accurate-1.bin.hold"
 # shellcheck disable=SC2046
 launch_app whisper $(whisper_env v1.json)
-check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" 30 && sleep 1'
+check "the app opens a chat" 'wait_for "page loaded: http://127.0.0.1" $PAGE_LOAD_LIMIT && sleep 1'
 check "the chat page has speech bridge versions 1 and 2" 'page_has "\"version\":1,\"versions\":[1,2],\"close\":\"function\""'
 check "the accurate model downloads in the background after the start" 'wait_for "dictation: download sim-accurate-1 starts (needed)" 10'
 act 'test-speech-post:{"type":"speech-status"}'
@@ -787,7 +787,9 @@ stop_app
 launch_app whisper-swap $(whisper_env v2.json)
 check "after an app update with a new model list, the new model downloads, loads, and replaces the old one" \
   'wait_for "dictation: loaded sim-accurate-2" 30 && wait_for "dictation: accurate model is now sim-accurate-2, was sim-accurate-1" 5'
-check "the old model file is deleted, and the new one is kept" 'sleep 0.5 && [ ! -e "$MODELS_DIR/sim-accurate-1.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ] && [ -f "$MODELS_DIR/sim-fast-1.bin" ]'
+check "the old model file is deleted, and the new one is kept" 'wait_for "dictation: deleting unused model file sim-accurate-1.bin" 5 && sleep 0.5 && [ ! -e "$MODELS_DIR/sim-accurate-1.bin" ] && [ -f "$MODELS_DIR/sim-accurate-2.bin" ] && [ -f "$MODELS_DIR/sim-fast-1.bin" ]'
+# A quit while the chat page still loads is deferred: the page can not answer the close check yet.
+newest_page_loaded "$PAGE_LOAD_LIMIT" >/dev/null || true
 stop_app
 # shellcheck disable=SC2046
 launch_app whisper-noload $(whisper_env v3.json)
