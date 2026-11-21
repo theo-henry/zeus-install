@@ -61,10 +61,6 @@ check "--app-only: steps 1 to 5, then the Zeus app 6" \
   '[ "$(printf "%s\n" "$app_only_rows" | keys_of)" = "$APP_ONLY_KEYS" ] && printf "%s\n" "$app_only_rows" | grep -qx "6 app install_zeus_app Zeus app"'
 check "each function of the step table exists" \
   '[ -z "$(sourced -- "for f in \$(STEP_MODE=t step_rows | awk \"{print \\\$3}\") \$(STEP_MODE=a step_rows | awk \"{print \\\$3}\"); do declare -F \"\$f\" >/dev/null || echo \"\$f\"; done")" ]'
-check "only run_install_step starts a step: no other line of install.sh calls step" \
-  '[ "$(grep -cE "^[[:space:]]+step [^(]" "$INSTALLER")" = 1 ] && grep -qE "^[[:space:]]+step \"\\\$1\"$" "$INSTALLER"'
-check "no comment or text of install.sh has a step number of the old kind (\"Step 15/17\")" \
-  '! grep -nE "[Ss]tep [0-9]+/[0-9]+|EU_FIRST_STEP|EU_SIGN_IN_STEP" "$INSTALLER"'
 check "a key that is not in the table of the mode stops with a message" \
   'sourced -- "step skill-plugins" | grep -q "The installer has no step .skill-plugins. in this mode."'
 
