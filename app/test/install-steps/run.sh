@@ -1,7 +1,7 @@
 #!/bin/bash
 # Test of the step table of install.sh (STEP_TABLE) and of its "@@zeus" lines for the app:
 #   - the steps, their numbers, and their order in Terminal use, app mode, and --app-only;
-#   - main runs the steps in the order of the table, and each step starts only there (run_steps, run_install_step);
+#   - main runs the steps in the order of the table (run_steps, run_install_step);
 #   - --check gives the plan, one result for each step, and "end ok";
 #   - a failure outside a step is "failed -", and the run ends with "end failed";
 #   - the step github-login ends after gh auth setup-git, so that it never reports a result and then fails;

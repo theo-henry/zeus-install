@@ -284,7 +284,7 @@ A step without a result never becomes a green tick, and a failure outside a step
 It also checks that the app has a name for each key of the step table of `install.sh` in app mode.
 
 `install-steps` checks the step table of `install.sh` (`STEP_TABLE`): the steps and their numbers in Terminal use, in app mode, and with `--app-only`.
-It checks that `main` runs the steps in the order of the table, and that only `run_install_step` starts a step.
+It checks that `main` runs the steps in the order of the table.
 It checks the `@@zeus` lines: the plan, one check result for each step, `end ok` or `end failed`, and `failed -` for a failure outside a step.
 It checks that the GitHub login step reports its result only after `gh auth setup-git`, and that a failure after an EU step is not reported as a failure of that step.
 
