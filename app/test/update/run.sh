@@ -360,13 +360,13 @@ SWIFT
   }
   work_folder() { sed -n 's/.*update: downloading [^ ]* to //p' "$TRACE" | head -1; }
   # The old copy stops the new copy and removes the update files; under load this takes some time.
-  # After a roll back, update.json only marks the roll back while the old copy runs (Pending.rolledBack).
+  # After a roll back, update.json only marks the roll back while the old copy runs (stage rolledBack of UpdateHandoff).
   rollback_cleaned() {
     [ "$(copies)" = 1 ] && [ ! -e "$(work_folder)" ] &&
       { [ ! -e "$SUPPORT/update.json" ] || grep -q '"rolledBack":true' "$SUPPORT/update.json"; }
   }
   # A late start of the new copy after the roll back (macOS can start it late under load): it quits at once and
-  # does not update again. The old copy keeps the roll back mark for Updater.lateStartWindow (120 s) only, so the
+  # does not update again. The old copy keeps the roll back mark for UpdateHandoff.lateStartWindow (120 s) only, so the
   # check starts the late copy as soon as the mark is written, and gives it 90 s to start and quit under load.
   rollback_marked() { grep -q '"rolledBack":true' "$SUPPORT/update.json" 2>/dev/null; }
   late_copy_quits() {
@@ -463,6 +463,21 @@ if wants app; then
   check "the new copy was stopped and the update files are removed" \
     'wait_until rollback_cleaned 90'
   quit_all
+
+  # The old copy stopped before its timer removed the roll back mark, and another process got its process ID later.
+  app_case stale-mark 1.0.0
+  releases "$STATE" "app-v1.0.0:false:false"
+  sleep 600 &
+  REUSED_PID=$!
+  printf '{"from":"1.0.0","to":"1.1.0","appPath":"%s","backupPath":"%s","workPath":"%s","waitingPID":%s,"confirmed":false,"rolledBack":true}' \
+    "$APPS/Zeus.app" "$WORK/stale-mark/gone/Zeus.app" "$WORK/stale-mark/gone" "$REUSED_PID" >"$SUPPORT/update.json"
+  touch -t "$(date -v-10M +%Y%m%d%H%M.%S)" "$SUPPORT/update.json"
+  launch
+  check "an ended roll back mark with a reused process ID does not stop the app" \
+    'wait_for "setup ended: check=true" 60 && ! grep -q "update: a late copy" "$TRACE" && kill -0 "$APP_PID" 2>/dev/null'
+  check "the ended mark is removed" '[ ! -e "$SUPPORT/update.json" ]'
+  kill "$REUSED_PID" 2>/dev/null || true
+  quit_all
 fi
 
 # ---------------------------------------------------------------------------------------------------------
@@ -509,7 +524,8 @@ if wants upgrade; then
   }
   # A checksum of every user data file, with its path.
   user_data() {
-    (cd "$SANDBOX" && find Code .claude "Library/Application Support/Zeus" "Library/Saved Application State" -type f ! -name update.json -print0 |
+    (cd "$SANDBOX" && find Code .claude "Library/Application Support/Zeus" "Library/Saved Application State" -type f \
+      ! -name update.json ! -name update.lock -print0 |
       sort -z | xargs -0 shasum -a 256)
   }
   # The one-line install, stopped after 5 minutes. The app that it opens gets the test environment.
@@ -561,7 +577,7 @@ if wants upgrade; then
   settled() { local waited=0; until "$@"; do sleep 0.5; waited=$((waited + 1)); [ "$waited" -lt 180 ] || return 1; done; }
   no_update_files() { settled no_update_files_now; }
   no_update_files_now() { [ ! -e "$SUPPORT/update.json" ] && [ -z "$(ls -A "$TEMP" 2>/dev/null)" ]; }
-  # After a roll back, the old app keeps update.json with "rolledBack" for 120 s on purpose (Updater.lateStartWindow).
+  # After a roll back, the old app keeps update.json with "rolledBack" for 120 s on purpose (UpdateHandoff.lateStartWindow).
   # No old copy is left, and update.json is absent or only that mark.
   no_update_files_after_rollback() { settled no_update_files_after_rollback_now; }
   no_update_files_after_rollback_now() {

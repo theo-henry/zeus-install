@@ -1581,10 +1581,12 @@ quit_zeus_app() {
 }
 
 # An update of an installed app keeps the old app until the new app has started, as the app's own update does.
-# The file is the one of the app's update (Updater.Pending in app/Sources/Zeus/Updater.swift): the new app
-# confirms its start in it when the waiting process (this installer) still runs. When this installer stopped
-# before the confirmation, the next start of the new app removes the old copy and the file.
+# The file is the one of the app's update (UpdateHandoff in app/Sources/Zeus/UpdateHandoff.swift), with the same stages:
+# swapped (written here), newCopyStarted and confirmed (written by the new app), and rolledBack (written here, under the
+# lock of the file, before the new app is stopped). When this installer stopped before the confirmation, the next start
+# of the new app removes the old copy and the file.
 APP_PENDING="$HOME/Library/Application Support/Zeus/update.json"
+APP_PENDING_LOCK="$HOME/Library/Application Support/Zeus/update.lock"
 APP_FOLDER=""
 APP_INSTALLED=""
 APP_RESULT=""
@@ -1608,12 +1610,65 @@ app_standardized_path() {
   printf '%s/Zeus.app' "$folder"
 }
 
+# write_app_pending [stage]: writes the handoff file with the stage swapped (default) or rolledBack. "confirmed" and
+# "rolledBack" are the fields of app versions before the stage (0.1.x), which can be the new app: such an app needs
+# "confirmed" to read the file and sees a roll back in "rolledBack".
 write_app_pending() {
+  local stage="${1:-swapped}" extra=""
+  if [ "$stage" = rolledBack ]; then
+    extra="$(printf ',"rolledBack":true,"rolledBackUntil":%s' "$(($(date +%s) + 120))")"
+  fi
   mkdir -p "$(dirname "$APP_PENDING")" &&
-    printf '{"from":%s,"to":%s,"appPath":%s,"backupPath":%s,"workPath":%s,"waitingPID":%s,"confirmed":false}\n' \
+    printf '{"from":%s,"to":%s,"appPath":%s,"backupPath":%s,"workPath":%s,"waitingPID":%s,"stage":%s,"confirmed":false%s}\n' \
       "$(json_string "$APP_OLD_VERSION")" "$(json_string "$APP_NEW_VERSION")" "$(json_string "$(app_standardized_path)")" \
-      "$(json_string "$APP_BACKUP/Zeus.app")" "$(json_string "$APP_BACKUP")" "$$" >"$APP_PENDING.tmp" &&
+      "$(json_string "$APP_BACKUP/Zeus.app")" "$(json_string "$APP_BACKUP")" "$$" "$(json_string "$stage")" "$extra" \
+      >"$APP_PENDING.tmp" &&
     mv -f "$APP_PENDING.tmp" "$APP_PENDING"
+}
+
+# Prints the stage of the handoff file: swapped, newCopyStarted, confirmed, or rolledBack; nothing without the file.
+# An app version before the stage (0.1.x) writes the file without it; the stage then comes from its fields.
+app_pending_stage() {
+  local text stage
+  text="$(cat "$APP_PENDING" 2>/dev/null)" || return 0
+  stage="$(printf '%s' "$text" | sed -n 's/.*"stage" *: *"\([A-Za-z]*\)".*/\1/p')"
+  if [ -z "$stage" ]; then
+    if printf '%s' "$text" | grep -q '"rolledBack" *: *true'; then stage=rolledBack
+    elif printf '%s' "$text" | grep -q '"confirmed" *: *true'; then stage=confirmed
+    elif [ -n "$(app_pending_new_pid)" ]; then stage=newCopyStarted
+    else stage=swapped
+    fi
+  fi
+  printf '%s\n' "$stage"
+}
+
+# Prints the process ID of the new app from the handoff file (stage newCopyStarted), or nothing.
+app_pending_new_pid() {
+  sed -n 's/.*"newPID" *: *\([0-9][0-9]*\).*/\1/p' "$APP_PENDING" 2>/dev/null || true
+}
+
+# lock_app_pending: takes the lock of the handoff file (flock(2) on update.lock, as UpdateHandoffFile in the app) in file
+# descriptor 9, and waits up to 10 s for it. unlock_app_pending releases it. The lock belongs to the open file of
+# descriptor 9, so it stays after perl ends. Without the lock (no perl, or 10 s), it returns 1 and the step goes on.
+lock_app_pending() {
+  mkdir -p "$(dirname "$APP_PENDING_LOCK")" && exec 9>>"$APP_PENDING_LOCK" || return 1
+  /usr/bin/perl -MFcntl=:flock -e 'alarm 10; open(my $lock, ">&=", 9) or exit 1; flock($lock, LOCK_EX) or exit 1' 2>/dev/null
+}
+unlock_app_pending() { exec 9>&-; }
+
+# Claims the roll back in the handoff file, under its lock: the stage becomes rolledBack, so that the new app, when it
+# confirms now, sees the roll back and quits. Returns 2 when the new app confirmed first: the update is done.
+claim_app_roll_back() {
+  local stage status=0
+  lock_app_pending || true
+  stage="$(app_pending_stage)"
+  if [ "$stage" = confirmed ]; then
+    status=2
+  else
+    write_app_pending rolledBack || true
+  fi
+  unlock_app_pending
+  return "$status"
 }
 
 # Puts the downloaded app ($1) in the place of the app in $APP_FOLDER. An installed app moves to a backup
@@ -1663,26 +1718,30 @@ finish_zeus_app_update() {
 wait_for_zeus_app_start() {
   local waited=0 new_pid
   while [ "$waited" -lt 120 ]; do
-    if grep -q '"confirmed" *: *true' "$APP_PENDING" 2>/dev/null; then return 0; fi
-    new_pid="$(sed -n 's/.*"newPID" *: *\([0-9][0-9]*\).*/\1/p' "$APP_PENDING" 2>/dev/null || true)"
-    if [ -n "$new_pid" ]; then
-      kill -0 "$new_pid" 2>/dev/null || return 1
-    elif [ "$waited" -ge 20 ] && [ -z "$(zeus_app_pids "$APP_FOLDER")" ]; then
-      return 1
-    fi
+    case "$(app_pending_stage)" in
+      confirmed) return 0 ;;
+      rolledBack) return 1 ;;
+      newCopyStarted)
+        new_pid="$(app_pending_new_pid)"
+        kill -0 "$new_pid" 2>/dev/null || return 1
+        ;;
+      *) if [ "$waited" -ge 20 ] && [ -z "$(zeus_app_pids "$APP_FOLDER")" ]; then return 1; fi ;;
+    esac
     sleep 0.5
     waited=$((waited + 1))
   done
   return 1
 }
 
-# The new app did not start: stops it and puts the old app back. Returns 1 when the old app could not be put back.
+# The new app did not start: stops it and puts the old app back. Returns 1 when the old app could not be put back,
+# and 2 when the new app confirmed its start before the roll back (the update is done; nothing is stopped).
 # A new copy that wrote its process ID in update.json is at its first launch step, before any Zeus session or
 # chat, so it is stopped at once, as the app's own update does. Another copy can have chats, so it gets the
 # quit of quit_zeus_app; when it stays open (the user clicked Cancel), the new app stays.
 roll_back_zeus_app() {
   local new_pid waited=0
-  new_pid="$(sed -n 's/.*"newPID" *: *\([0-9][0-9]*\).*/\1/p' "$APP_PENDING" 2>/dev/null || true)"
+  new_pid="$(app_pending_new_pid)"
+  claim_app_roll_back || return "$?"
   if [ -n "$new_pid" ]; then kill -KILL "$new_pid" 2>/dev/null || true; fi
   while [ -n "$new_pid" ] && kill -0 "$new_pid" 2>/dev/null && [ "$waited" -lt 20 ]; do
     sleep 0.5
@@ -1700,6 +1759,7 @@ roll_back_zeus_app() {
     return 1
   fi
   rm -rf "$APP_BACKUP"
+  # The installer opens the old app next, so the roll back mark goes: with it, that old app would quit as a late copy.
   rm -f "$APP_PENDING"
   APP_BACKUP=""
 }
@@ -1738,12 +1798,20 @@ start_zeus_app() {
     finish_zeus_app_update
     return 0
   fi
-  if roll_back_zeus_app; then
-    APP_ERROR="The Zeus app $APP_NEW_VERSION did not start, so your Zeus app $APP_OLD_VERSION is back."
-    open_app -n || true
-  else
-    APP_ERROR="The Zeus app $APP_NEW_VERSION did not start. Your old Zeus app $APP_OLD_VERSION is in $APP_BACKUP/Zeus.app."
-  fi
+  local status=0
+  roll_back_zeus_app || status=$?
+  case "$status" in
+    0)
+      APP_ERROR="The Zeus app $APP_NEW_VERSION did not start, so your Zeus app $APP_OLD_VERSION is back."
+      open_app -n || true
+      ;;
+    2)
+      # The new app confirmed its start at the end of the wait.
+      finish_zeus_app_update
+      return 0
+      ;;
+    *) APP_ERROR="The Zeus app $APP_NEW_VERSION did not start. Your old Zeus app $APP_OLD_VERSION is in $APP_BACKUP/Zeus.app." ;;
+  esac
   return 1
 }
 

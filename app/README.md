@@ -11,6 +11,9 @@ A small native macOS app (Swift, AppKit, and SwiftUI) that starts Zeus without T
   Then it swaps the new app into the place of the running app in one rename (`renamex_np` with `RENAME_SWAP`), opens the new copy, and waits up to 20 s for the new copy to confirm in `~/Library/Application Support/Zeus/update.json`.
   After the confirmation, it removes the old copy and quits; without it, it stops the new copy, swaps the old app back, and starts as before.
   For 2 minutes after a roll back, `update.json` marks the roll back: a new copy that macOS starts late (under a high load) quits at once and does not update again.
+  The file has one stage (`Sources/Zeus/UpdateHandoff.swift`): `swapped`, `newCopyStarted` (with the process ID of the new copy), `confirmed`, or `rolledBack` (with the end of the mark).
+  The old copy, the new copy, and `install.sh` change the stage only through its legal transitions, under the lock `update.lock` in the same folder, so a confirmation and a roll back at the same moment cannot both win.
+  The file also keeps the fields `confirmed`, `newPID`, and `rolledBack` of app versions before the stage, so that such a version can be the old or the new copy.
   Offline, without `gh`, without access, or with any error, the app starts its current version and shows nothing.
   Development versions (such as `0.0.0-dev`), a read-only app folder, and `ZEUS_APP_NO_UPDATE=1` (debug builds) turn the check off.
 - **Update from the settings.** **Check for updates** and **Update now** in the settings of the chat and Zeus Editor pages ask the app about the app (`Sources/Zeus/AppUpdate.swift`).
@@ -265,6 +268,15 @@ Step 14 does not take that gcloud as installed and shows the gcloud error and th
 With Anaconda in the home folder, step 14 runs gcloud with its Python (`CLOUDSDK_PYTHON`) and says so.
 It also checks `GcloudPython`, which finds the same Python for the commands that the app starts.
 
+## Test the update handoff
+
+```bash
+app/test/update-handoff/run.sh
+```
+
+It tests the stages of `update.json` (`Sources/Zeus/UpdateHandoff.swift`) without app copies: each legal transition and the refused ones, the role of a copy that starts, and each step of the waiting copy.
+Then it tests the file between the app and `install.sh`: each side reads the stages that the other writes, the fields of older app versions stay, both use the same lock, and a roll back of `install.sh` does not stop a new app that confirmed.
+
 ## Test the releases and the self-update
 
 ```bash
@@ -282,11 +294,12 @@ Each app case stops all its app copies and fails after `ZEUS_UPDATE_TEST_CASE_LI
    with access, it installs the newest `app-v` release (not drafts, pre-releases, or other tags), and it stops for a wrong checksum or version, or without an app release.
 3. `app`: the app updates itself from 1.0.0 to 1.1.0, restarts in the new version, and keeps the user state;
    it starts its current version when it is up to date, without access, or when the download is damaged or is not Zeus;
-   when the new copy does not confirm, the old copy is put back, and a late start of the new copy quits at once.
+   when the new copy does not confirm, the old copy is put back, and a late start of the new copy quits at once;
+   a roll back mark that has ended does not stop the app, also when another process has the process ID of the old copy.
 4. `upgrade`: `install-app.sh` on a Mac with an older app and user data (the Zeus folder and its client projects, the Zeus settings,
    the Claude chats and plugin data, and the saved window state) closes the open older app with its own quit, shows both versions,
    puts the newest release in its place, and opens it; the new app confirms its start in `update.json`, as after a self-update,
-   and the old copy is then removed. Every user data file except `update.json` stays byte-identical.
+   and the old copy is then removed. Every user data file except `update.json` and `update.lock` stays byte-identical.
    With the newest app installed, it downloads nothing and opens the app;
    when the new app stops at once, or runs but does not confirm within 60 s, it puts the same old app bundle back and opens it.
 5. `settings`: with a simulated `zeus` (`app/test/sim/payload/zeus.mjs`, with a launch record and a control socket), a chat page asks
