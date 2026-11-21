@@ -725,7 +725,7 @@ check "then it gets the Whisper text through the version 1 events, before its 4 
   'wait_for "speech event: state v1 stopped" 10 && grep -q "speech: final v1 engine=whisper stop-to-text=[0-9]* ms" "$TRACE" && [ "$(grep "speech: final v1 " "$TRACE" | sed "s/.*stop-to-text=\([0-9]*\) ms/\1/")" -lt 4000 ] && page_has "\"partial v1 Hello Zeus\",\"final v1 Hello Zeus.\",\"state v1 stopped\""'
 act 'test-speech-post:{"type":"speech-settings-set","customWords":[" Celonis ","Apolix","celonis",""]}'
 check "the custom words are saved for both chats, cleaned, and counted in tokens" \
-  'sleep 0.5 && page_has "\"customWords\":[\"Celonis\",\"Apolix\"]" && page_has "\"included\":2" && defaults read "$PREFS_DOMAIN" dictationCustomWords | grep -q Apolix'
+  'page_wait "\"customWords\":[\"Celonis\",\"Apolix\"]" && page_wait "\"included\":2" && defaults read "$PREFS_DOMAIN" dictationCustomWords | grep -q Apolix'
 act test-clear
 speech_round w2
 check "the custom words go to the model as its prompt" 'page_has "\"text\":\"Hello Zeus. [Celonis, Apolix.]\""'
@@ -734,19 +734,19 @@ act test-clear
 speech_round w3
 check "a fixed language goes to the model" 'page_has "Hello Zeus. (fr) [Celonis, Apolix.]"'
 act 'test-speech-post:{"type":"speech-settings-set","language":"xx"}'
-check "an unknown language is refused with an error, and the setting stays" 'sleep 0.5 && page_has "unknown language" && page_has "\"language\":\"fr\""'
+check "an unknown language is refused with an error, and the setting stays" 'page_wait "unknown language" && page_has "\"language\":\"fr\""'
 act 'test-speech-post:{"type":"speech-start","id":"w4","locale":null,"version":2}'
 wait_for "speech event: state w4 listening" 10 >/dev/null
 # The stop and the next start go in one post, so the start comes while Whisper processes, also under load.
 act 'test-speech-post:[{"type":"speech-stop","id":"w4"},{"type":"speech-start","id":"w5","locale":null,"version":2}]'
-check "a start while Whisper processes is busy" 'wait_for "speech event: state w4 processing" 10 && sleep 0.3 && page_has "error w5 busy"'
+check "a start while Whisper processes is busy" 'wait_for "speech event: state w4 processing" 10 && page_wait "error w5 busy"'
 check "the processing recording still gives its text" 'wait_for "speech event: final w4 " 10'
 act 'test-speech-post:{"type":"speech-start","id":"w6","locale":null,"version":2}'
 wait_for "speech event: state w6 listening" 10 >/dev/null
 act 'test-speech-post:{"type":"speech-stop","id":"w6"}'
 wait_for "speech event: state w6 processing" 10 >/dev/null
 act 'test-speech-post:{"type":"speech-cancel","id":"w6"}'
-check "a cancel while Whisper processes gives stopped and no text" 'wait_for "speech: cancel w6 (page)" 10 && sleep 1 && page_has "state w6 stopped" && ! grep -q "speech event: final w6" "$TRACE"'
+check "a cancel while Whisper processes gives stopped and no text" 'wait_for "speech: cancel w6 (page)" 10 && page_wait "state w6 stopped" && ! grep -q "speech event: final w6" "$TRACE"'
 act 'test-speech-post:{"type":"speech-settings-set","model":"fast"}'
 check "the Fast model downloads when the user picks it, and loads" 'wait_for "dictation: download sim-fast-1 starts (needed)" 10 && wait_for "dictation: loaded sim-fast-1" 20'
 act test-clear
