@@ -294,7 +294,7 @@ enum Updater {
         // The handle that `openApplication` gives is not reliable (it can say "terminated" while the new copy runs),
         // so the new copy is stopped by its process ID and by its path: every other copy of the app at this path.
         let rollBack: (String, NSRunningApplication?) -> Void = { why, newApp in
-            let until = Date().addingTimeInterval(UpdateHandoff.lateStartWindow)
+            let until = UpdateHandoff.rollBackEnd(now: Date())
             var mark = handoff
             mark.stage = .rolledBack(until: until)
             var newPID: Int32?

@@ -220,6 +220,16 @@ file.remove(ifStill: handoff(.swapped))
 check("remove(ifStill:) keeps a file that changed", file.read() == handoff(.rolledBack(until: later)))
 file.remove(ifStill: handoff(.rolledBack(until: later)))
 check("remove(ifStill:) removes the same file", file.read() == nil)
+let markNow = Date(timeIntervalSince1970: 1_800_000_000.123_456_7)
+for markAt in [markNow, Date()] {
+    let mark = handoff(.rolledBack(until: UpdateHandoff.rollBackEnd(now: markAt)))
+    try! file.write(mark)
+    check("a roll back mark made at \(markAt.timeIntervalSince1970) is read back the same", file.read() == mark)
+    file.remove(ifStill: mark)
+    check("remove(ifStill:) removes that roll back mark", file.read() == nil)
+}
+check("the mark ends lateStartWindow later, in whole seconds",
+      UpdateHandoff.rollBackEnd(now: markNow).timeIntervalSince1970 == 1_800_000_120)
 
 print(failures == 0 ? "All checks passed." : "\(failures) checks failed.")
 exit(failures == 0 ? 0 : 1)

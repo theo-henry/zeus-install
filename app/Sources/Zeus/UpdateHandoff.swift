@@ -42,6 +42,12 @@ struct UpdateHandoff: Equatable {
     /// The time that the roll back mark stays after a roll back.
     static let lateStartWindow: TimeInterval = 120
 
+    /// The end of a roll back mark made at `now`: `lateStartWindow` later, in whole seconds since 1970, so that it is the
+    /// same after the file round trip.
+    static func rollBackEnd(now: Date) -> Date {
+        Date(timeIntervalSince1970: (now.timeIntervalSince1970 + lateStartWindow).rounded())
+    }
+
     var from: String
     var to: String
     var appPath: String
